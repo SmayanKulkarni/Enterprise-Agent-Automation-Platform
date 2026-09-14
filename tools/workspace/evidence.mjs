@@ -1,0 +1,77 @@
+import { createHash } from 'node:crypto';
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const ROOT_COMMANDS = ['lint', 'test', 'typecheck', 'verify', 'workspace:check'];
+
+/**
+ * @typedef {{ command: string, exitCode: number, name: string }} CommandResult
+ * @typedef {{ node: string, pnpm: string }} Toolchain
+ * @typedef {{
+ *   configDigests: Array<{path: string, sha256: string}>,
+ *   outputScan: {paths: string[], repositoryBounded: boolean},
+ *   packages: Array<{name: string, path: string}>,
+ *   toolchain: Toolchain,
+ *   workspacePatterns: string[]
+ * }} WorkspaceReport
+ */
+
+/**
+ * @param {{ commands: CommandResult[], report: WorkspaceReport, toolchain: Toolchain }} input
+ */
+export function buildWorkspaceEvidence({ commands, report, toolchain }) {
+  return {
+    schemaVersion: 1,
+    slices: {
+      '001-workspace': {
+        commands: commands.map((result) => ({
+          ...result,
+          status: result.exitCode === 0 ? 'passed' : 'failed',
+        })),
+        configurationDigests: report.configDigests,
+        interface: {
+          rootCommands: ROOT_COMMANDS,
+          workspacePatterns: report.workspacePatterns,
+        },
+        issue: '.scratch/platform-implementation/issues/001-workspace.md',
+        outputScan: report.outputScan,
+        packageGraph: report.packages,
+        sourceSpec:
+          'docs/superpowers/specs/2026-09-14-01-repository-contract-foundation-spec.md#ordered-implementation-slices',
+        toolchain: {
+          actual: toolchain,
+          digest: createHash('sha256')
+            .update(`node=${report.toolchain.node}\npnpm=${report.toolchain.pnpm}\n`)
+            .digest('hex'),
+          requested: report.toolchain,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Publish the complete evidence document with a same-directory atomic rename.
+ * Serialization happens before any filesystem mutation, so invalid evidence
+ * cannot disturb the last coherent manifest.
+ *
+ * @param {string} rootDirectory
+ * @param {unknown} evidence
+ */
+export function publishEvidence(rootDirectory, evidence) {
+  const serialized = `${JSON.stringify(evidence, null, 2)}\n`;
+  const evidenceDirectory = resolve(rootDirectory, 'evidence', 'implementation');
+  const manifestPath = resolve(evidenceDirectory, 'manifest.json');
+  const stagingPath = resolve(evidenceDirectory, `.manifest-${process.pid}.tmp`);
+  mkdirSync(evidenceDirectory, { recursive: true });
+
+  try {
+    writeFileSync(stagingPath, serialized, { encoding: 'utf8', flag: 'wx' });
+    renameSync(stagingPath, manifestPath);
+  } catch (error) {
+    rmSync(stagingPath, { force: true });
+    throw error;
+  }
+
+  return manifestPath;
+}

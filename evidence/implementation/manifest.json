@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "slices": {
+    "001-workspace": {
+      "commands": [
+        {
+          "command": "pnpm workspace:check",
+          "exitCode": 0,
+          "name": "workspace:check",
+          "status": "passed"
+        },
+        {
+          "command": "pnpm lint",
+          "exitCode": 0,
+          "name": "lint",
+          "status": "passed"
+        },
+        {
+          "command": "pnpm typecheck",
+          "exitCode": 0,
+          "name": "typecheck",
+          "status": "passed"
+        },
+        {
+          "command": "pnpm test",
+          "exitCode": 0,
+          "name": "test",
+          "status": "passed"
+        }
+      ],
+      "configurationDigests": [
+        {
+          "path": ".node-version",
+          "sha256": "c989649ac5c541692f22f2e41f5fbc34927c02bf1644e5dcca46bb4c88281f87"
+        },
+        {
+          "path": "eslint.config.mjs",
+          "sha256": "5baefbaa3f60757adc1fd731a33f89076903b11f09e63f0ae499748f0a14d292"
+        },
+        {
+          "path": "package.json",
+          "sha256": "3116e7fe8139f99ebac7f6385c068f47b2efbaa1eab9119bf3a0901aa360543e"
+        },
+        {
+          "path": "pnpm-lock.yaml",
+          "sha256": "58c57855a84e55d83af08749d2cc7eb38dcc9f24549fc040bd786376788f11d6"
+        },
+        {
+          "path": "pnpm-workspace.yaml",
+          "sha256": "253208fa7c1b64372c219b9e19cef15ed70ca93b66a4d5c4c4d2297a5aff8880"
+        },
+        {
+          "path": "tsconfig.base.json",
+          "sha256": "89ebe2a12ce3982dbf4919d89c145aca3e61ed571eb987ce0a3f4453916e2d2b"
+        },
+        {
+          "path": "tsconfig.json",
+          "sha256": "2ab8e43edd7500dfcf1100cec48cb4ab290bf1ec20263e1c98b2b0f443f9cd85"
+        }
+      ],
+      "interface": {
+        "rootCommands": [
+          "lint",
+          "test",
+          "typecheck",
+          "verify",
+          "workspace:check"
+        ],
+        "workspacePatterns": [
+          "apps/*",
+          "packages/*"
+        ]
+      },
+      "issue": ".scratch/platform-implementation/issues/001-workspace.md",
+      "outputScan": {
+        "paths": [],
+        "repositoryBounded": true
+      },
+      "packageGraph": [],
+      "sourceSpec": "docs/superpowers/specs/2026-09-14-01-repository-contract-foundation-spec.md#ordered-implementation-slices",
+      "toolchain": {
+        "actual": {
+          "node": "22.14.0",
+          "pnpm": "10.15.1"
+        },
+        "digest": "707710c2f268ea012fe92d2cf433f5c40d327778835d311d922459e152e3c4a2",
+        "requested": {
+          "node": "22.14.0",
+          "pnpm": "10.15.1"
+        }
+      }
+    }
+  }
+}
