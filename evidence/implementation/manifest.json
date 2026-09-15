@@ -145,6 +145,55 @@
       ],
       "interface": "EffectIntentRuntime canonical payload digest, approval fence and duplicate receipt",
       "issue": ".scratch/platform-implementation/issues/015-intent-idempotency.md"
+    },
+    "009a-clerk-browser-session": {
+      "checks": [
+        "tests/platform/gateway-browser.test.ts"
+      ],
+      "interface": "ClerkSessionAdapter current-session proof, safe session/Tenant DTOs and scoped Case workbench state",
+      "issue": ".scratch/platform-implementation/issues/009a-clerk-browser-session.md"
+    },
+    "016-invocation-admission": {
+      "checks": [
+        "tests/platform/gateway-browser.test.ts"
+      ],
+      "interface": "CapabilityGateway normalized invocation, closed schemas and pre-dispatch Tenant/authority/budget/admission fences",
+      "issue": ".scratch/platform-implementation/issues/016-invocation-admission.md"
+    },
+    "017-attempt-receipt-reconcile": {
+      "checks": [
+        "tests/platform/gateway-browser.test.ts"
+      ],
+      "interface": "Durable in-memory attempt/receipt records and explicit unknown-outcome reconciliation checkpoints",
+      "issue": ".scratch/platform-implementation/issues/017-attempt-receipt-reconcile.md"
+    },
+    "018-flow-control": {
+      "checks": [
+        "tests/platform/gateway-browser.test.ts"
+      ],
+      "interface": "Bounded concurrency/queue/throughput admission with conservative shared unknown-quota bucket",
+      "issue": ".scratch/platform-implementation/issues/018-flow-control.md"
+    },
+    "018a-case-workbench": {
+      "checks": [
+        "tests/platform/gateway-browser.test.ts"
+      ],
+      "interface": "BrowserV1 Tenant-scoped projection route and CaseWorkbench watermark/event-gap refresh state",
+      "issue": ".scratch/platform-implementation/issues/018a-case-workbench.md"
+    },
+    "019-definitions-releases": {
+      "checks": [
+        "tests/platform/gateway-browser.test.ts"
+      ],
+      "interface": "Immutable capability definitions and locally signed adapter releases",
+      "issue": ".scratch/platform-implementation/issues/019-definitions-releases.md"
+    },
+    "020-installations": {
+      "checks": [
+        "tests/platform/gateway-browser.test.ts"
+      ],
+      "interface": "Tenant installation transitions, ordered authenticated callbacks and Tenant-filtered availability discovery",
+      "issue": ".scratch/platform-implementation/issues/020-installations.md"
     }
   }
 }

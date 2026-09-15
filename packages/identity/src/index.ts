@@ -87,6 +87,10 @@ export class IdentityStore {
   async authorizeBeforeCommit<T>(request: Parameters<IdentityStore['evaluateAuthority']>[0], work: () => T | Promise<T>): Promise<T> {
     if ((await this.evaluateAuthority(request)).outcome !== 'allow') deny(); const result = await work(); const recheck = { ...request }; delete recheck.approval; if ((await this.evaluateAuthority(recheck)).outcome !== 'allow') deny('STALE'); return result;
   }
+  membershipsForUser(userId: string): readonly Pick<Membership, 'tenantId' | 'profiles' | 'epoch'>[] {
+    return [...this.#memberships.values()].filter((membership) => membership.userId === userId && membership.status === 'current' && this.#tenants.get(membership.tenantId)?.status === 'active').map(({ tenantId: id, profiles, epoch }) => ({ tenantId: id, profiles: [...profiles], epoch }));
+  }
+  userForExternal(issuer: string, subject: string): User { const userId = this.#subjectUsers.get(`${issuer}\u0000${subject}`); const user = userId === undefined ? undefined : this.#users.get(userId); return user ?? deny('DENIED'); }
   exportManifest(id: string): { tenantId: TenantId; status: TenantStatus; users: number; memberships: number; approvals: number } { const tenant = this.tenant(id); const memberships = [...this.#memberships.values()].filter((membership) => membership.tenantId === tenant.id); return { tenantId: tenant.id, status: tenant.status, users: new Set(memberships.map((membership) => membership.userId)).size, memberships: memberships.length, approvals: [...this.#approvals.values()].filter((approval) => approval.tenantId === tenant.id).length }; }
   tenant(id: string | TenantId): Tenant { const value = this.#tenants.get(tenantId(id)); if (value === undefined) throw new IdentityError('DENIED'); return value; }
   private currentMembership(id: TenantId, userId: string): Membership { const membership = this.#memberships.get(this.key(id, userId)); if (membership === undefined || membership.status !== 'current') throw new IdentityError('DENIED'); return membership; }
