@@ -5,6 +5,7 @@ export class GatewayError extends Error {
 }
 const fail = (code: GatewayError['code']): never => { throw new GatewayError(code); };
 const json = (value: unknown): unknown => JSON.parse(canonicalJson(value));
+const validDigest = (value: string): boolean => /^[a-f0-9]{64}$/u.test(value);
 function frozen<T>(value: T): T { if (value !== null && typeof value === 'object') { for (const child of Object.values(value)) frozen(child); Object.freeze(value); } return value; }
 
 export interface CapabilityDefinition { name: string; version: string; inputKeys: readonly string[]; outputKeys: readonly string[]; }
@@ -58,7 +59,7 @@ export class ProviderInstallationManager {
     const current = this.transition(id, expectedVersion, 'validating'); const state: InstallationState = checks.signature && checks.account && checks.callback ? checks.schema ? checks.health ? 'healthy' : 'degraded' : 'schema-incompatible' : 'quarantined'; return this.transition(id, current.version, state);
   }
   callback(input: { installationId: string; tenantId: string; accountId: string; callbackId: string; cursor: number; generation: number }): ProviderInstallation {
-    const current = this.get(input.installationId); if (current.tenantId !== tenantId(input.tenantId) || current.accountId !== input.accountId || current.callbackId !== input.callbackId || current.generation !== input.generation || !Number.isSafeInteger(input.cursor) || input.cursor !== current.checkpoint + 1) fail('DENIED');
+    const current = this.get(input.installationId); if (current.state !== 'healthy' || current.tenantId !== tenantId(input.tenantId) || current.accountId !== input.accountId || current.callbackId !== input.callbackId || current.generation !== input.generation || !Number.isSafeInteger(input.cursor) || input.cursor !== current.checkpoint + 1) fail('DENIED');
     const next = { ...current, checkpoint: input.cursor }; this.#installations.set(next.id, next); return next;
   }
   availability(id: string, capability: string): CapabilityAvailability {
@@ -69,7 +70,74 @@ export class ProviderInstallationManager {
   discover(tenant: string): CapabilityAvailability[] { const id = tenantId(tenant); return [...this.#installations.values()].filter((installation) => installation.tenantId === id && ['healthy', 'degraded'].includes(installation.state)).flatMap((installation) => this.registry.release(installation.releaseId).definitions.map((capability) => this.availability(installation.id, capability))); }
   assertInvocable(tenant: string, installationId: string, capability: string): ProviderInstallation { const installation = this.get(installationId); if (installation.tenantId !== tenantId(tenant) || this.availability(installationId, capability).state !== 'healthy') fail('DENIED'); return installation; }
   definitionFor(installationId: string, capability: string): CapabilityDefinition { const installation = this.get(installationId); if (!this.registry.release(installation.releaseId).definitions.includes(capability)) fail('DENIED'); return this.registry.definition(capability); }
+  upgrade(id: string, expectedVersion: number, releaseId: string, checks: { health: boolean; schema: boolean; signature: boolean }): ProviderInstallation {
+    const current = this.get(id); this.registry.release(releaseId); if (current.state !== 'healthy' || current.version !== expectedVersion || !checks.health || !checks.schema || !checks.signature) fail('DENIED');
+    const next = { ...current, releaseId, version: current.version + 1, generation: current.generation + 1 }; this.#installations.set(id, next); return next;
+  }
   get(id: string): ProviderInstallation { return this.#installations.get(id) ?? fail('NOT_FOUND'); }
+}
+
+export type CredentialState = 'active' | 'expired' | 'revoked';
+export interface CredentialReference { id: string; tenantId: TenantId; installationId: string; accountId: string; scopes: readonly string[]; secretStoreRef: string; version: number; epoch: number; expiresAt: string; state: CredentialState; }
+export interface CredentialReceipt { credentialId: string; epoch: number; event: 'consented' | 'rotated' | 'rotation-failed' | 'revoked'; }
+export interface InvocationCredential { reference: Pick<CredentialReference, 'id' | 'installationId' | 'epoch' | 'version'>; token: string; expiresAt: string; }
+
+/** A deterministic local adapter: records hold references, never secret material. */
+export class FakeSecretStore {
+  readonly #values = new Map<string, string>(); public available = true;
+  put(reference: string, material: string): void { if (!this.available || !material) fail('DENIED'); this.#values.set(reference, material); }
+  get(reference: string): string { if (!this.available) fail('DENIED'); return this.#values.get(reference) ?? fail('DENIED'); }
+  delete(reference: string): void { this.#values.delete(reference); }
+}
+
+export class CredentialBroker {
+  readonly #references = new Map<string, CredentialReference>(); readonly #cache = new Map<string, { epoch: number; token: string }>(); readonly #leases = new Set<string>(); readonly #receipts: CredentialReceipt[] = [];
+  constructor(private readonly secrets: FakeSecretStore, private readonly now: () => string = () => new Date().toISOString()) {}
+  consent(input: Omit<CredentialReference, 'tenantId' | 'secretStoreRef' | 'version' | 'epoch' | 'state'> & { tenantId: string; consented: boolean }, material: string): CredentialReference {
+    const tenant = tenantId(input.tenantId); if (!input.id || !input.installationId || !input.accountId || !input.consented || !input.scopes.length || new Set(input.scopes).size !== input.scopes.length || Date.parse(input.expiresAt) <= Date.parse(this.now()) || this.#references.has(input.id)) fail('DENIED');
+    const reference: CredentialReference = Object.freeze({ id: input.id, tenantId: tenant, installationId: input.installationId, accountId: input.accountId, scopes: Object.freeze([...input.scopes]), secretStoreRef: `fake-secret://${input.id}/1`, version: 1, epoch: 1, expiresAt: input.expiresAt, state: 'active' }); this.secrets.put(reference.secretStoreRef, material); this.#references.set(reference.id, reference); this.#receipts.push({ credentialId: reference.id, epoch: reference.epoch, event: 'consented' }); return reference;
+  }
+  reference(id: string): CredentialReference { return this.#references.get(id) ?? fail('NOT_FOUND'); }
+  usable(id: string): boolean { const reference = this.reference(id); return reference.state === 'active' && Date.parse(reference.expiresAt) > Date.parse(this.now()); }
+  acquire(input: { tenantId: string; installationId: string; scope: string; authorityCurrent: boolean }): InvocationCredential {
+    const tenant = tenantId(input.tenantId); const reference = [...this.#references.values()].find((item) => item.tenantId === tenant && item.installationId === input.installationId && item.scopes.includes(input.scope) && this.usable(item.id)) ?? fail('DENIED');
+    if (!input.authorityCurrent) fail('DENIED'); const cached = this.#cache.get(reference.id); const token = cached?.epoch === reference.epoch ? cached.token : this.secrets.get(reference.secretStoreRef); this.#cache.set(reference.id, { epoch: reference.epoch, token }); return { reference: { id: reference.id, installationId: reference.installationId, epoch: reference.epoch, version: reference.version }, token, expiresAt: reference.expiresAt };
+  }
+  async rotate(id: string, expectedVersion: number, material: string, expiresAt: string, probe: (candidate: InvocationCredential) => Promise<boolean> | boolean): Promise<CredentialReference> {
+    const current = this.reference(id); if (current.state !== 'active' || current.version !== expectedVersion || Date.parse(expiresAt) <= Date.parse(this.now()) || this.#leases.has(id)) fail('DENIED'); this.#leases.add(id);
+    try {
+      const candidate: CredentialReference = { ...current, secretStoreRef: `fake-secret://${id}/${String(current.version + 1)}`, version: current.version + 1, epoch: current.epoch + 1, expiresAt }; this.secrets.put(candidate.secretStoreRef, material); const passed = await probe({ reference: { id: candidate.id, installationId: candidate.installationId, epoch: candidate.epoch, version: candidate.version }, token: this.secrets.get(candidate.secretStoreRef), expiresAt: candidate.expiresAt });
+      if (!passed) { this.secrets.delete(candidate.secretStoreRef); this.#receipts.push({ credentialId: id, epoch: current.epoch, event: 'rotation-failed' }); fail('DENIED'); }
+      this.secrets.delete(current.secretStoreRef); const next = Object.freeze(candidate); this.#references.set(id, next); this.#cache.delete(id); this.#receipts.push({ credentialId: id, epoch: next.epoch, event: 'rotated' }); return next;
+    } finally { this.#leases.delete(id); }
+  }
+  revoke(id: string): CredentialReference { const current = this.reference(id); const next = Object.freeze({ ...current, epoch: current.epoch + 1, state: 'revoked' as const }); this.secrets.delete(current.secretStoreRef); this.#cache.delete(id); this.#references.set(id, next); this.#receipts.push({ credentialId: id, epoch: next.epoch, event: 'revoked' }); return next; }
+  receipts(): readonly CredentialReceipt[] { return [...this.#receipts]; }
+}
+
+export interface ExtensionPolicy { maxBytes: number; network: readonly string[]; resources: readonly string[]; }
+export interface ExtensionRequest { tenantId: string; packageDigest: string; capability: string; input: Record<string, unknown>; deadline: string; policy: ExtensionPolicy; cancelled?: boolean; }
+export interface ExtensionResult { outcome: 'succeeded' | 'cancelled' | 'rejected' | 'crashed'; output?: Record<string, unknown>; resourceBytes: number; }
+export interface ExtensionRunner { run(request: ExtensionRequest, execute: (input: Readonly<{ tenantId: TenantId; capability: string; input: Record<string, unknown>; deadline: string }>) => Promise<Record<string, unknown>> | Record<string, unknown>): Promise<ExtensionResult>; }
+
+/** Local runner is processless by design: it exposes no host, identity, network or filesystem handles. */
+export class DisposableLocalExtensionRunner implements ExtensionRunner {
+  constructor(private readonly now: () => string = () => new Date().toISOString()) {}
+  async run(request: ExtensionRequest, execute: (input: Readonly<{ tenantId: TenantId; capability: string; input: Record<string, unknown>; deadline: string }>) => Promise<Record<string, unknown>> | Record<string, unknown>): Promise<ExtensionResult> {
+    const tenant = tenantId(request.tenantId); if (!validDigest(request.packageDigest) || !request.capability || !request.policy.resources.includes(request.capability) || request.policy.network.length || !Number.isSafeInteger(request.policy.maxBytes) || request.policy.maxBytes < 1 || Date.parse(request.deadline) <= Date.parse(this.now())) fail('DENIED'); if (request.cancelled) return { outcome: 'cancelled', resourceBytes: 0 };
+    try { const input = Object.freeze({ tenantId: tenant, capability: request.capability, input: frozen(json(request.input) as Record<string, unknown>), deadline: request.deadline }); const output = await execute(input); const bytes = new TextEncoder().encode(canonicalJson(output)).byteLength; if (bytes > request.policy.maxBytes || output['dlpSafe'] === false || output['malwareDetected'] === true || Object.keys(output).some((key) => /secret|token|authorization/iu.test(key))) fail('DENIED'); return { outcome: 'succeeded', output: frozen(json(output) as Record<string, unknown>), resourceBytes: bytes }; } catch (error) { if (error instanceof GatewayError) throw error; return { outcome: 'crashed', resourceBytes: 0 }; }
+  }
+}
+
+export interface ProviderReadiness { installationId: string; releaseId: string; credentialEpoch: number; ready: boolean; reason: string; }
+/** Couples atomic release selection with the current credential epoch for Lifecycle consumers. */
+export class ProviderLifecycle {
+  readonly #transitions: { installationId: string; fromRelease: string; toRelease: string; generation: number }[] = [];
+  constructor(private readonly installations: ProviderInstallationManager, private readonly credentials: CredentialBroker) {}
+  readiness(installationId: string, credentialId: string): ProviderReadiness { const installation = this.installations.get(installationId); const credential = this.credentials.reference(credentialId); const ready = installation.state === 'healthy' && this.credentials.usable(credentialId) && credential.tenantId === installation.tenantId && credential.installationId === installation.id; return { installationId, releaseId: installation.releaseId, credentialEpoch: credential.epoch, ready, reason: ready ? 'ready' : credential.state === 'revoked' ? 'credential-revoked' : 'not-ready' }; }
+  upgrade(installationId: string, expectedVersion: number, releaseId: string, checks: { health: boolean; schema: boolean; signature: boolean }, credentialId: string): ProviderInstallation { const before = this.installations.get(installationId); if (!this.readiness(installationId, credentialId).ready) fail('DENIED'); const next = this.installations.upgrade(installationId, expectedVersion, releaseId, checks); this.#transitions.push({ installationId, fromRelease: before.releaseId, toRelease: next.releaseId, generation: next.generation }); return next; }
+  remove(installationId: string, expectedVersion: number, credentialId: string, residueReconciled: boolean): ProviderInstallation { if (!residueReconciled) fail('DENIED'); const credential = this.credentials.reference(credentialId); if (credential.state === 'active') this.credentials.revoke(credentialId); return this.installations.transition(installationId, expectedVersion, 'removed'); }
+  transitions(): readonly { installationId: string; fromRelease: string; toRelease: string; generation: number }[] { return [...this.#transitions]; }
 }
 
 export interface CapabilityInvocation { id: string; tenantId: string; effectId: string; attemptId: string; caseId: string; generation: number; idempotencyKey: string; capability: string; installationId: string; accountId: string; resource: string; operation: string; arguments: Record<string, unknown>; deadline: string; authorityCurrent: boolean; approvalCurrent: boolean; budgetRemaining: number; cancelled?: boolean; }

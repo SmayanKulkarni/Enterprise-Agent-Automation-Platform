@@ -111,6 +111,36 @@ export function buildWorkspaceEvidence({ commands, report, toolchain }) {
         interface: 'Tenant installation transitions, ordered authenticated callbacks and Tenant-filtered availability discovery',
         issue: '.scratch/platform-implementation/issues/020-installations.md',
       },
+      '021-credentials': {
+        checks: ['tests/platform/lifecycle-memory.test.ts'],
+        interface: 'Reference-only fake secret store, scoped invocation-local acquisition, probe-then-switch rotation, epoch cache invalidation and revocation receipts',
+        issue: '.scratch/platform-implementation/issues/021-credentials.md',
+      },
+      '022-extension-isolation': {
+        checks: ['tests/platform/lifecycle-memory.test.ts'],
+        interface: 'Disposable local ExtensionRunner with default-deny network/resource policy, immutable invocation input and output DLP/size gate',
+        issue: '.scratch/platform-implementation/issues/022-extension-isolation.md',
+      },
+      '023-lifecycle-integration': {
+        checks: ['tests/platform/lifecycle-memory.test.ts'],
+        interface: 'Epoch-bound provider readiness, atomic checked release upgrade, callback fence and reconciled removal',
+        issue: '.scratch/platform-implementation/issues/023-lifecycle-integration.md',
+      },
+      '024-provenance-graph': {
+        checks: ['tests/platform/lifecycle-memory.test.ts'],
+        interface: 'Immutable Tenant-scoped provenance records, parent validation, acyclic lineage and immediate eligibility epochs',
+        issue: '.scratch/platform-implementation/issues/024-provenance-graph.md',
+      },
+      '025-scoped-stores': {
+        checks: ['tests/platform/lifecycle-memory.test.ts'],
+        interface: 'Authority, consent, policy, retention and explicit-scope governed in-memory/relational write-read adapters',
+        issue: '.scratch/platform-implementation/issues/025-scoped-stores.md',
+      },
+      '026-retrieval': {
+        checks: ['tests/platform/lifecycle-memory.test.ts'],
+        interface: 'Eligibility-before-ranking query, provenance projections, graph-epoch cache key, bounded result budgets and non-widening unavailable-adapter fallback',
+        issue: '.scratch/platform-implementation/issues/026-retrieval.md',
+      },
     },
   };
 }
