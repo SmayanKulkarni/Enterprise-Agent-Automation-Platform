@@ -12,6 +12,14 @@
 
 **Execution (2026-09-15):** The nine v1 fixtures run through the built codecs; eight decode/encode round-trip and the version-mismatch fixture rejects before consumption. Corrected fixture metadata that contradicted the canonical registry (`case.command` and `case.effect-attempt`). Root evidence is pending the host repair noted in 001.
 
+**Implemented details:**
+
+- Added a packed-contract conformance test that loads every v1 fixture through the compiled codec shape, verifies digest-stable round trips and expects the version-mismatch fixture to fail closed.
+- Added direct negative coverage for duplicate JSON members, cross-Tenant messages, non-canonical numbers and incompatible major versions.
+- Aligned `case.command` and `case.effect-attempt` fixture names/classifications with their canonical registry entries so fixtures describe the same contract metadata the runtime validates.
+
+**Performed checks:** all nine fixtures were executed against `packages/contracts/dist`; eight passed round trip and the incompatible-version fixture returned `INCOMPATIBLE_VERSION`.
+
 - [ ] Success, denial, retryable, terminal, conflict, timeout, unknown-outcome, redaction and version-mismatch fixtures pass from a fresh packed-package consumer.
 - [ ] Duplicate/conflicting messages, wrong or missing Tenant scope, incompatible major versions, unsafe redaction and partially initialized concurrent validators fail deterministically.
 - [ ] Use 002a's packed codecs for fixture encode/decode and byte-stable round trips; duplicate JSON members and transform/digest drift fail before adapter consumption.
