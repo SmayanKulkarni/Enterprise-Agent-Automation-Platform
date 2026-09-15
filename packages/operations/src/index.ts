@@ -1,5 +1,4 @@
 import { canonicalJson, decodeContract, descriptorFor, type ContractEnvelope } from '../../contracts/src/index.js';
-import { SolutionLifecycle, type Activation } from '../../lifecycle/src/index.js';
 
 type Completeness = 'complete' | 'partial';
 type SafeRecord = Readonly<Record<string, unknown>>;
@@ -58,8 +57,4 @@ export class OperationsWorkbench {
   command(input: { owner: 'case' | 'gateway' | 'lifecycle' | 'identity' | 'deployment'; name: string; expectedVersion: number; idempotencyKey: string; approvalCurrent: boolean; arguments: Record<string, unknown> }): Readonly<typeof input> { const destructive = ['delete', 'restore', 'teardown', 'quarantine', 'retire']; if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0 || !input.idempotencyKey || !input.approvalCurrent || (destructive.includes(input.name) && !Array.isArray(input.arguments['manifest']))) fail('INVALID_BROWSER_COMMAND'); return copy(input); }
 }
 
-/** Smallest shared-module Technical Implementation package fixture; no solution-specific runtime is introduced. */
-export async function technicalImplementationFixture(tenantId: string): Promise<{ activation: Activation }> {
-  const lifecycle = new SolutionLifecycle(); const draft = lifecycle.author({ id: 'technical-implementation', version: '1.0.0', author: 'fixture-author', artifacts: [{ id: 'technical-workflow', version: '1.0.0', digest: 'a'.repeat(64), kind: 'workflow', content: { case: 'technical-implementation', team: ['discovery', 'data', 'delivery'], joins: ['parallel-discovery', 'handoff'], budgets: { effects: 3 }, interventions: ['missing-information'], memory: 'governed', evaluation: 'required', capabilities: ['sql.validate', 'blob.write', 'boards.create'] } }], dependencies: [], bindings: ['sql-fixture', 'blob-fixture', 'boards-fixture'], overlayPaths: ['/budget'] });
-  const resolved = await lifecycle.resolve(draft.id, draft.version, { '/budget': 3 }); await lifecycle.validate(resolved.digest, { hardPassed: true, evidenceCurrent: true, comparable: true, liveCertified: true, subjectDigest: resolved.digest }); const publication = await lifecycle.publish({ packageDigest: resolved.digest, approver: 'fixture-approver', signer: 'fixture-signer', publisher: 'fixture-publisher', keyId: 'fixture-key', tenantIds: [tenantId] }); const readiness = await lifecycle.install({ id: 'technical-installation', tenantId, packageDigest: publication.digest, epochs: { policy: 1, sql: 1, blob: 1, boards: 1 }, checksCurrent: true }); return { activation: lifecycle.activate({ idempotencyKey: 'technical-activate', id: 'technical-activation', tenantId, installationId: 'technical-installation', readinessDigest: readiness.digest, expectedVersion: 1 }) };
-}
+export * from './technical-implementation.js';
