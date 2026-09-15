@@ -1,0 +1,9 @@
+:root { color: #1b1b1b; font-family: system-ui, sans-serif; background: #f5f5f3; }
+body { margin: 0; }
+.shell { max-width: 72rem; margin: auto; padding: 1.5rem; }
+header, nav, .context { display: flex; gap: 1rem; align-items: center; margin-bottom: 1.5rem; }
+header { justify-content: flex-end; }
+.brand { margin-right: auto; font-weight: 700; }
+.state { max-width: 42rem; padding: 1.5rem; background: white; border: 1px solid #ddd; border-radius: .5rem; }
+button, select { font: inherit; padding: .45rem .7rem; }
+a { color: #174ea6; }
