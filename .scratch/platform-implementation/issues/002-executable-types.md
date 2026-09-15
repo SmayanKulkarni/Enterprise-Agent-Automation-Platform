@@ -6,11 +6,11 @@
 
 **Blocked by:** 001: Workspace
 
-**Status:** implemented; root verification pending the pinned Node 22.14.0/Vitest environment.
+**Status:** complete; root-verified with Node 22.14.0 and pnpm 10.15.1.
 
 **Produces:** `@platform/contracts` executable type and validation interface; foundation toward M1
 
-**Execution (2026-09-15):** Added the packed `@platform/contracts` module with branded UUIDs, strict envelopes/errors, canonical JSON/digests, descriptors and a compile-time non-substitutable ID check. Packed round-trip and direct typechecking pass; root evidence is pending the host repair noted in 001.
+**Execution (2026-09-15):** Added the packed `@platform/contracts` module with branded UUIDs, strict envelopes/errors, canonical JSON/digests, descriptors and a compile-time non-substitutable ID check. Packed round-trip, direct typechecking and root verification pass.
 
 **Implemented details:**
 
@@ -21,7 +21,7 @@
 
 **Performed checks:** root typechecking, a compiled-package round trip and the type-level ID boundary check passed.
 
-- [ ] A packed consumer validates canonical envelopes and normalized outcomes while type tests reject substitution among branded IDs.
-- [ ] Unknown or missing fields, invalid identifiers, Tenant scope, versions or integrity proof and corrupt schemas are rejected without exposing sensitive payloads.
-- [ ] Publish packed-module inventory/digest, schema compilation results, type-test output and contract-validation fixtures with correlation IDs.
-- [ ] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.
+- [x] A packed consumer validates canonical envelopes and normalized outcomes while type tests reject substitution among branded IDs.
+- [x] Unknown or missing fields, invalid identifiers, Tenant scope, versions or integrity proof and corrupt schemas are rejected without exposing sensitive payloads.
+- [x] Publish packed-module inventory/digest, schema compilation results, type-test output and contract-validation fixtures with correlation IDs.
+- [x] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.

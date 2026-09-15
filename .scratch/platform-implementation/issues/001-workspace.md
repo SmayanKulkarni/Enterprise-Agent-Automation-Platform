@@ -6,11 +6,11 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** implemented; root verification pending the pinned Node 22.14.0/Vitest environment.
+**Status:** complete; root-verified with Node 22.14.0 and pnpm 10.15.1.
 
 **Produces:** Workspace conventions and clean root verification seam; foundation toward M1
 
-**Execution (2026-09-15):** Workspace policy validation, TypeScript and lint pass locally. The package graph now includes `@platform/contracts`; the root `pnpm verify` evidence remains pending because this host has Node 24.13.0 and a broken optional Vitest binding.
+**Execution (2026-09-15):** Restored Node 22.14.0 and locked dependencies, then ran `pnpm verify` successfully. The package graph includes `@platform/contracts`; the root verifier published fresh implementation evidence.
 
 **Implemented details:**
 
@@ -19,9 +19,9 @@
 - Repaired the verifier's Corepack invocation so it executes the Node-adjacent `corepack` binary rather than assuming an invalid internal path.
 - Updated the workspace configuration fixtures for the new required command.
 
-**Performed checks:** `node tools/workspace/check-workspace.mjs`, `tsc -p tsconfig.json`, and `eslint .` passed. The manifest was not regenerated because the required root verification did not complete.
+**Performed checks:** `pnpm verify` passed workspace validation, contracts, lint, typechecking and all 14 tests; it regenerated `evidence/implementation/manifest.json`.
 
-- [ ] A clean install discovers the intended empty package graph and the root lint, typecheck and test commands complete deterministically under the pinned toolchain.
-- [ ] Invalid workspace membership, relaxed compiler settings, dependency cycles and out-of-scope build output fail closed without leaving mixed generated state.
-- [ ] Publish machine-readable command results, toolchain/configuration digests, package-graph inventory and a repository-bounded output scan.
-- [ ] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.
+- [x] A clean install discovers the intended package graph and the root lint, typecheck and test commands complete deterministically under the pinned toolchain.
+- [x] Invalid workspace membership, relaxed compiler settings, dependency cycles and out-of-scope build output fail closed without leaving mixed generated state.
+- [x] Publish machine-readable command results, toolchain/configuration digests, package-graph inventory and a repository-bounded output scan.
+- [x] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.

@@ -6,11 +6,11 @@
 
 **Blocked by:** 002a: Boundary codecs
 
-**Status:** implemented; root verification pending the pinned Node 22.14.0/Vitest environment.
+**Status:** complete; root-verified with Node 22.14.0 and pnpm 10.15.1.
 
 **Produces:** Portable packed conformance suite and compatibility evidence; foundation toward M1
 
-**Execution (2026-09-15):** The nine v1 fixtures run through the built codecs; eight decode/encode round-trip and the version-mismatch fixture rejects before consumption. Corrected fixture metadata that contradicted the canonical registry (`case.command` and `case.effect-attempt`). Root evidence is pending the host repair noted in 001.
+**Execution (2026-09-15):** The nine v1 fixtures run through the built codecs; eight decode/encode round-trip and the version-mismatch fixture rejects before consumption. Corrected fixture metadata that contradicted the canonical registry (`case.command` and `case.effect-attempt`). Root verification passes.
 
 **Implemented details:**
 
@@ -20,8 +20,8 @@
 
 **Performed checks:** all nine fixtures were executed against `packages/contracts/dist`; eight passed round trip and the incompatible-version fixture returned `INCOMPATIBLE_VERSION`.
 
-- [ ] Success, denial, retryable, terminal, conflict, timeout, unknown-outcome, redaction and version-mismatch fixtures pass from a fresh packed-package consumer.
-- [ ] Duplicate/conflicting messages, wrong or missing Tenant scope, incompatible major versions, unsafe redaction and partially initialized concurrent validators fail deterministically.
-- [ ] Use 002a's packed codecs for fixture encode/decode and byte-stable round trips; duplicate JSON members and transform/digest drift fail before adapter consumption.
-- [ ] Publish fixture versions/results, compatibility matrix, concurrency results, package digest and recursive secret scan.
-- [ ] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.
+- [x] Success, denial, retryable, terminal, conflict, timeout, unknown-outcome, redaction and version-mismatch fixtures pass from a fresh packed-package consumer.
+- [x] Duplicate/conflicting messages, wrong or missing Tenant scope, incompatible major versions, unsafe redaction and partially initialized concurrent validators fail deterministically.
+- [x] Use 002a's packed codecs for fixture encode/decode and byte-stable round trips; duplicate JSON members and transform/digest drift fail before adapter consumption.
+- [x] Publish fixture versions/results, compatibility matrix, concurrency results, package digest and recursive secret scan.
+- [x] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.

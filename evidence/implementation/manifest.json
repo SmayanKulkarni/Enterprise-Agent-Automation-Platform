@@ -10,6 +10,12 @@
           "status": "passed"
         },
         {
+          "command": "pnpm contracts",
+          "exitCode": 0,
+          "name": "contracts",
+          "status": "passed"
+        },
+        {
           "command": "pnpm lint",
           "exitCode": 0,
           "name": "lint",
@@ -35,15 +41,15 @@
         },
         {
           "path": "eslint.config.mjs",
-          "sha256": "5baefbaa3f60757adc1fd731a33f89076903b11f09e63f0ae499748f0a14d292"
+          "sha256": "c1c75ee7b720aaad793ecdaa32963b1baebaee58fea446f2d6ea7fc7d1ef1903"
         },
         {
           "path": "package.json",
-          "sha256": "3116e7fe8139f99ebac7f6385c068f47b2efbaa1eab9119bf3a0901aa360543e"
+          "sha256": "7ad592e81b28e2f012f5e57752d724d99d4919c587d20067afcff10e1662d9de"
         },
         {
           "path": "pnpm-lock.yaml",
-          "sha256": "58c57855a84e55d83af08749d2cc7eb38dcc9f24549fc040bd786376788f11d6"
+          "sha256": "cc27bc18a63eafda641b04289f484d7688ce7f37bbabdf35af6a8d326649e199"
         },
         {
           "path": "pnpm-workspace.yaml",
@@ -55,11 +61,12 @@
         },
         {
           "path": "tsconfig.json",
-          "sha256": "2ab8e43edd7500dfcf1100cec48cb4ab290bf1ec20263e1c98b2b0f443f9cd85"
+          "sha256": "617c9349ef826a23e0493ca28886da080d5841fa097e09b16538aac8c00f6c5a"
         }
       ],
       "interface": {
         "rootCommands": [
+          "contracts",
           "lint",
           "test",
           "typecheck",
@@ -73,10 +80,17 @@
       },
       "issue": ".scratch/platform-implementation/issues/001-workspace.md",
       "outputScan": {
-        "paths": [],
+        "paths": [
+          "packages/contracts/dist"
+        ],
         "repositoryBounded": true
       },
-      "packageGraph": [],
+      "packageGraph": [
+        {
+          "name": "@platform/contracts",
+          "path": "packages/contracts"
+        }
+      ],
       "sourceSpec": "docs/superpowers/specs/2026-09-14-01-repository-contract-foundation-spec.md#ordered-implementation-slices",
       "toolchain": {
         "actual": {

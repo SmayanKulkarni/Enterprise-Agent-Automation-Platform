@@ -71,6 +71,7 @@ describe('verifyWorkspace', () => {
 
     expect(result.commands.map(({ name }) => name)).toEqual([
       'workspace:check',
+      'contracts',
       'lint',
       'typecheck',
       'test',
