@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portfolio-platform.example/contracts/v1/schemas/normalized-error.schema.json",
+  "title": "Normalized error v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["category", "code", "message"],
+  "properties": {
+    "category": { "enum": ["denied", "invalid", "conflict", "retryable", "timeout", "unknown-outcome", "terminal"] },
+    "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+    "message": { "type": "string", "minLength": 1 },
+    "retryAfterSeconds": { "type": "integer", "minimum": 0 },
+    "redacted": { "type": "boolean" }
+  }
+}

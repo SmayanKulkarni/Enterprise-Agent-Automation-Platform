@@ -4,7 +4,7 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const EXPECTED_PATTERNS = ['apps/*', 'packages/*'];
-const REQUIRED_SCRIPTS = ['lint', 'test', 'typecheck', 'verify', 'workspace:check'];
+const REQUIRED_SCRIPTS = ['contracts', 'lint', 'test', 'typecheck', 'verify', 'workspace:check'];
 const REQUIRED_COMPILER_OPTIONS = {
   allowUnreachableCode: false,
   allowUnusedLabels: false,

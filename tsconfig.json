@@ -9,5 +9,5 @@
     "target": "ES2024",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["eslint.config.mjs", "tools/**/*.mjs", "tests/**/*.mjs"]
+  "include": ["eslint.config.mjs", "tools/**/*.mjs", "tests/**/*.mjs", "tests/**/*.ts", "packages/**/*.ts"]
 }

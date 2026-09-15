@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "workspace:check": "node tools/workspace/check-workspace.mjs",
+    "contracts": "tsc -p packages/contracts/tsconfig.build.json && node tools/contracts/governance.mjs",
     "verify": "node tools/workspace/verify.mjs"
   },
   "devDependencies": {

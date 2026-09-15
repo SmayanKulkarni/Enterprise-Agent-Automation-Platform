@@ -8,13 +8,18 @@ const typeCheckedConfigs = tseslint.configs.strictTypeChecked.map((config) => ({
 
 export default [
   {
-    ignores: ['.artifacts/**', '.scratch/**', '.superpowers/**', 'coverage/**', 'dist/**', 'node_modules/**'],
+    ignores: ['.artifacts/**', '.scratch/**', '.superpowers/**', 'coverage/**', '**/dist/**', 'node_modules/**'],
   },
   eslint.configs.recommended,
   ...typeCheckedConfigs,
   {
     files: ['**/*.ts'],
     languageOptions: {
+      globals: {
+        TextDecoder: 'readonly',
+        TextEncoder: 'readonly',
+        crypto: 'readonly',
+      },
       parserOptions: {
         projectService: true,
         tsconfigRootDir: import.meta.dirname,

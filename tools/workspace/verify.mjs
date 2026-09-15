@@ -7,6 +7,7 @@ import { buildWorkspaceEvidence, publishEvidence } from './evidence.mjs';
 
 const COMMANDS = [
   { args: ['pnpm', 'run', 'workspace:check'], command: 'pnpm workspace:check', name: 'workspace:check' },
+  { args: ['pnpm', 'run', 'contracts'], command: 'pnpm contracts', name: 'contracts' },
   { args: ['pnpm', 'run', 'lint'], command: 'pnpm lint', name: 'lint' },
   { args: ['pnpm', 'run', 'typecheck'], command: 'pnpm typecheck', name: 'typecheck' },
   { args: ['pnpm', 'run', 'test'], command: 'pnpm test', name: 'test' },
@@ -30,15 +31,9 @@ function fail(code, message) {
   throw new VerificationError(code, message);
 }
 
-/** @param {string[]} args */
-function corepackArguments(args) {
-  const corepackEntry = resolve(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'corepack.js');
-  return [corepackEntry, ...args];
-}
-
 /** @param {VerificationCommand} descriptor @returns {CommandResult} */
 function runRootCommand(descriptor) {
-  const result = spawnSync(process.execPath, corepackArguments(descriptor.args), {
+  const result = spawnSync(resolve(dirname(process.execPath), 'corepack'), descriptor.args, {
     encoding: 'utf8',
     env: { ...process.env, PNPM_DISABLE_SELF_UPDATE_CHECK: 'true' },
     stdio: 'pipe',
@@ -54,7 +49,7 @@ function runRootCommand(descriptor) {
 
 /** @returns {Toolchain} */
 function readActualToolchain() {
-  const result = spawnSync(process.execPath, corepackArguments(['pnpm', '--version']), {
+  const result = spawnSync(resolve(dirname(process.execPath), 'corepack'), ['pnpm', '--version'], {
     encoding: 'utf8',
     stdio: 'pipe',
   });

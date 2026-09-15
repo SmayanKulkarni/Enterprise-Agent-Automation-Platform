@@ -1,0 +1,11 @@
+{
+  "messageId": "11111111-1111-4111-8111-111111111116",
+  "contract": "case.effect-attempt",
+  "contractVersion": "1.0.0",
+  "occurredAt": "2026-09-14T12:00:05Z",
+  "tenantId": "22222222-2222-4222-8222-222222222222",
+  "correlationId": "33333333-3333-4333-8333-333333333333",
+  "sender": "capability-gateway",
+  "classification": "immutable-audit",
+  "payload": { "error": { "category": "timeout", "code": "PROVIDER_TIMEOUT", "message": "Provider response timed out." } }
+}

@@ -47,7 +47,7 @@ describe('workspace evidence', () => {
           ],
           configurationDigests: [{ path: 'package.json', sha256: 'a'.repeat(64) }],
           interface: {
-            rootCommands: ['lint', 'test', 'typecheck', 'verify', 'workspace:check'],
+            rootCommands: ['contracts', 'lint', 'test', 'typecheck', 'verify', 'workspace:check'],
             workspacePatterns: ['apps/*', 'packages/*'],
           },
           issue: '.scratch/platform-implementation/issues/001-workspace.md',

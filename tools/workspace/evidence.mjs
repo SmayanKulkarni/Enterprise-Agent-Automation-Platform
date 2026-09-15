@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const ROOT_COMMANDS = ['lint', 'test', 'typecheck', 'verify', 'workspace:check'];
+const ROOT_COMMANDS = ['contracts', 'lint', 'test', 'typecheck', 'verify', 'workspace:check'];
 
 /**
  * @typedef {{ command: string, exitCode: number, name: string }} CommandResult

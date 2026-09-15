@@ -31,6 +31,7 @@ function createWorkspace() {
       lint: 'eslint .',
       typecheck: 'tsc -p tsconfig.json',
       test: 'vitest run',
+      contracts: 'tsc -p packages/contracts/tsconfig.build.json && node tools/contracts/governance.mjs',
       'workspace:check': 'node tools/workspace/check-workspace.mjs',
       verify: 'node tools/workspace/verify.mjs',
     },

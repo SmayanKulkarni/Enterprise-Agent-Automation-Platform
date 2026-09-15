@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://portfolio-platform.example/contracts/v1/schemas/cross-subsystem-envelope.schema.json",
+  "title": "Cross-subsystem envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["messageId", "contract", "contractVersion", "occurredAt", "sender", "payload"],
+  "properties": {
+    "messageId": { "type": "string", "format": "uuid" },
+    "contract": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$" },
+    "contractVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "tenantId": { "type": "string", "format": "uuid" },
+    "correlationId": { "type": "string", "format": "uuid" },
+    "causationId": { "type": "string", "format": "uuid" },
+    "sender": { "type": "string", "minLength": 1 },
+    "classification": { "enum": ["ordinary", "restricted-operational", "secret", "immutable-audit"] },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "keyId", "signature"],
+      "properties": {
+        "algorithm": { "type": "string", "minLength": 1 },
+        "keyId": { "type": "string", "minLength": 1 },
+        "signature": { "type": "string", "minLength": 1 }
+      }
+    },
+    "payload": { "type": "object" }
+  }
+}
