@@ -20,6 +20,8 @@ Progress update (2026-09-15): completed 039–045, including browser seams 039a,
 
 Progress update (2026-09-15): completed 046–050, including browser seam 049a. Added deterministic two-Tenant bootstrap/seed/readiness, fixture-only success and negative/recovery journeys, exact reset/repeat evidence, registered browser.v1 fixture commands, and a fail-closed Bicep/plan policy shell. Root verification passed and regenerated the implementation manifest.
 
+Progress update (2026-09-16): implemented 051–056. Added fail-closed, fixture-labeled Azure foundation, compute, delivery, resilience and exact-manifest close adapters plus the provider-neutral certification harness. The focused contract suite, typecheck and full test suite passed; root verification and manifest publication are blocked because this shell has Node 24.13.0 while the workspace pins Node 22.14.0. Live Azure/provider labels still require an injected trusted verifier and cannot be self-asserted.
+
 | Done | Ticket | Source slice | Blocked by | Owning spec | Produced interface/gate |
 | --- | --- | --- | --- | --- | --- |
 | - [x] | [001: Workspace](issues/001-workspace.md) | 1.1 | None | [Repository and executable contract foundation specification](../../docs/superpowers/specs/2026-09-14-01-repository-contract-foundation-spec.md#ordered-implementation-slices) | Workspace conventions and clean root verification seam; foundation toward M1 |
