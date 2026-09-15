@@ -1,0 +1,23 @@
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { PlatformApi, PlatformApiError } from './platform-api.js';
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('PlatformApi', () => {
+  test('sends a Clerk bearer session token and parses safe Tenant projections', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: { tenant: { id: '11111111-1111-4111-8111-111111111111' } } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(new PlatformApi(() => Promise.resolve('short-lived')).session()).resolves.toEqual({ tenantId: '11111111-1111-4111-8111-111111111111' });
+    expect(fetch).toHaveBeenCalledWith('/api/v1/session', { headers: { accept: 'application/vnd.platform.browser.v1+json', authorization: 'Bearer short-lived' } });
+  });
+
+  test('preserves the safe denial category and rejects malformed payloads', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ payload: { error: { category: 'denied' } } }), { status: 400 })).mockResolvedValueOnce(new Response(JSON.stringify({ payload: { tenants: [null] } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    const api = new PlatformApi(() => Promise.resolve('short-lived'));
+
+    await expect(api.session()).rejects.toMatchObject({ status: 400, category: 'denied' });
+    await expect(api.tenants()).rejects.toBeInstanceOf(PlatformApiError);
+  });
+});

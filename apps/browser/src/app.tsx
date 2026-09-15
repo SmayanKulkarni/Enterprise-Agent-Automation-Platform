@@ -6,7 +6,7 @@ import { browserState, selectTenant, signedIn, signedOut, type BrowserState } fr
 type View = 'loading' | 'ready' | 'signed-out' | 'no-membership' | 'forbidden' | 'unavailable';
 
 export function App() {
-  const { getToken, isLoaded, isSignedIn } = useAuth();
+  const { getToken, isLoaded, isSignedIn, sessionId } = useAuth();
   const [state, setState] = useState<BrowserState>(() => browserState(`${window.location.pathname}${window.location.search}`));
   const [view, setView] = useState<View>('loading');
   const api = useMemo(() => new PlatformApi(getToken), [getToken]);
@@ -26,15 +26,16 @@ export function App() {
           setView('no-membership');
           return;
         }
-        setState((current) => signedIn(current, { tenantId: session.tenantId, tenantIds: tenants.map((tenant) => tenant.id) }));
+        restorePath(state.path);
+        setState((current) => signedIn(current, { tenantId: session.tenantId, tenantIds: tenants.map((tenant) => tenant.id), sessionId }));
         setView('ready');
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        setView(error instanceof PlatformApiError && error.status === 403 ? 'forbidden' : error instanceof PlatformApiError && error.status === 401 ? 'signed-out' : 'unavailable');
+        setView(error instanceof PlatformApiError && error.status === 401 ? 'signed-out' : error instanceof PlatformApiError && (error.status === 403 || error.status === 400 || error.category === 'denied') ? 'forbidden' : 'unavailable');
       });
     return () => controller.abort();
-  }, [api, isLoaded, isSignedIn, state.tenantId, state.cacheEpoch, state.streamEpoch]);
+  }, [api, isLoaded, isSignedIn, sessionId, state.path, state.tenantId, state.cacheEpoch, state.streamEpoch]);
 
   return (
     <main className="shell">
@@ -72,4 +73,8 @@ function TenantShell({ state, onTenantChange }: { state: BrowserState; onTenantC
 
 function State({ title, children }: { title: string; children: string }) {
   return <section className="state" aria-live="polite"><h1>{title}</h1><p>{children}</p><a href="/">Return home</a></section>;
+}
+
+function restorePath(path: string): void {
+  if (`${window.location.pathname}${window.location.search}` !== path) window.history.replaceState(null, '', path);
 }
