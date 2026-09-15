@@ -90,4 +90,4 @@ export async function retrieveMemory(input: MemoryQuery, adapters: readonly Memo
 }
 
 export { GovernedMemoryLifecycle, ValidatedExperienceRegistry, type ExperienceStatus, type LegalHold, type LifecycleDisposition, type LifecycleKind, type LifecycleManifestItem, type LifecycleReport, type ValidatedExperience } from './lifecycle.js';
-export { EvaluationLedger, GateCalculator, ImprovementOrchestrator, type CandidateState, type EvaluationKind, type GateDecision, type GateManifest, type LedgerAggregate, type LedgerComparison, type LedgerInput, type LedgerRecord, type OrchestratorCandidate } from './evaluation.js';
+export { EvaluationLedger, GateCalculator, ImprovementOrchestrator, StrategySelector, type CandidateState, type EvaluationKind, type GateDecision, type GateManifest, type LedgerAggregate, type LedgerComparison, type LedgerInput, type LedgerRecord, type OrchestratorCandidate, type StrategySelection } from './evaluation.js';

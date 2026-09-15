@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { createRequire } from 'node:module';
 import { canonicalJson, correlationId, decodeContract, descriptorFor, digest, encodeContract, messageId, tenantId, type ContractEnvelope, type NormalizedError } from '../../contracts/src/index.js';
 import { IdentityStore, type ExecutionContext, type Proof } from '../../identity/src/index.js';
 
@@ -9,6 +10,26 @@ export type BrowserCommandHandler = (command: BrowserCommand) => Promise<Record<
 export interface ClerkSessionClaims { issuer: string; subject: string; sessionId: string; audience: string; expiresAt: string; tokenUse: string; authorizedParty: string; }
 export interface ClerkSessionPort { verifySessionToken(token: string): Promise<ClerkSessionClaims> | ClerkSessionClaims; getSession(sessionId: string): Promise<{ subject: string; status: 'active' | 'ended' | 'revoked' }> | { subject: string; status: 'active' | 'ended' | 'revoked' }; }
 export interface ClerkSessionConfig { issuer: string; publishableKey: string; audience: string; authorizedParties: readonly string[]; }
+export interface ClerkBackend { verifyToken(token: string, options: { audience: string; authorizedParties: string[]; secretKey: string }): Promise<Record<string, unknown> | undefined>; sessions: { getSession(sessionId: string): Promise<{ userId: string; status: string }>; }; }
+type ClerkSdk = { verifyToken: ClerkBackend['verifyToken']; createClerkClient(options: { secretKey: string }): { sessions: ClerkBackend['sessions']; }; };
+const clerkSdk = createRequire(import.meta.url)('@clerk/backend') as ClerkSdk;
+const clerkBackend = (secretKey: string): ClerkBackend => ({ verifyToken: clerkSdk.verifyToken, sessions: clerkSdk.createClerkClient({ secretKey }).sessions });
+const required = (environment: Readonly<Record<string, string | undefined>>, name: string): string => { const value = environment[name]?.trim(); if (!value) throw new Error(`Missing ${name}.`); return value; };
+const claim = (value: Record<string, unknown>, name: string): string => typeof value[name] === 'string' && value[name] ? value[name] : (() => { throw new Error('DENIED'); })();
+const expiresAt = (value: Record<string, unknown>): string => typeof value['exp'] === 'number' && Number.isSafeInteger(value['exp']) ? new Date(value['exp'] * 1000).toISOString() : (() => { throw new Error('DENIED'); })();
+
+/** Official Clerk Backend SDK port. Instantiate only in the server process. */
+export function liveClerkSessionAdapter(environment: Readonly<Record<string, string | undefined>>, backend?: ClerkBackend): ClerkSessionAdapter {
+  const issuer = required(environment, 'CLERK_ISSUER'); const publishableKey = required(environment, 'CLERK_PUBLISHABLE_KEY'); const secretKey = required(environment, 'CLERK_SECRET_KEY'); const audience = required(environment, 'CLERK_AUDIENCE'); const authorizedParties = required(environment, 'CLERK_AUTHORIZED_PARTIES').split(',').map((origin) => origin.trim()).filter(Boolean);
+  if (audience !== 'platform-browser-api' || !authorizedParties.length) throw new Error('Invalid Clerk browser configuration.');
+  const client = backend ?? clerkBackend(secretKey); return new ClerkSessionAdapter({ issuer, publishableKey, audience, authorizedParties }, {
+    async verifySessionToken(token) { const verified = await client.verifyToken(token, { secretKey, audience, authorizedParties }); if (verified === undefined) throw new Error('DENIED'); return { issuer: claim(verified, 'iss'), subject: claim(verified, 'sub'), sessionId: claim(verified, 'sid'), audience, expiresAt: expiresAt(verified), tokenUse: 'session', authorizedParty: claim(verified, 'azp') }; },
+    async getSession(sessionId) { const session = await client.sessions.getSession(sessionId); return { subject: session.userId, status: session.status === 'active' ? 'active' : 'revoked' }; },
+  });
+}
+
+/** Browser callers pass only Clerk's short-lived session token to the transport. */
+export async function clerkAuthorizationHeader(getToken: () => Promise<string | null>): Promise<Record<'authorization', string>> { const token = await getToken(); if (!token) throw new Error('DENIED'); return { authorization: `Bearer ${token}` }; }
 /** Verifies Clerk's token and then its live session; raw tokens never leave this method. */
 export class ClerkSessionAdapter {
   constructor(private readonly config: ClerkSessionConfig, private readonly port: ClerkSessionPort) { if (!config.issuer || !config.publishableKey || !config.audience || !config.authorizedParties.length) throw new Error('Clerk configuration is required.'); }
@@ -49,6 +70,19 @@ export class CapabilityMemoryWorkbench {
   }
 }
 
+export interface SafeImprovementProjection { tenantId: string; collection: 'evaluations' | 'improvements'; completeness: 'full' | 'partial'; version: string; records: readonly Record<string, unknown>[]; }
+/** Read-only improvement state; stale or partial evidence cannot enable promotion. */
+export class ImprovementWorkbench {
+  ingest(input: SafeImprovementProjection): SafeImprovementProjection {
+    tenantId(input.tenantId); if (input.version !== '1.0.0' || input.records.some((record) => !safeBrowserValue(record))) throw new Error('INVALID_BROWSER_DTO');
+    const partial = input.completeness === 'partial' || input.records.some((record) => record['stale'] === true || record['partial'] === true || record['restricted'] === true);
+    return Object.freeze({ ...input, completeness: partial ? 'partial' : 'full', records: Object.freeze(input.records.map((record) => Object.freeze(JSON.parse(canonicalJson(record)) as Record<string, unknown>))) });
+  }
+  command(input: { name: 'create' | 'evaluate' | 'shadow' | 'canary' | 'promote' | 'rollback'; expectedVersion: number; idempotencyKey: string; gateCurrent: boolean; r3Approved: boolean; arguments: Record<string, unknown> }): Readonly<typeof input> {
+    if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0 || !input.idempotencyKey || !input.gateCurrent || !input.r3Approved) throw new Error('INVALID_BROWSER_COMMAND');
+    return Object.freeze({ ...input, arguments: JSON.parse(canonicalJson(input.arguments)) as Record<string, unknown> });
+  }
+}
 const MEDIA_TYPE = 'application/vnd.platform.browser.v1+json';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const collections = new Set(['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'operations', 'deployments']);

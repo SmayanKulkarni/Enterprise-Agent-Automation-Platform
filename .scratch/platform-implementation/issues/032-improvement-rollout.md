@@ -6,13 +6,13 @@
 
 **Blocked by:** 031: Candidate
 
-**Status:** implementation-complete-pending-pinned-verification
+**Status:** completed
 
 **Produces:** Governed candidate shadow/canary/promotion/rollback interface
 
 - [x] An evaluated candidate advances through matched shadow and eligible canary windows, then one fenced command atomically promotes it with explicit running-Case disposition.
 - [x] Risk escalation, evidence drift, concurrent promote/rollback, crash at a transition and any rollback trigger stop or reverse routing without changing external-effect recovery ownership.
 - [x] Publish shadow/canary population manifests, matched metrics, atomic routing receipts, crash/replay and rollback-trigger results, Operations events and labels.
-- [ ] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.
+- [x] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.
 
-Evidence: `tests/platform/memory-evaluation.test.ts`; lint, static typecheck and all 23 tests passed on 2026-09-15. Pinned verification remains blocked by Node 22.14.0 being unavailable.
+Evidence: `tests/platform/memory-evaluation.test.ts`; pinned root verification passed under Node 22.14.0 / pnpm 10.15.1 on 2026-09-15 and published `evidence/implementation/manifest.json`.

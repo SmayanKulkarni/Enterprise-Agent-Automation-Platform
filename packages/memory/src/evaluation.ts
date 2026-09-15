@@ -50,3 +50,14 @@ export class ImprovementOrchestrator {
   private current(id: string, expectedVersion: number, state?: CandidateState): OrchestratorCandidate { const candidate = this.#candidates.get(id) ?? fail('NOT_FOUND'); if (candidate.version !== expectedVersion || (state !== undefined && candidate.state !== state)) fail('CONFLICT'); return candidate; }
   private transition(current: OrchestratorCandidate, state: CandidateState, reason: string): OrchestratorCandidate { const next = Object.freeze({ ...current, state, version: current.version + 1, timeline: Object.freeze([...current.timeline, { state, at: this.now(), reason }]) }); this.#candidates.set(next.id, next); return next; }
 }
+
+export interface StrategySelection { strategy: string; version: string; evidenceDigest: string; fallback: boolean; }
+/** Chooses only pre-approved strategies; it never plans or grants authority. */
+export class StrategySelector {
+  select(input: { approved: readonly { name: string; version: string }[]; fallback: { name: string; version: string }; evidence: { eligibleCases: number; perStrategyStratum: readonly number[]; holdoutClean: boolean; calibratedBenefit: boolean; shadowAndCanaryPassed: boolean; current: boolean; drifted: boolean; available: boolean; authorityCurrent: boolean }; requested?: string }): StrategySelection {
+    const eligible = input.evidence.eligibleCases >= 200 && input.evidence.perStrategyStratum.every((count) => count >= 30) && input.evidence.holdoutClean && input.evidence.calibratedBenefit && input.evidence.shadowAndCanaryPassed && input.evidence.current && !input.evidence.drifted && input.evidence.available && input.evidence.authorityCurrent;
+    const selected = eligible ? input.approved.find((strategy) => strategy.name === input.requested) ?? input.fallback : input.fallback;
+    if (!input.approved.some((strategy) => strategy.name === selected.name && strategy.version === selected.version) && selected.name !== input.fallback.name) fail('DENIED');
+    return Object.freeze({ strategy: selected.name, version: selected.version, evidenceDigest: canonicalJson(input.evidence), fallback: selected.name === input.fallback.name });
+  }
+}

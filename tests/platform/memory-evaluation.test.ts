@@ -6,10 +6,12 @@ import {
   GovernedMemoryLifecycle,
   ImprovementOrchestrator,
   ProvenanceGraph,
+  StrategySelector,
   ValidatedExperienceRegistry,
 } from '../../packages/memory/src/index.js';
-import { CapabilityMemoryWorkbench } from '../../packages/browser/src/index.js';
+import { CapabilityMemoryWorkbench, ImprovementWorkbench } from '../../packages/browser/src/index.js';
 import { tenantId } from '../../packages/contracts/src/index.js';
+import { SolutionLifecycle } from '../../packages/lifecycle/src/index.js';
 
 const tenant = '22222222-2222-4222-8222-222222222222';
 const later = '2099-01-02T00:00:00.000Z';
@@ -66,5 +68,25 @@ describe('memory lifecycle and governed improvement', () => {
     expect(() => view.ingest({ tenantId: tenant, collection: 'capabilities', completeness: 'full', records: [{ token: 'never-client-side' }] })).toThrow();
     expect(view.command({ owner: 'memory', name: 'delete', expectedVersion: 2, idempotencyKey: 'key', arguments: { manifest: ['record-1'] } }).name).toBe('delete');
     expect(() => view.command({ owner: 'memory', name: 'delete', expectedVersion: 2, idempotencyKey: 'key', arguments: {} })).toThrow();
+  });
+
+  test('falls back outside selector evidence and fences package publication through activation', async () => {
+    const selector = new StrategySelector();
+    expect(selector.select({ approved: [{ name: 'rules', version: '1' }, { name: 'learned', version: '1' }], fallback: { name: 'rules', version: '1' }, requested: 'learned', evidence: { eligibleCases: 200, perStrategyStratum: [30], holdoutClean: true, calibratedBenefit: true, shadowAndCanaryPassed: true, current: true, drifted: false, available: true, authorityCurrent: true } }).strategy).toBe('learned');
+    expect(selector.select({ approved: [{ name: 'rules', version: '1' }], fallback: { name: 'rules', version: '1' }, evidence: { eligibleCases: 0, perStrategyStratum: [], holdoutClean: false, calibratedBenefit: false, shadowAndCanaryPassed: false, current: false, drifted: true, available: false, authorityCurrent: false } }).fallback).toBe(true);
+    const improvements = new ImprovementWorkbench();
+    expect(improvements.ingest({ tenantId: tenant, collection: 'improvements', completeness: 'full', version: '1.0.0', records: [{ id: 'candidate-1', stale: true }] }).completeness).toBe('partial');
+    expect(() => improvements.command({ name: 'promote', expectedVersion: 1, idempotencyKey: 'promote-1', gateCurrent: false, r3Approved: true, arguments: {} })).toThrow();
+
+    const lifecycle = new SolutionLifecycle();
+    const draft = lifecycle.author({ id: 'technical', version: '1.0.0', author: 'author', artifacts: [{ id: 'workflow', version: '1', digest: 'a'.repeat(64), kind: 'workflow', content: { stages: ['start'] } }], dependencies: [], bindings: ['provider-ref'], overlayPaths: ['/budget'] });
+    const resolved = await lifecycle.resolve(draft.id, draft.version, { '/budget': 1 });
+    expect((await lifecycle.validate(resolved.digest, { hardPassed: true, evidenceCurrent: true, comparable: true, liveCertified: true, subjectDigest: resolved.digest })).valid).toBe(true);
+    const published = await lifecycle.publish({ packageDigest: resolved.digest, approver: 'approver', signer: 'signer', publisher: 'publisher', keyId: 'key-1', tenantIds: [tenant] });
+    const readiness = await lifecycle.install({ id: 'install-1', tenantId: tenant, packageDigest: published.digest, epochs: { policy: 1, provider: 1 }, checksCurrent: true });
+    const activation = lifecycle.activate({ idempotencyKey: 'activate-1', id: 'activation-1', tenantId: tenant, installationId: 'install-1', readinessDigest: readiness.digest, expectedVersion: 1 });
+    expect(lifecycle.pin(activation.id, tenant).packageDigest).toBe(resolved.digest);
+    lifecycle.revoke(resolved.digest);
+    expect(() => lifecycle.pin(activation.id, tenant)).toThrow();
   });
 });
