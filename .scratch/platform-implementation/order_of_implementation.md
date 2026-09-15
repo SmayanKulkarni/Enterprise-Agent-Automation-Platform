@@ -14,6 +14,8 @@ Progress update (2026-09-15): completed 009a and 016–020, including 018a. The 
 
 Progress update (2026-09-15): completed 021–026. The Gateway now has reference-only credential consent/acquire/rotation/revocation, a default-deny disposable Extension boundary, and epoch-bound provider lifecycle readiness. Governed memory now has immutable provenance, scoped in-memory/relational stores and non-widening retrieval fallback. Pinned-toolchain `pnpm verify` passed and regenerated the implementation manifest.
 
+Progress update (2026-09-15): implemented 027–032 and 028a, adding governed memory correction/delete/hold/restore, reviewed immutable Validated Experiences, safe capability/memory browser state, evaluation ledger/gates, and fenced candidate rollout/rollback. Lint, static typecheck and all 23 tests passed; the seven tickets remain pending only pinned root verification because Node 22.14.0 is unavailable (current Node is 24.13.0).
+
 | Done | Ticket | Source slice | Blocked by | Owning spec | Produced interface/gate |
 | --- | --- | --- | --- | --- | --- |
 | - [x] | [001: Workspace](issues/001-workspace.md) | 1.1 | None | [Repository and executable contract foundation specification](../../docs/superpowers/specs/2026-09-14-01-repository-contract-foundation-spec.md#ordered-implementation-slices) | Workspace conventions and clean root verification seam; foundation toward M1 |

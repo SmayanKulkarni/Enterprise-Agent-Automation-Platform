@@ -32,6 +32,23 @@ export class CaseWorkbench {
   }
 }
 
+export interface SafeCapabilityMemoryProjection { tenantId: string; collection: 'capabilities' | 'installations' | 'memory'; completeness: 'full' | 'partial'; version?: string; records: readonly Record<string, unknown>[]; }
+const forbiddenBrowserKeys = /(?:token|secret|password|credential(?:bytes|value|payload)|payload)/iu;
+const safeBrowserValue = (value: unknown): boolean => value === null || typeof value !== 'object' || Array.isArray(value) ? !Array.isArray(value) || value.every(safeBrowserValue) : Object.entries(value as Record<string, unknown>).every(([key, child]) => !forbiddenBrowserKeys.test(key) && safeBrowserValue(child));
+
+/** Client-only safe projection state; availability never becomes an invocation grant. */
+export class CapabilityMemoryWorkbench {
+  ingest(input: SafeCapabilityMemoryProjection): SafeCapabilityMemoryProjection {
+    tenantId(input.tenantId); if (input.version !== undefined && input.version !== '1.0.0' || input.records.some((record) => !safeBrowserValue(record))) throw new Error('INVALID_BROWSER_DTO');
+    const partial = input.completeness === 'partial' || input.records.some((record) => record['redacted'] === true || record['streamGap'] === true); return Object.freeze({ ...input, records: Object.freeze(input.records.map((record) => Object.freeze(JSON.parse(canonicalJson(record)) as Record<string, unknown>))), completeness: partial ? 'partial' : 'full' });
+  }
+  command(input: { owner: 'gateway' | 'memory'; name: string; expectedVersion: number; idempotencyKey: string; arguments: Record<string, unknown> }): { owner: 'gateway' | 'memory'; name: string; expectedVersion: number; idempotencyKey: string; arguments: Record<string, unknown> } {
+    const allowed: Readonly<Record<string, readonly string[]>> = { gateway: ['install', 'disable', 'reauthorize', 'rotate', 'revoke'], memory: ['correct', 'export', 'hold', 'delete', 'restore', 'promote'] };
+    const names = allowed[input.owner]; if (names === undefined || !Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0 || !input.idempotencyKey || !names.includes(input.name) || (['delete', 'restore'].includes(input.name) && (!Array.isArray(input.arguments['manifest']) || input.arguments['manifest'].length === 0))) throw new Error('INVALID_BROWSER_COMMAND');
+    return Object.freeze({ ...input, arguments: JSON.parse(canonicalJson(input.arguments)) as Record<string, unknown> });
+  }
+}
+
 const MEDIA_TYPE = 'application/vnd.platform.browser.v1+json';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const collections = new Set(['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'operations', 'deployments']);

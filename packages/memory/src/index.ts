@@ -13,7 +13,7 @@ export type MemoryScope =
   | { kind: 'activation'; tenantId: TenantId; activationId: string }
   | { kind: 'agent'; tenantId: TenantId; activationId: string; agentId: string };
 export type MemoryScopeInput = { kind: MemoryScope['kind']; tenantId?: string; caseId?: string; generation?: number; activationId?: string; agentId?: string };
-export type ProvenanceStatus = 'eligible' | 'corrected' | 'deleted' | 'held' | 'expired';
+export type ProvenanceStatus = 'eligible' | 'corrected' | 'deleted' | 'held' | 'expired' | 'quarantined';
 export interface ProvenanceRecord { id: string; tenantId: TenantId; scope: MemoryScope; purpose: string; classification: EvidenceClassification; legalBasis: string; retention: string; locations: readonly string[]; transformation: string; parents: readonly string[]; digest: string; }
 export interface ProvenanceInput extends Omit<ProvenanceRecord, 'tenantId' | 'scope' | 'parents'> { tenantId: string; scope: MemoryScopeInput; parents?: readonly string[]; }
 
@@ -43,6 +43,9 @@ export class ProvenanceGraph {
   }
   record(id: string): ProvenanceRecord { return this.#records.get(id) ?? fail('NOT_FOUND'); }
   status(id: string, next: Exclude<ProvenanceStatus, 'eligible'>): void { this.record(id); this.#statuses.set(id, next); this.#epoch += 1; }
+  currentStatus(id: string): ProvenanceStatus { this.record(id); return this.#statuses.get(id) ?? fail('NOT_FOUND'); }
+  descendants(id: string): readonly string[] { this.record(id); const found = [...this.#records.values()].filter((record) => record.parents.includes(id)).flatMap((record) => [record.id, ...this.descendants(record.id)]); return Object.freeze([...new Set(found)].sort()); }
+  release(id: string): void { const current = this.currentStatus(id); if (current !== 'held' && current !== 'quarantined') fail('DENIED'); this.#statuses.set(id, 'eligible'); this.#epoch += 1; }
   eligible(id: string): boolean { const state = this.#statuses.get(id) ?? fail('NOT_FOUND'); return state === 'eligible' && this.record(id).parents.every((parent) => this.eligible(parent)); }
   lineage(id: string): readonly ProvenanceRecord[] { const record = this.record(id); return [...record.parents.flatMap((parent) => this.lineage(parent)), record]; }
 }
@@ -85,3 +88,6 @@ export async function retrieveMemory(input: MemoryQuery, adapters: readonly Memo
   for (const adapter of adapters) { try { const result = await adapter.query(input); return { ...result, quality: unavailable ? 'reduced' : 'full' }; } catch (error) { if (!(error instanceof MemoryError) || error.code !== 'UNAVAILABLE') throw error; unavailable = true; } }
   return fail('UNAVAILABLE');
 }
+
+export { GovernedMemoryLifecycle, ValidatedExperienceRegistry, type ExperienceStatus, type LegalHold, type LifecycleDisposition, type LifecycleKind, type LifecycleManifestItem, type LifecycleReport, type ValidatedExperience } from './lifecycle.js';
+export { EvaluationLedger, GateCalculator, ImprovementOrchestrator, type CandidateState, type EvaluationKind, type GateDecision, type GateManifest, type LedgerAggregate, type LedgerComparison, type LedgerInput, type LedgerRecord, type OrchestratorCandidate } from './evaluation.js';
