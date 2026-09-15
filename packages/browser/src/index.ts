@@ -83,6 +83,23 @@ export class ImprovementWorkbench {
     return Object.freeze({ ...input, arguments: JSON.parse(canonicalJson(input.arguments)) as Record<string, unknown> });
   }
 }
+
+export interface SafePackageProjection { tenantId: string; collection: 'packages' | 'installations'; completeness: 'full' | 'partial'; version: string; records: readonly Record<string, unknown>[]; }
+/** Safe Studio/Catalog client state; a Tenant or contract change cannot retain an old draft or view. */
+export class PackageWorkbench {
+  #tenantId: string | undefined; #draft: Record<string, unknown> | undefined;
+  ingest(input: SafePackageProjection): SafePackageProjection {
+    tenantId(input.tenantId); if (input.version !== '1.0.0' || input.records.some((record) => !safeBrowserValue(record))) throw new Error('INVALID_BROWSER_DTO'); if (this.#tenantId !== undefined && this.#tenantId !== input.tenantId) this.#draft = undefined; this.#tenantId = input.tenantId;
+    const partial = input.completeness === 'partial' || input.records.some((record) => record['stale'] === true || record['quarantined'] === true || record['incompatible'] === true); return Object.freeze({ ...input, completeness: partial ? 'partial' : 'full', records: Object.freeze(input.records.map((record) => Object.freeze(JSON.parse(canonicalJson(record)) as Record<string, unknown>))) });
+  }
+  draft(input: { tenantId: string; values: Record<string, unknown>; schemaKeys: readonly string[] }): { accepted: boolean; values?: Record<string, unknown> } {
+    if (this.#tenantId !== input.tenantId || Object.keys(input.values).some((key) => !input.schemaKeys.includes(key)) || !safeBrowserValue(input.values)) return { accepted: false, ...(this.#draft === undefined ? {} : { values: this.#draft }) }; this.#draft = JSON.parse(canonicalJson(input.values)) as Record<string, unknown>; return { accepted: true, values: this.#draft };
+  }
+  command(input: { name: 'sign' | 'publish' | 'install' | 'activate' | 'upgrade' | 'quarantine' | 'retire'; expectedVersion: number; exactVersion: string; approvalCurrent: boolean; idempotencyKey: string; arguments: Record<string, unknown> }): Readonly<typeof input> {
+    if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0 || !input.exactVersion || !input.approvalCurrent || !input.idempotencyKey || (['quarantine', 'retire'].includes(input.name) && !Array.isArray(input.arguments['manifest']))) throw new Error('INVALID_BROWSER_COMMAND'); return Object.freeze({ ...input, arguments: JSON.parse(canonicalJson(input.arguments)) as Record<string, unknown> });
+  }
+}
+
 const MEDIA_TYPE = 'application/vnd.platform.browser.v1+json';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const collections = new Set(['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'operations', 'deployments']);

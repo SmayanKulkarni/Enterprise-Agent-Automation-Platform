@@ -14,10 +14,12 @@ export interface Signature { signer: string; keyId: string; packageDigest: strin
 export interface Publication { packageId: string; version: string; digest: string; tenantIds: readonly TenantId[]; signature: Signature; }
 export interface Readiness { digest: string; epochs: Readonly<Record<string, number>>; ready: boolean; }
 export interface Activation { id: string; tenantId: TenantId; installationId: string; packageDigest: string; readinessDigest: string; revision: number; }
+export interface MigrationCheckpoint { id: string; checkpoint: string; state: 'completed' | 'recovery-required'; reversible: boolean; }
+export interface ActivationChange { id: string; activationId: string; revision: number; state: 'upgraded' | 'rolled-back' | 'quarantined'; runningCaseDisposition: 'pin-current' | 'pause-and-recover' | 'terminate'; }
 
 /** In-memory deterministic lifecycle seam: immutable authoring, resolution, trust and activation. */
 export class SolutionLifecycle {
-  readonly #drafts = new Map<string, PackageDraft>(); readonly #resolved = new Map<string, ResolvedPackage>(); readonly #validations = new Map<string, ValidationResult>(); readonly #publications = new Map<string, Publication>(); readonly #installations = new Map<string, { tenantId: TenantId; packageDigest: string; readiness: Readiness; version: number }>(); readonly #activations = new Map<string, Activation>(); readonly #commands = new Map<string, Activation>(); readonly #revoked = new Set<string>();
+  readonly #drafts = new Map<string, PackageDraft>(); readonly #resolved = new Map<string, ResolvedPackage>(); readonly #validations = new Map<string, ValidationResult>(); readonly #publications = new Map<string, Publication>(); readonly #installations = new Map<string, { tenantId: TenantId; packageDigest: string; readiness: Readiness; version: number }>(); readonly #activations = new Map<string, Activation>(); readonly #commands = new Map<string, Activation>(); readonly #current = new Map<TenantId, string>(); readonly #revoked = new Set<string>(); readonly #migrations = new Map<string, MigrationCheckpoint>(); readonly #changes = new Map<string, ActivationChange>(); readonly #holds = new Set<string>();
 
   author(input: PackageDraft): PackageDraft {
     if (!input.id || !input.version || !input.author || !input.artifacts.length || this.#drafts.has(`${input.id}@${input.version}`) || new Set(input.artifacts.map((artifact) => artifact.id)).size !== input.artifacts.length || input.artifacts.some((artifact) => !artifact.id || !artifact.version || !validDigest(artifact.digest) || !safeContent(artifact.content))) fail('INVALID');
@@ -45,7 +47,21 @@ export class SolutionLifecycle {
   }
   activate(input: { idempotencyKey: string; id: string; tenantId: string; installationId: string; readinessDigest: string; expectedVersion: number }): Activation {
     const cached = this.#commands.get(input.idempotencyKey); if (cached !== undefined) return cached; const scoped = tenantId(input.tenantId); const installation = this.#installations.get(input.installationId) ?? fail('NOT_FOUND'); if (!input.idempotencyKey || installation.tenantId !== scoped || installation.version !== input.expectedVersion || !installation.readiness.ready || installation.readiness.digest !== input.readinessDigest || this.#revoked.has(installation.packageDigest)) fail('STALE');
-    const activation = frozen({ id: input.id, tenantId: scoped, installationId: input.installationId, packageDigest: installation.packageDigest, readinessDigest: input.readinessDigest, revision: this.#activations.size + 1 }); this.#activations.set(activation.id, activation); this.#commands.set(input.idempotencyKey, activation); return activation;
+    const activation = frozen({ id: input.id, tenantId: scoped, installationId: input.installationId, packageDigest: installation.packageDigest, readinessDigest: input.readinessDigest, revision: this.#activations.size + 1 }); this.#activations.set(activation.id, activation); this.#current.set(scoped, activation.id); this.#commands.set(input.idempotencyKey, activation); return activation;
   }
+  changeActivation(input: { id: string; tenantId: string; fromActivationId: string; toActivationId: string; expectedRevision: number; migration: { id: string; reversible: boolean; compatible: boolean; checkpoint: string }; runningCaseDisposition: ActivationChange['runningCaseDisposition'] }): ActivationChange {
+    const previous = this.pin(input.fromActivationId, input.tenantId); const next = this.pin(input.toActivationId, input.tenantId);
+    if (!input.id || previous.revision !== input.expectedRevision || !input.migration.id || !input.migration.checkpoint || !input.migration.compatible || this.#changes.has(input.id)) fail('STALE');
+    const migration = frozen({ id: input.migration.id, checkpoint: input.migration.checkpoint, state: 'completed' as const, reversible: input.migration.reversible }); this.#migrations.set(migration.id, migration);
+    const change = frozen({ id: input.id, activationId: next.id, revision: previous.revision + 1, state: 'upgraded' as const, runningCaseDisposition: input.runningCaseDisposition }); this.#current.set(next.tenantId, next.id); this.#changes.set(change.id, change); return change;
+  }
+  migration(id: string, checkpoint: string): MigrationCheckpoint { const migration = this.#migrations.get(id) ?? fail('NOT_FOUND'); if (migration.checkpoint !== checkpoint) fail('DENIED'); return migration; }
+  rollback(input: { id: string; tenantId: string; activationId: string; expectedRevision: number; runningCaseDisposition: ActivationChange['runningCaseDisposition'] }): ActivationChange {
+    const activation = this.pin(input.activationId, input.tenantId); if (!input.id || input.expectedRevision < activation.revision || this.#changes.has(input.id)) fail('STALE'); const change = frozen({ id: input.id, activationId: activation.id, revision: input.expectedRevision + 1, state: 'rolled-back' as const, runningCaseDisposition: input.runningCaseDisposition }); this.#current.set(activation.tenantId, activation.id); this.#changes.set(change.id, change); return change;
+  }
+  quarantine(packageDigest: string, reason: 'compromised' | 'rollback-ambiguous' | 'migration-failed'): ActivationChange { if (!this.#resolved.has(packageDigest)) fail('NOT_FOUND'); this.#revoked.add(packageDigest); const change = frozen({ id: `quarantine:${reason}:${packageDigest}`, activationId: '', revision: 0, state: 'quarantined' as const, runningCaseDisposition: 'pause-and-recover' as const }); this.#changes.set(change.id, change); return change; }
+  hold(packageDigest: string): void { if (!this.#resolved.has(packageDigest)) fail('NOT_FOUND'); this.#holds.add(packageDigest); }
+  retire(packageDigest: string): void { if (!this.#resolved.has(packageDigest) || this.#holds.has(packageDigest)) fail('DENIED'); this.#revoked.add(packageDigest); }
+  active(tenant: string): Activation { const scoped = tenantId(tenant); return this.pin(this.#current.get(scoped) ?? fail('NOT_FOUND'), tenant); }
   pin(activationId: string, tenant: string): Activation { const activation = this.#activations.get(activationId) ?? fail('NOT_FOUND'); if (activation.tenantId !== tenantId(tenant) || this.#revoked.has(activation.packageDigest)) fail('DENIED'); return activation; }
 }
