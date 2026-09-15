@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { BrowserV1Transport, CaseWorkbench, ClerkSessionAdapter } from '../../packages/browser/src/index.js';
+import { BrowserV1Transport, CaseWorkbench, ClerkSessionAdapter, clerkAuthorizationHeader, liveClerkSessionAdapter } from '../../packages/browser/src/index.js';
 import { CapabilityGateway, CapabilityRegistry, GatewayError, ProviderInstallationManager, signRelease, type CapabilityInvocation, type ProviderAdapter } from '../../packages/gateway/src/index.js';
 import { IdentityStore } from '../../packages/identity/src/index.js';
 
@@ -34,6 +34,17 @@ describe('browser session and capability gateway seams', () => {
     const fresh = () => Promise.resolve({ caseId: 'case-1', watermark: 3, eventSequence: 3, generation: 1, version: 3, classification: 'restricted-operational' as const, redacted: true });
     const workbench = new CaseWorkbench(); await workbench.ingest({ caseId: 'case-1', watermark: 1, eventSequence: 1, generation: 1, version: 1, classification: 'restricted-operational', redacted: true }, fresh);
     expect((await workbench.ingest({ caseId: 'case-1', watermark: 2, eventSequence: 3, generation: 1, version: 2, classification: 'restricted-operational', redacted: true }, fresh)).version).toBe(3);
+  });
+
+  test('uses the official Clerk backend seam with an exact audience and current session', async () => {
+    let options: unknown; const adapter = liveClerkSessionAdapter({ CLERK_ISSUER: 'https://clerk.example', CLERK_PUBLISHABLE_KEY: 'pk_live', CLERK_SECRET_KEY: 'sk_live', CLERK_AUDIENCE: 'platform-browser-api', CLERK_AUTHORIZED_PARTIES: 'https://app.example' }, {
+      verifyToken: (_token, input) => { options = input; return Promise.resolve({ iss: 'https://clerk.example', sub: 'user-1', sid: 'session-1', azp: 'https://app.example', exp: 4_070_908_800 }); }, sessions: { getSession: () => Promise.resolve({ userId: 'user-1', status: 'active' }) },
+    });
+    await expect(adapter.proof('short-lived-session-token', 'https://app.example')).resolves.toMatchObject({ issuer: 'https://clerk.example', subject: 'user-1', sessionId: 'session-1' });
+    expect(options).toEqual({ secretKey: 'sk_live', audience: 'platform-browser-api', authorizedParties: ['https://app.example'] }); expect(await clerkAuthorizationHeader(() => Promise.resolve('short-lived-session-token'))).toEqual({ authorization: 'Bearer short-lived-session-token' });
+    expect(() => liveClerkSessionAdapter({ CLERK_ISSUER: 'https://clerk.example', CLERK_PUBLISHABLE_KEY: 'pk_live', CLERK_SECRET_KEY: 'sk_live', CLERK_AUDIENCE: 'another-api', CLERK_AUTHORIZED_PARTIES: 'https://app.example' })).toThrow('Invalid Clerk browser configuration.');
+    const revoked = liveClerkSessionAdapter({ CLERK_ISSUER: 'https://clerk.example', CLERK_PUBLISHABLE_KEY: 'pk_live', CLERK_SECRET_KEY: 'sk_live', CLERK_AUDIENCE: 'platform-browser-api', CLERK_AUTHORIZED_PARTIES: 'https://app.example' }, { verifyToken: () => Promise.resolve({ iss: 'https://clerk.example', sub: 'user-1', sid: 'session-1', azp: 'https://app.example', exp: 4_070_908_800 }), sessions: { getSession: () => Promise.resolve({ userId: 'user-1', status: 'revoked' }) } });
+    await expect(revoked.proof('stale', 'https://app.example')).rejects.toThrow('DENIED');
   });
 
   test('keeps signed releases, installation callbacks and effect uncertainty fenced', async () => {

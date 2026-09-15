@@ -81,6 +81,11 @@ export function buildWorkspaceEvidence({ commands, report, toolchain }) {
         interface: 'ClerkSessionAdapter current-session proof, safe session/Tenant DTOs and scoped Case workbench state',
         issue: '.scratch/platform-implementation/issues/009a-clerk-browser-session.md',
       },
+      '009b-live-clerk-integration': {
+        checks: ['tests/platform/gateway-browser.test.ts'],
+        interface: 'Official Clerk Backend SDK session-token verification, active-session recheck and browser bearer-header helper',
+        issue: '.scratch/platform-implementation/issues/009b-live-clerk-integration.md',
+      },
       '016-invocation-admission': {
         checks: ['tests/platform/gateway-browser.test.ts'],
         interface: 'CapabilityGateway normalized invocation, closed schemas and pre-dispatch Tenant/authority/budget/admission fences',
