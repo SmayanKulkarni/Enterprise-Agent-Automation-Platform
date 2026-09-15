@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { BrowserV1Transport, CaseWorkbench, ClerkSessionAdapter, clerkAuthorizationHeader, liveClerkSessionAdapter } from '../../packages/browser/src/index.js';
+import { descriptorFor, encodeContract, messageId, tenantId, type ContractEnvelope } from '../../packages/contracts/src/index.js';
 import { CapabilityGateway, CapabilityRegistry, GatewayError, ProviderInstallationManager, signRelease, type CapabilityInvocation, type ProviderAdapter } from '../../packages/gateway/src/index.js';
 import { IdentityStore } from '../../packages/identity/src/index.js';
 
@@ -45,6 +46,14 @@ describe('browser session and capability gateway seams', () => {
     expect(() => liveClerkSessionAdapter({ CLERK_ISSUER: 'https://clerk.example', CLERK_PUBLISHABLE_KEY: 'pk_live', CLERK_SECRET_KEY: 'sk_live', CLERK_AUDIENCE: 'another-api', CLERK_AUTHORIZED_PARTIES: 'https://app.example' })).toThrow('Invalid Clerk browser configuration.');
     const revoked = liveClerkSessionAdapter({ CLERK_ISSUER: 'https://clerk.example', CLERK_PUBLISHABLE_KEY: 'pk_live', CLERK_SECRET_KEY: 'sk_live', CLERK_AUDIENCE: 'platform-browser-api', CLERK_AUTHORIZED_PARTIES: 'https://app.example' }, { verifyToken: () => Promise.resolve({ iss: 'https://clerk.example', sub: 'user-1', sid: 'session-1', azp: 'https://app.example', exp: 4_070_908_800 }), sessions: { getSession: () => Promise.resolve({ userId: 'user-1', status: 'revoked' }) } });
     await expect(revoked.proof('stale', 'https://app.example')).rejects.toThrow('DENIED');
+  });
+
+  test('rechecks the live Clerk session immediately before a protected command', async () => {
+    let checks = 0; const identity = new IdentityStore(); identity.provision(tenant); identity.transition(tenant, 1, 'activate'); identity.mapUser('https://clerk.example', 'user-1', 'user-1'); identity.membership(tenant, 'user-1', ['operator']); identity.setMembership(tenant, 'user-1', 1, 'current');
+    const clerk = liveClerkSessionAdapter({ CLERK_ISSUER: 'https://clerk.example', CLERK_PUBLISHABLE_KEY: 'pk_live', CLERK_SECRET_KEY: 'sk_live', CLERK_AUDIENCE: 'platform-browser-api', CLERK_AUTHORIZED_PARTIES: 'https://app.example' }, { verifyToken: () => Promise.resolve({ iss: 'https://clerk.example', sub: 'user-1', sid: 'session-1', azp: 'https://app.example', exp: 4_102_444_800 }), sessions: { getSession: () => Promise.resolve({ userId: 'user-1', status: ++checks === 2 ? 'revoked' : 'active' }) } });
+    const envelope: ContractEnvelope = { messageId: messageId('11111111-1111-4111-8111-111111111111'), contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: now, sender: 'browser-client', tenantId: tenantId(tenant), classification: 'restricted-operational', payload: { expectedVersion: 0, arguments: { resource: 'safe' } } };
+    const browser = new BrowserV1Transport({ allowedOrigins: ['https://app.example'], clerk, identity, now: () => now, commands: { 'case.start': () => ({ shouldNotRun: true }) } });
+    expect((await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenant}/commands/case/start`, headers: { authorization: 'Bearer session-token', origin: 'https://app.example', 'content-type': 'application/vnd.platform.browser.v1+json', 'idempotency-key': 'key', 'x-correlation-id': '11111111-1111-4111-8111-111111111111', 'if-match': '0' }, body: (await encodeContract(descriptorFor('browser.v1'), envelope)).bytes })).status).toBe(400); expect(checks).toBe(2);
   });
 
   test('keeps signed releases, installation callbacks and effect uncertainty fenced', async () => {

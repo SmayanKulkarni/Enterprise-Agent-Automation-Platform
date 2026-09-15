@@ -142,7 +142,7 @@ export class BrowserV1Transport {
     if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0 || ifMatch !== String(expectedVersion)) throw new Error('STALE'); const version = expectedVersion;
     const command: BrowserCommand = { tenantId: routeTenant, owner, name, idempotencyKey: key, correlationId: correlationId(correlation), expectedVersion: version, digest: await digest(argumentsValue), envelope };
     const handler = this.#commands[`${owner}.${name}`]; if (handler === undefined) return this.featureNotReady(request, routeTenant);
-    return this.success(request, routeTenant, await handler(command));
+    await this.context(request, routeTenant); return this.success(request, routeTenant, await handler(command));
   }
   private async featureNotReady(request: BrowserRequest, selectedTenant: string | undefined): Promise<BrowserResponse> { return this.error(request, 501, { category: 'terminal', code: 'FEATURE_NOT_READY', message: 'This feature is not ready.', redacted: true }, selectedTenant); }
   private async success(request: BrowserRequest, selectedTenant: string | undefined, payload: Record<string, unknown>): Promise<BrowserResponse> { return this.response(request, 200, selectedTenant, payload); }
