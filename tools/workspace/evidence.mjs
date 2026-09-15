@@ -46,6 +46,36 @@ export function buildWorkspaceEvidence({ commands, report, toolchain }) {
           requested: report.toolchain,
         },
       },
+      '004a-browser-transport': {
+        checks: ['tests/platform/runtime-browser.test.ts'],
+        interface: 'browser.v1 fixed route inventory, strict packed decoding, named command registry, normalized FEATURE_NOT_READY responses',
+        issue: '.scratch/platform-implementation/issues/004a-browser-transport.md',
+      },
+      '011-durable-execution': {
+        checks: ['tests/platform/runtime-browser.test.ts'],
+        interface: 'InMemoryCaseWorkflow durable history, timer fence, recorded activity replay',
+        issue: '.scratch/platform-implementation/issues/011-durable-execution.md',
+      },
+      '012-intervention': {
+        checks: ['tests/platform/runtime-browser.test.ts'],
+        interface: 'InterventionRuntime typed request, current fence and first-valid/quorum joins',
+        issue: '.scratch/platform-implementation/issues/012-intervention.md',
+      },
+      '013-agent-team': {
+        checks: ['tests/platform/runtime-browser.test.ts'],
+        interface: 'AgentTeamRuntime declared-role assignments, joins and budget reservation',
+        issue: '.scratch/platform-implementation/issues/013-agent-team.md',
+      },
+      '014-recovery': {
+        checks: ['tests/platform/runtime-browser.test.ts'],
+        interface: 'RecoveryRuntime pause/resume scheduling fence and explicit dispositions',
+        issue: '.scratch/platform-implementation/issues/014-recovery.md',
+      },
+      '015-intent-idempotency': {
+        checks: ['tests/platform/runtime-browser.test.ts'],
+        interface: 'EffectIntentRuntime canonical payload digest, approval fence and duplicate receipt',
+        issue: '.scratch/platform-implementation/issues/015-intent-idempotency.md',
+      },
     },
   };
 }

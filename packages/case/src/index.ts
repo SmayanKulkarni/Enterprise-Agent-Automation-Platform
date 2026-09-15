@@ -46,3 +46,4 @@ export function evolveCase(current: CaseRecord, receipt: CaseReceipt): CaseRecor
 }
 export async function commandCase(current: CaseRecord, command: CaseCommand): Promise<CaseRecord> { return evolveCase(current, await decideCase(current, command)); }
 export async function stateDigest(current: CaseRecord): Promise<string> { return digest(JSON.parse(canonicalJson({ ...current, tenantId: String(current.tenantId) }))); }
+export * from './runtime.js';

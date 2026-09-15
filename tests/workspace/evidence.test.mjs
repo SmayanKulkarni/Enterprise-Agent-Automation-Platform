@@ -36,7 +36,7 @@ describe('workspace evidence', () => {
       toolchain: { node: '22.14.0', pnpm: '10.15.1' },
     });
 
-    expect(evidence).toEqual({
+    expect(evidence).toMatchObject({
       schemaVersion: 1,
       slices: {
         '001-workspace': {

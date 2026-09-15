@@ -8,6 +8,7 @@ const definitions: readonly Definition[] = [
   ['capability.registration', 'restricted-operational'], ['capability.availability', 'restricted-operational'], ['capability.invocation', 'secret'], ['capability.normalized-error', 'restricted-operational'], ['capability.throttle-state', 'restricted-operational'], ['capability.reconciliation-checkpoint', 'immutable-audit'], ['capability.credential-reference', 'secret'],
   ['memory.query', 'restricted-operational'], ['memory.result-provenance', 'restricted-operational'], ['evaluation.ledger-record', 'immutable-audit'], ['memory.validated-experience', 'restricted-operational'], ['improvement.orchestrator-candidate', 'immutable-audit'],
   ['operations.event', 'restricted-operational'], ['operations.audit-evidence', 'immutable-audit'], ['operations.trace-context', 'restricted-operational'], ['deployment.deployment', 'restricted-operational'], ['deployment.environment-manifest', 'immutable-audit'], ['operations.cost-attribution', 'restricted-operational'], ['operations.correlation', 'restricted-operational'], ['operations.causation', 'restricted-operational'],
+  ['browser.v1', 'restricted-operational'],
 ];
 
 export const CONTRACT_DESCRIPTORS: Readonly<Record<string, ContractDescriptor>> = Object.freeze(Object.fromEntries(

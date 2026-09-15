@@ -145,6 +145,7 @@ means consumer. Platform is the single named owner of every canonical entry.
 | `operations.cost-attribution` | P Azure, Operations; C Operations, Lifecycle | restricted-operational | Cost links deployment, environment, Tenant scope where lawful, and owner without inventing authority. |
 | `operations.correlation` | P Platform envelope; C all maps | restricted-operational | Correlation ID identifies one end-to-end work chain. |
 | `operations.causation` | P Platform envelope; C all maps | restricted-operational | Causation ID identifies the direct prior message/action; it is not a persistence reference. |
+| `browser.v1` | P Browser transport; C Browser clients, Identity, Runtime, Gateway, Operations | restricted-operational | Browser DTOs are versioned, Tenant-selected, redacted, and never carry bearer proof or raw provider/domain errors. |
 
 ## Cross-map dependency index
 
