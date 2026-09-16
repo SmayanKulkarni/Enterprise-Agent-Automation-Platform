@@ -7,6 +7,7 @@ import type { BrowserCommandHandler } from '../../browser/src/index.js';
 
 export const TECHNICAL_SEED_VERSION = '1.0.0';
 export const TECHNICAL_TENANTS = Object.freeze(['22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'] as const);
+export const SHARED_PLATFORM_MODULE_DIGESTS = Object.freeze({ case: 'a'.repeat(64), gateway: 'b'.repeat(64), identity: 'c'.repeat(64), lifecycle: 'd'.repeat(64) });
 export type EvidenceLabel = 'fixture' | 'simulated-failure';
 export interface TechnicalRunManifest { demoRunId: string; tenantId: TenantId; packageDigest: string; activationDigest: string; outcome: 'succeeded' | 'recovered'; label: EvidenceLabel; steps: readonly { name: string; label: EvidenceLabel; digest: string }[]; effects: readonly { capability: string; outcome: string; reconciliation: string }[]; digest: string; }
 export interface TechnicalReadiness { seedVersion: string; tenants: readonly { tenantId: TenantId; activation: Activation; epochs: Readonly<Record<string, number>> }[]; digest: string; }
@@ -19,7 +20,7 @@ const command = (tenant: string, name: CaseCommand['name'], version: number): Ca
 /** The signed fixture uses the shared lifecycle seam; it is intentionally not a solution-specific runtime. */
 export async function technicalImplementationFixture(tenant: string): Promise<{ activation: Activation }> {
   const lifecycle = new SolutionLifecycle();
-  const draft = lifecycle.author({ id: 'technical-implementation', version: TECHNICAL_SEED_VERSION, author: 'fixture-author', artifacts: [{ id: 'technical-workflow', version: TECHNICAL_SEED_VERSION, digest: 'a'.repeat(64), kind: 'workflow', content: { case: 'technical-implementation', team: ['discovery', 'data', 'delivery'], joins: ['parallel-discovery', 'handoff'], budgets: { effects: 3 }, interventions: ['missing-information'], memory: 'governed', evaluation: 'required', capabilities: ['sql.validate', 'blob.write', 'boards.create'] } }], dependencies: [], bindings: ['sql-fixture', 'blob-fixture', 'boards-fixture'], overlayPaths: ['/budget'] });
+  const draft = lifecycle.author({ id: 'technical-implementation', version: TECHNICAL_SEED_VERSION, author: 'fixture-author', artifacts: [{ id: 'technical-workflow', version: TECHNICAL_SEED_VERSION, digest: 'a'.repeat(64), kind: 'workflow', content: { case: 'technical-implementation', team: ['discovery', 'data', 'delivery'], joins: ['parallel-discovery', 'handoff'], budgets: { effects: 3 }, interventions: ['missing-information'], memory: 'governed', evaluation: 'required', capabilities: ['sql.validate', 'blob.write', 'boards.create'], moduleDigests: SHARED_PLATFORM_MODULE_DIGESTS } }], dependencies: Object.entries(SHARED_PLATFORM_MODULE_DIGESTS).map(([id, digest]) => ({ id, version: '1.0.0', digest })), bindings: ['sql-fixture', 'blob-fixture', 'boards-fixture'], overlayPaths: ['/budget'] });
   const resolved = await lifecycle.resolve(draft.id, draft.version, { '/budget': 3 });
   await lifecycle.validate(resolved.digest, { hardPassed: true, evidenceCurrent: true, comparable: true, liveCertified: true, subjectDigest: resolved.digest });
   const publication = await lifecycle.publish({ packageDigest: resolved.digest, approver: 'fixture-approver', signer: 'fixture-signer', publisher: 'fixture-publisher', keyId: 'fixture-key', tenantIds: [tenant] });

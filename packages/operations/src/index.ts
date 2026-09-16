@@ -58,3 +58,4 @@ export class OperationsWorkbench {
 }
 
 export * from './technical-implementation.js';
+export * from './vendor-risk-access.js';

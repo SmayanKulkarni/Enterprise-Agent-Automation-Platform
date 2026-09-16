@@ -100,9 +100,35 @@ export class PackageWorkbench {
   }
 }
 
+export interface SafeReadinessProjection { tenantId: string; collection: 'readiness' | 'deployments'; completeness: 'full' | 'partial'; version: '1.0.0'; records: readonly Record<string, unknown>[]; }
+/** Readiness remains an evidence label, not an inference from a local projection. */
+export class ReadinessWorkbench {
+  ingest(input: SafeReadinessProjection): SafeReadinessProjection {
+    tenantId(input.tenantId); if (input.records.some((record) => !safeBrowserValue(record) || typeof record['classification'] !== 'string' || !['fixture', 'live'].includes(record['classification']) || record['classification'] === 'live' && record['liveCertified'] !== true)) throw new Error('INVALID_BROWSER_DTO');
+    const partial = input.completeness === 'partial' || input.records.some((record) => record['stale'] === true || record['unknownOutcome'] === true || record['restoreQuarantined'] === true || record['classification'] === 'fixture');
+    return Object.freeze({ ...input, completeness: partial ? 'partial' : 'full', records: Object.freeze(input.records.map((record) => Object.freeze(JSON.parse(canonicalJson(record)) as Record<string, unknown>))) });
+  }
+  command(input: { name: 'reauthorize' | 'rotate' | 'reconcile' | 'deploy' | 'restore' | 'teardown'; expectedVersion: number; idempotencyKey: string; approvalCurrent: boolean; manifestDigest: string; arguments: Record<string, unknown> }): Readonly<typeof input> {
+    if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0 || !input.idempotencyKey || !input.approvalCurrent || !/^[a-f0-9]{64}$/u.test(input.manifestDigest) || (['restore', 'teardown'].includes(input.name) && !Array.isArray(input.arguments['manifest']))) throw new Error('INVALID_BROWSER_COMMAND'); return Object.freeze({ ...input, arguments: JSON.parse(canonicalJson(input.arguments)) as Record<string, unknown> });
+  }
+}
+
+export interface SafeVendorCaseProjection { tenantId: string; collection: 'vendor-assessments' | 'access-grants'; completeness: 'full' | 'partial'; version: '1.0.0'; records: readonly Record<string, unknown>[]; }
+/** Linked Case DTOs reject foreign references before a browser can display them. */
+export class VendorCaseWorkbench {
+  ingest(input: SafeVendorCaseProjection): SafeVendorCaseProjection {
+    tenantId(input.tenantId); if (input.records.some((record) => !safeBrowserValue(record) || record['tenantId'] !== undefined && record['tenantId'] !== input.tenantId || input.collection === 'access-grants' && (typeof record['assessmentId'] !== 'string' || !Number.isSafeInteger(record['assessmentVersion'])))) throw new Error('INVALID_BROWSER_DTO');
+    const partial = input.completeness === 'partial' || input.records.some((record) => record['stale'] === true || record['superseded'] === true || record['state'] === 'reconciliation-required' || record['state'] === 'revocation-pending');
+    return Object.freeze({ ...input, completeness: partial ? 'partial' : 'full', records: Object.freeze(input.records.map((record) => Object.freeze(JSON.parse(canonicalJson(record)) as Record<string, unknown>))) });
+  }
+  command(input: { name: 'start' | 'approve' | 'provision' | 'revoke' | 'expire'; expectedVersion: number; idempotencyKey: string; assessmentCurrent: boolean; approvalCurrent: boolean; arguments: Record<string, unknown> }): Readonly<typeof input> {
+    if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0 || !input.idempotencyKey || !input.assessmentCurrent || !input.approvalCurrent || (['provision', 'revoke', 'expire'].includes(input.name) && typeof input.arguments['grantId'] !== 'string')) throw new Error('INVALID_BROWSER_COMMAND'); return Object.freeze({ ...input, arguments: JSON.parse(canonicalJson(input.arguments)) as Record<string, unknown> });
+  }
+}
+
 const MEDIA_TYPE = 'application/vnd.platform.browser.v1+json';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const collections = new Set(['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'operations', 'deployments']);
+const collections = new Set(['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants']);
 export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
   { method: 'GET', path: '/api/v1/session', owner: 'identity', action: 'identity.session.read', ready: true },
   { method: 'GET', path: '/api/v1/tenants', owner: 'identity', action: 'identity.membership.list', ready: true },

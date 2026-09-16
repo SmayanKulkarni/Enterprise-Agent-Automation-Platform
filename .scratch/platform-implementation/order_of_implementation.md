@@ -24,6 +24,8 @@ Progress update (2026-09-16): implemented 051–056. Added fail-closed, fixture-
 
 Progress update (2026-09-16): implementation-complete 057–061. Added one constrained adapter boundary for Graph, SQL, Blob, Boards and Jira, with installation/account/resource allowlists, scope-bound checkpoints, safe throttle/unknown-outcome reconciliation and exact managed-inventory reset. Focused provider tests and direct typechecking passed. Dated live certifications and pinned root verification remain unchecked: they require the allocated external providers plus Node 22.14.0/pnpm 10.15.1, so the M10 ledger rows remain honestly open.
 
+Progress update (2026-09-16): implemented fixture-safe boundaries for 062–067a. Combined provider readiness now requires the exact Technical Implementation/Vendor Risk and Access allocation and never infers live status; the second package shares Technical Implementation module locks; Assessment/Grant lifecycle fences stale and foreign paths; and browser DTOs reject unverified-live or foreign linked-case state. Focused fixture tests and lint passed. M10/M11 ledger rows remain unchecked because dated live provider/browser evidence and pinned root verification require allocated providers, Azure and Node 22.14.0/pnpm 10.15.1.
+
 | Done | Ticket | Source slice | Blocked by | Owning spec | Produced interface/gate |
 | --- | --- | --- | --- | --- | --- |
 | - [x] | [001: Workspace](issues/001-workspace.md) | 1.1 | None | [Repository and executable contract foundation specification](../../docs/superpowers/specs/2026-09-14-01-repository-contract-foundation-spec.md#ordered-implementation-slices) | Workspace conventions and clean root verification seam; foundation toward M1 |

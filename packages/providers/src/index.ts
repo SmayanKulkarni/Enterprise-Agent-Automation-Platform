@@ -1,5 +1,5 @@
 import type { AdapterResult, NormalizedInvocation, ProviderAdapter } from '../../gateway/src/index.js';
-import { tenantId } from '../../contracts/src/index.js';
+import { digest, tenantId } from '../../contracts/src/index.js';
 
 export type ProviderName = 'graph' | 'sql' | 'blob' | 'boards' | 'jira';
 export interface ProviderRequest { provider: ProviderName; tenantId: string; installationId: string; accountId: string; schemaVersion: string; credentialEpoch: number; operation: string; resource: string; effectId: string; arguments: Readonly<Record<string, unknown>>; deadline: string; }
@@ -119,4 +119,25 @@ export class JiraAdapter extends ScopedAdapter {
       || (['jira.review.create', 'jira.review.update', 'jira.review.revoke'].includes(input.operation) && input.resource.startsWith(prefix) && input.arguments['marker'] === this.jira.marker && Object.keys(input.arguments).every((key) => ['marker', 'version', 'fields'].includes(key)));
   }
   protected mutates(operation: string): boolean { return operation !== 'jira.evidence.read'; }
+}
+
+export type SolutionAllocation = 'technical-implementation' | 'vendor-risk-access';
+export interface ProviderReadinessRecord { tenantId: string; solution: SolutionAllocation; provider: ProviderName; installationId: string; credentialEpoch: number; schemaVersion: string; checkpoint: string; state: 'ready' | 'disabled' | 'revoked' | 'removed' | 'schema-incompatible' | 'reconciliation-required'; classification: 'fixture' | 'live'; }
+export interface CombinedReadiness { tenantId: string; classification: 'fixture' | 'live'; records: readonly ProviderReadinessRecord[]; digest: string; }
+
+const requiredAllocations = Object.freeze([
+  'technical-implementation:graph', 'technical-implementation:sql', 'technical-implementation:blob', 'technical-implementation:boards',
+  'vendor-risk-access:graph', 'vendor-risk-access:jira',
+]);
+
+/** Combines only the six declared solution/provider installations; mixed or stale evidence is never ready. */
+export async function combinedProviderReadiness(input: { tenantId: string; records: readonly ProviderReadinessRecord[]; liveVerified?: boolean }): Promise<CombinedReadiness> {
+  const tenant = String(tenantId(input.tenantId));
+  const records = input.records.map((record) => ({ ...record }));
+  const keys = records.map((record) => `${record.solution}:${record.provider}`);
+  if (records.length !== requiredAllocations.length || records.some((record) => record.tenantId !== tenant || !safeId(record.installationId) || !safeId(record.schemaVersion) || !safeCursor(record.checkpoint) || !Number.isSafeInteger(record.credentialEpoch) || record.credentialEpoch < 1 || record.state !== 'ready') || new Set(keys).size !== keys.length || requiredAllocations.some((key) => !keys.includes(key))) throw new Error('Combined provider readiness was not accepted.');
+  const wantsLive = records.every((record) => record.classification === 'live');
+  if (records.some((record) => record.classification !== (wantsLive ? 'live' : 'fixture')) || (wantsLive && input.liveVerified !== true)) throw new Error('Combined provider readiness was not accepted.');
+  const base = { tenantId: tenant, classification: wantsLive ? 'live' as const : 'fixture' as const, records: Object.freeze(records.sort((left, right) => `${left.solution}:${left.provider}`.localeCompare(`${right.solution}:${right.provider}`))) };
+  return Object.freeze({ ...base, digest: await digest(base) });
 }
