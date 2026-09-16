@@ -22,6 +22,8 @@ Progress update (2026-09-15): completed 046–050, including browser seam 049a. 
 
 Progress update (2026-09-16): implemented 051–056. Added fail-closed, fixture-labeled Azure foundation, compute, delivery, resilience and exact-manifest close adapters plus the provider-neutral certification harness. The focused contract suite, typecheck and full test suite passed; root verification and manifest publication are blocked because this shell has Node 24.13.0 while the workspace pins Node 22.14.0. Live Azure/provider labels still require an injected trusted verifier and cannot be self-asserted.
 
+Progress update (2026-09-16): implementation-complete 057–061. Added one constrained adapter boundary for Graph, SQL, Blob, Boards and Jira, with installation/account/resource allowlists, scope-bound checkpoints, safe throttle/unknown-outcome reconciliation and exact managed-inventory reset. Focused provider tests and direct typechecking passed. Dated live certifications and pinned root verification remain unchecked: they require the allocated external providers plus Node 22.14.0/pnpm 10.15.1, so the M10 ledger rows remain honestly open.
+
 | Done | Ticket | Source slice | Blocked by | Owning spec | Produced interface/gate |
 | --- | --- | --- | --- | --- | --- |
 | - [x] | [001: Workspace](issues/001-workspace.md) | 1.1 | None | [Repository and executable contract foundation specification](../../docs/superpowers/specs/2026-09-14-01-repository-contract-foundation-spec.md#ordered-implementation-slices) | Workspace conventions and clean root verification seam; foundation toward M1 |
