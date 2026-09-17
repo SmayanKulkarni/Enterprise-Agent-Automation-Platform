@@ -2,26 +2,86 @@ import { Badge, Button, Card, CardHeader, Dropdown, MessageBar, MessageBarBody, 
 import { Show, SignInButton, SignUpButton, UserButton, useAuth } from '@clerk/react';
 import { useEffect, useMemo, useState } from 'react';
 import { PlatformApi, PlatformApiError, type Projection } from './platform-api.js';
+import { routeForPath, routeHref, routesForSurface, type CollectionRoute, type Surface } from './platform-routes.js';
 import { browserState, selectTenant, signedIn, signedOut, type BrowserState } from './session-state.js';
 
 type View = 'loading' | 'ready' | 'signed-out' | 'no-membership' | 'forbidden' | 'unavailable';
-type Surface = 'studio' | 'catalog' | 'operations' | 'technical' | 'vendor';
-const surfaceForPath = (path: string): Surface => path.startsWith('/catalog') ? 'catalog' : path.startsWith('/operations') ? 'operations' : path.startsWith('/technical') ? 'technical' : path.startsWith('/vendor') ? 'vendor' : 'studio';
-const collectionFor = (surface: Surface) => ({ studio: 'packages', catalog: 'installations', operations: 'cases', technical: 'readiness', vendor: 'access-grants' })[surface];
-const titles: Record<Surface, { title: string; description: string }> = { studio: { title: 'Solution Studio', description: 'Review a package version before submitting it for review.' }, catalog: { title: 'Governed Catalog', description: 'Inspect provenance and readiness before lifecycle actions.' }, operations: { title: 'Operations Control Plane', description: 'Follow the Case correlation from activation to evidence and cost.' }, technical: { title: 'Technical implementation', description: 'Fixture Case handoff with recovery and residual-risk evidence.' }, vendor: { title: 'Vendor risk and access', description: 'Assessment and Access Grant evidence, including revocation recovery.' } };
+const surfaceLabels: Record<Surface, string> = { studio: 'Solution Studio', catalog: 'Governed Catalog', operations: 'Operations', technical: 'Technical Implementation', vendor: 'Vendor Risk & Access' };
 
 export function App() {
   const { getToken, isLoaded, isSignedIn, sessionId } = useAuth();
-  const [state, setState] = useState<BrowserState>(() => browserState(`${window.location.pathname}${window.location.search}`)); const [view, setView] = useState<View>('loading'); const api = useMemo(() => new PlatformApi(getToken), [getToken]);
-  useEffect(() => { if (!isLoaded) return; if (!isSignedIn) { setState((current) => current.tenantId === undefined ? current : signedOut(current)); setView('signed-out'); return; } const controller = new AbortController(); void Promise.all([api.session(state.tenantId, controller.signal), api.tenants(controller.signal)]).then(([session, tenants]) => { if (tenants.length === 0 || !tenants.some((tenant) => tenant.id === session.tenantId)) { setView('no-membership'); return; } restorePath(state.path); setState((current) => signedIn(current, { tenantId: session.tenantId, tenantIds: tenants.map((tenant) => tenant.id), sessionId })); setView('ready'); }).catch((error: unknown) => { if (!controller.signal.aborted) setView(error instanceof PlatformApiError && error.status === 401 ? 'signed-out' : error instanceof PlatformApiError && (error.status === 403 || error.status === 400 || error.category === 'denied') ? 'forbidden' : 'unavailable'); }); return () => controller.abort(); }, [api, isLoaded, isSignedIn, sessionId, state.path, state.tenantId, state.cacheEpoch, state.streamEpoch]);
-  return <main className="shell"><header className="app-header"><a className="brand" href="/studio">Platform Control</a><span className="environment">Fixture workspace</span><Show when="signed-out"><SignInButton forceRedirectUrl={state.path}><Button appearance="primary">Sign in</Button></SignInButton><SignUpButton forceRedirectUrl={state.path}><Button>Sign up</Button></SignUpButton></Show><Show when="signed-in"><UserButton /></Show></header>{view === 'loading' && <Loading label="Checking your authorized session" />}{view === 'signed-out' && <State title="Sign in required">Sign in to load the requested Tenant-scoped projection.</State>}{view === 'no-membership' && <State title="No Tenant membership">Your account does not currently have access to a platform Tenant.</State>}{view === 'forbidden' && <State title="Access changed">Your session or Tenant membership is no longer allowed. No record details were revealed.</State>}{view === 'unavailable' && <State title="Platform unavailable">The session could not be projected safely. Try again shortly.</State>}{view === 'ready' && state.tenantId !== undefined && <TenantShell api={api} state={state} onTenantChange={(tenantId) => setState((current) => selectTenant(current, tenantId))} />}</main>;
+  const [state, setState] = useState<BrowserState>(() => browserState(`${window.location.pathname}${window.location.search}`));
+  const [view, setView] = useState<View>('loading');
+  const api = useMemo(() => new PlatformApi(getToken), [getToken]);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    if (!isSignedIn) {
+      setState((current) => current.tenantId === undefined ? current : signedOut(current));
+      setView('signed-out');
+      return;
+    }
+    const controller = new AbortController();
+    void Promise.all([api.session(state.tenantId, controller.signal), api.tenants(controller.signal)]).then(([session, tenants]) => {
+      if (tenants.length === 0 || !tenants.some((tenant) => tenant.id === session.tenantId)) {
+        setView('no-membership');
+        return;
+      }
+      restorePath(state.path);
+      setState((current) => signedIn(current, { tenantId: session.tenantId, tenantIds: tenants.map((tenant) => tenant.id), sessionId }));
+      setView('ready');
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setView(error instanceof PlatformApiError && error.status === 401 ? 'signed-out' : error instanceof PlatformApiError && (error.status === 403 || error.status === 404 || error.status === 400 || error.category === 'denied') ? 'forbidden' : 'unavailable');
+    });
+    return () => controller.abort();
+  }, [api, isLoaded, isSignedIn, sessionId, state.path, state.tenantId, state.cacheEpoch, state.streamEpoch]);
+
+  return <main className="shell"><header className="app-header"><a className="brand" href="/studio">Platform Control</a><span className="environment">Authorized workspace</span><Show when="signed-out"><SignInButton forceRedirectUrl={state.path}><Button appearance="primary">Sign in</Button></SignInButton><SignUpButton forceRedirectUrl={state.path}><Button>Sign up</Button></SignUpButton></Show><Show when="signed-in"><UserButton /></Show></header>{view === 'loading' && <Loading label="Checking your authorized session" />}{view === 'signed-out' && <State title="Sign in required">Sign in to load the requested Tenant-scoped projection.</State>}{view === 'no-membership' && <State title="No Tenant membership">Your account does not currently have access to a platform Tenant.</State>}{view === 'forbidden' && <State title="Access changed">This object is unavailable to the current session. No record details were revealed.</State>}{view === 'unavailable' && <State title="Platform unavailable">The session could not be projected safely. Try again shortly.</State>}{view === 'ready' && state.tenantId !== undefined && <TenantShell api={api} state={state} onTenantChange={(tenantId) => setState((current) => selectTenant(current, tenantId))} />}</main>;
 }
-function TenantShell({ api, state, onTenantChange }: { api: PlatformApi; state: BrowserState; onTenantChange: (tenantId: string) => void }) { const surface = surfaceForPath(state.path); const tenantId = state.tenantId; if (tenantId === undefined) return null; return <><section className="context" aria-label="Projection context"><label>Tenant <Dropdown value={tenantId} onOptionSelect={(_, data) => data.optionValue !== undefined && onTenantChange(data.optionValue)}>{state.tenantIds.map((availableTenantId) => <Option key={availableTenantId} value={availableTenantId}>{availableTenantId}</Option>)}</Dropdown></label><Badge appearance="outline">Environment: fixture</Badge><Badge appearance="outline">Server authorized</Badge></section><nav className="product-nav" aria-label="Product surfaces"><Nav href="/studio" active={surface === 'studio'}>Solution Studio</Nav><Nav href="/catalog" active={surface === 'catalog'}>Governed Catalog</Nav><Nav href="/operations" active={surface === 'operations'}>Operations</Nav><Nav href="/technical" active={surface === 'technical'}>Technical Case</Nav><Nav href="/vendor" active={surface === 'vendor'}>Vendor Risk</Nav></nav><SurfaceView api={api} tenantId={tenantId} surface={surface} epoch={state.cacheEpoch} /></>; }
-function SurfaceView({ api, tenantId, surface, epoch }: { api: PlatformApi; tenantId: string; surface: Surface; epoch: number }) { const [projection, setProjection] = useState<Projection>(); const [error, setError] = useState(false); const collection = collectionFor(surface); useEffect(() => { const controller = new AbortController(); setProjection(undefined); setError(false); void api.projection(tenantId, collection, controller.signal).then(setProjection).catch(() => { if (!controller.signal.aborted) setError(true); }); return () => controller.abort(); }, [api, tenantId, collection, epoch]); const content = titles[surface]; return <section className="surface" aria-labelledby="surface-title"><div><Title1 id="surface-title">{content.title}</Title1><Text className="intro">{content.description}</Text></div>{error ? <State title="Projection unavailable">The requested projection could not be loaded safely.</State> : projection === undefined ? <Loading label="Loading server-authorized projection" /> : <ProjectionView projection={projection} surface={surface} />}</section>; }
-function ProjectionView({ projection, surface }: { projection: Projection; surface: Surface }) { const blocked = projection.completeness !== 'full' || projection.records.some((record) => record['freshness'] !== 'current' || record['state'] === 'unavailable' || record['state'] === 'not-ready' || record['redaction'] === 'applied'); const action = surface === 'studio' ? 'Submit for review' : surface === 'catalog' ? 'Activate package' : surface === 'operations' ? 'Request intervention' : surface === 'technical' ? 'Start provider effect' : 'Complete revocation'; return <><div className="evidence-strip" aria-label="Evidence state"><Badge color="informative">Classification: {projection.classification}</Badge><Badge appearance="outline">Freshness: {projection.freshness}</Badge><Badge appearance="outline">Completeness: {projection.completeness}</Badge><Badge appearance="outline">Redaction: {projection.redaction}</Badge></div>{blocked && <MessageBar intent="warning"><MessageBarBody>Relevant action is unavailable because this projection is partial, fixture-labelled, stale, redacted, or not independently verified live evidence.</MessageBarBody></MessageBar>}<div className="projection-grid">{projection.records.map((record) => <RecordCard key={String(record['id'])} record={record} />)}</div><div className="action-row"><Button appearance="primary" disabled={blocked} aria-describedby={blocked ? 'action-explanation' : undefined}>{action}</Button>{blocked && <Text id="action-explanation" className="muted">This browser fixture cannot submit live lifecycle or provider operations.</Text>}</div></>; }
-function RecordCard({ record }: { record: Record<string, unknown> }) { const heading = String(record['title'] ?? record['name'] ?? record['vendor'] ?? record['id']); return <Card className="record-card"><CardHeader header={<Title2>{heading}</Title2>} description={<Text>{String(record['id'])}</Text>} /><dl>{Object.entries(record).filter(([key]) => !['id', 'title', 'name', 'vendor'].includes(key)).map(([key, value]) => <div key={key}><dt>{label(key)}</dt><dd>{String(value)}</dd></div>)}</dl></Card>; }
+
+function TenantShell({ api, state, onTenantChange }: { api: PlatformApi; state: BrowserState; onTenantChange: (tenantId: string) => void }) {
+  const current = routeForPath(state.path);
+  const tenantId = state.tenantId;
+  const [projection, setProjection] = useState<Projection>();
+  if (tenantId === undefined) return null;
+  return <><section className="context" aria-label="Projection context"><label>Tenant <Dropdown value={tenantId} onOptionSelect={(_, data) => data.optionValue !== undefined && onTenantChange(data.optionValue)}>{state.tenantIds.map((availableTenantId) => <Option key={availableTenantId} value={availableTenantId}>{availableTenantId}</Option>)}</Dropdown></label><Badge appearance="outline">Environment: not reported</Badge><Badge appearance="outline">Classification: {projection?.classification ?? 'loading'}</Badge><Badge appearance="outline">{current.id === undefined ? `View: ${current.route.label}` : `Object: ${current.id}`}</Badge></section><nav className="product-nav" aria-label="Product surfaces">{(Object.keys(surfaceLabels) as Surface[]).map((surface) => <Nav key={surface} href={`/${surface}`} active={current.route.surface === surface}>{surfaceLabels[surface]}</Nav>)}</nav><div className="workspace"><aside className="collection-nav" aria-label={`${surfaceLabels[current.route.surface]} views`}><Text weight="semibold">{surfaceLabels[current.route.surface]}</Text>{routesForSurface(current.route.surface).map((route) => <a key={`${route.surface}-${route.collection}`} className={route.collection === current.route.collection ? 'active' : undefined} aria-current={route.collection === current.route.collection ? 'page' : undefined} href={routeHref(route)}>{route.label}</a>)}</aside><SurfaceView api={api} tenantId={tenantId} route={current.route} id={current.id} epoch={state.cacheEpoch} onProjection={setProjection} /></div></>;
+}
+
+function SurfaceView({ api, tenantId, route, id, epoch, onProjection }: { api: PlatformApi; tenantId: string; route: CollectionRoute; id: string | undefined; epoch: number; onProjection: (projection: Projection | undefined) => void }) {
+  const [projection, setProjection] = useState<Projection>();
+  const [error, setError] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    setProjection(undefined);
+    onProjection(undefined);
+    setError(false);
+    void api.projection(tenantId, route.collection, id, controller.signal).then((next) => { setProjection(next); onProjection(next); }).catch(() => { if (!controller.signal.aborted) setError(true); });
+    return () => controller.abort();
+  }, [api, tenantId, route.collection, id, epoch, refresh, onProjection]);
+  return <section className="surface" aria-labelledby="surface-title"><div className="surface-heading"><div><Title1 id="surface-title">{id === undefined ? route.label : `${route.label} detail`}</Title1><Text className="intro">{route.description}</Text></div><Button onClick={() => setRefresh((current) => current + 1)}>Refresh</Button></div>{error ? <State title="Projection unavailable">The requested projection could not be loaded safely.</State> : projection === undefined ? <Loading label="Loading server-authorized projection" /> : <ProjectionView projection={projection} route={route} detail={id !== undefined} />}</section>;
+}
+
+function ProjectionView({ projection, route, detail }: { projection: Projection; route: CollectionRoute; detail: boolean }) {
+  const blocked = projection.completeness !== 'full' || projection.classification === 'fixture' || projection.records.some((record) => record['freshness'] !== 'current' || record['state'] === 'unavailable' || record['state'] === 'not-ready' || record['redaction'] === 'applied');
+  return <><div className="evidence-strip" aria-label="Evidence state"><Badge color="informative">Classification: {projection.classification}</Badge><Badge appearance="outline">Freshness: {projection.freshness}</Badge><Badge appearance="outline">Completeness: {projection.completeness}</Badge><Badge appearance="outline">Redaction: {projection.redaction}</Badge></div>{blocked && <MessageBar intent="warning"><MessageBarBody>This projection cannot support an owner action until the server reports complete, current, non-redacted evidence and the required owner prerequisite.</MessageBarBody></MessageBar>}{projection.records.length === 0 ? <State title="No authorized records">There are no records available at this scope.</State> : <div className={detail ? 'detail-stack' : 'projection-grid'}>{projection.records.map((record) => <RecordCard key={String(record['id'])} record={record} route={route} detail={detail} />)}</div>}{detail && <ActionPrerequisite route={route} blocked={blocked} />}</>;
+}
+
+function RecordCard({ record, route, detail }: { record: Record<string, unknown>; route: CollectionRoute; detail: boolean }) {
+  const heading = String(record['title'] ?? record['name'] ?? record['vendor'] ?? record['id']);
+  const id = typeof record['id'] === 'string' ? record['id'] : undefined;
+  const content = <Card className="record-card"><CardHeader header={<Title2>{heading}</Title2>} description={<Text>{id ?? 'No stable identifier'}</Text>} /><dl>{Object.entries(record).filter(([key]) => !['id', 'title', 'name', 'vendor'].includes(key)).map(([key, value]) => <div key={key}><dt>{label(key)}</dt><dd>{display(value)}</dd></div>)}</dl></Card>;
+  return detail || id === undefined || !opaqueId(id) ? content : <a className="record-link" href={routeHref(route, id)} aria-label={`View ${heading}`}>{content}</a>;
+}
+
+function ActionPrerequisite({ route, blocked }: { route: CollectionRoute; blocked: boolean }) {
+  return <section className="action-prerequisite" aria-label="Owner action status"><Title2>Owner action status</Title2><p>{blocked ? 'Action unavailable for this projection. ' : 'No executable owner command was supplied with this projection. '}{route.commandPrerequisite}</p></section>;
+}
+
 function Loading({ label }: { label: string }) { return <div className="loading" aria-live="polite"><Spinner size="medium" label={label} /></div>; }
 function State({ title, children }: { title: string; children: string }) { return <section className="state" aria-live="polite"><Title1>{title}</Title1><p>{children}</p><a href="/studio">Return to Solution Studio</a></section>; }
 function Nav({ href, active, children }: { href: string; active: boolean; children: string }) { return <a className={active ? 'active' : undefined} aria-current={active ? 'page' : undefined} href={href}>{children}</a>; }
+function display(value: unknown): string { return typeof value === 'string' ? value : value === null ? 'None' : JSON.stringify(value); }
+function opaqueId(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value); }
 function label(value: string) { return value.replace(/([A-Z])/g, ' $1').replace(/^./, (letter) => letter.toUpperCase()); }
 function restorePath(path: string): void { if (`${window.location.pathname}${window.location.search}` !== path) window.history.replaceState(null, '', path); }

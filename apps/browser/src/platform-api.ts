@@ -48,8 +48,9 @@ export class PlatformApi {
     });
   }
 
-  async projection(tenantId: string, collection: string, signal?: AbortSignal): Promise<Projection> {
-    const payload = record(await this.get(`/api/v1/tenants/${encodeURIComponent(tenantId)}/${collection}`, tenantId, signal));
+  async projection(tenantId: string, collection: string, id?: string, signal?: AbortSignal): Promise<Projection> {
+    const detail = id === undefined ? '' : `/${encodeURIComponent(id)}`;
+    const payload = record(await this.get(`/api/v1/tenants/${encodeURIComponent(tenantId)}/${collection}${detail}`, tenantId, signal));
     if (!Array.isArray(payload['records']) || typeof payload['collection'] !== 'string' || !['full', 'partial', 'not-ready'].includes(String(payload['completeness'])) || typeof payload['classification'] !== 'string' || typeof payload['freshness'] !== 'string' || typeof payload['redaction'] !== 'string') throw new PlatformApiError(500);
     return { collection: payload['collection'], records: payload['records'].map(record), completeness: payload['completeness'] as Projection['completeness'], classification: payload['classification'], freshness: payload['freshness'], redaction: payload['redaction'] };
   }

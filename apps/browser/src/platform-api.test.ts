@@ -20,4 +20,12 @@ describe('PlatformApi', () => {
     await expect(api.session()).rejects.toMatchObject({ status: 400, category: 'denied' });
     await expect(api.tenants()).rejects.toBeInstanceOf(PlatformApiError);
   });
+
+  test('loads an opaque projection detail through the authorized Tenant route', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: { collection: 'cases', records: [], completeness: 'full', classification: 'restricted-operational', freshness: 'current', redaction: 'none' } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(new PlatformApi(() => Promise.resolve('short-lived')).projection('11111111-1111-4111-8111-111111111111', 'cases', '22222222-2222-4222-8222-222222222222')).resolves.toMatchObject({ collection: 'cases' });
+    expect(fetch).toHaveBeenCalledWith('/api/v1/tenants/11111111-1111-4111-8111-111111111111/cases/22222222-2222-4222-8222-222222222222', { headers: { accept: 'application/vnd.platform.browser.v1+json', authorization: 'Bearer short-lived', 'x-platform-tenant': '11111111-1111-4111-8111-111111111111' } });
+  });
 });
