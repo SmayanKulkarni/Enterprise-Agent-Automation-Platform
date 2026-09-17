@@ -7,3 +7,19 @@ header { justify-content: flex-end; }
 .state { max-width: 42rem; padding: 1.5rem; background: white; border: 1px solid #ddd; border-radius: .5rem; }
 button, select { font: inherit; padding: .45rem .7rem; }
 a { color: #174ea6; }
+
+* { box-sizing: border-box; }
+body { min-width: 320px; }
+.app-header { min-height: 68px; border-bottom: 1px solid #d9e2f0; }
+.environment { margin-right: auto; color: #42526e; font-size: .875rem; }
+.product-nav { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid #d9e2f0; white-space: nowrap; }
+.product-nav a { padding: 12px 14px; border-bottom: 3px solid transparent; color: #42526e; font-weight: 600; text-decoration: none; }
+.product-nav a:hover, .product-nav a:focus-visible { color: #0f4cbd; background: #eef5ff; }
+.product-nav a.active { color: #0f4cbd; border-bottom-color: #0f6cbd; }
+.surface { padding-top: 28px; }.intro { display: block; max-width: 65ch; margin-top: 8px; color: #42526e; }
+.evidence-strip, .action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 24px 0 16px; }
+.projection-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 16px; }.record-card { min-width: 0; box-shadow: 0 2px 7px rgb(23 32 51 / 8%); }
+dl { margin: 0; } dl > div { display: grid; grid-template-columns: minmax(110px, .8fr) minmax(0, 1.5fr); gap: 12px; padding: 10px 0; border-top: 1px solid #e5eaf2; } dt { color: #52647d; font-size: .8125rem; font-weight: 600; } dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.muted { color: #52647d; font-size: .875rem; }.loading { display: grid; place-items: center; min-height: 180px; } button:active { transform: scale(.98); }
+@media (max-width: 767px) { .shell { padding: 1rem; }.app-header { flex-wrap: wrap; padding: 12px 0; }.environment { order: 2; flex-basis: 100%; }.context { align-items: flex-start; flex-wrap: wrap; }.context label { width: 100%; }.context label > div { flex: 1; }.surface { padding-top: 20px; }.projection-grid { grid-template-columns: 1fr; }dl > div { grid-template-columns: 1fr; gap: 3px; } }
+@media (prefers-color-scheme: dark) { :root { color: #edf2fb; background: #111827; }.app-header, .product-nav { border-color: #34445f; }.brand { color: #edf2fb; }.environment, .intro, dt, .muted { color: #b7c4d9; }.product-nav a { color: #c9d4e5; }.product-nav a:hover, .product-nav a:focus-visible { color: #a7d3ff; background: #172941; }.product-nav a.active { color: #a7d3ff; }.record-card, .state { background: #1b2638; }.record-card { box-shadow: none; }dl > div { border-color: #34445f; }.state a { color: #9bcaff; } }

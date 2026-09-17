@@ -11,6 +11,15 @@ export interface Session {
   tenantId: string;
 }
 
+export interface Projection {
+  collection: string;
+  records: readonly Record<string, unknown>[];
+  completeness: 'full' | 'partial' | 'not-ready';
+  classification: string;
+  freshness: string;
+  redaction: string;
+}
+
 export class PlatformApiError extends Error {
   constructor(readonly status: number, readonly category?: string) {
     super('Platform request failed.');
@@ -37,6 +46,12 @@ export class PlatformApi {
       if (typeof tenantRecord['id'] !== 'string' || !Array.isArray(tenantRecord['profiles']) || !tenantRecord['profiles'].every((profile) => typeof profile === 'string')) throw new PlatformApiError(500);
       return { id: tenantRecord['id'], profiles: tenantRecord['profiles'] };
     });
+  }
+
+  async projection(tenantId: string, collection: string, signal?: AbortSignal): Promise<Projection> {
+    const payload = record(await this.get(`/api/v1/tenants/${encodeURIComponent(tenantId)}/${collection}`, tenantId, signal));
+    if (!Array.isArray(payload['records']) || typeof payload['collection'] !== 'string' || !['full', 'partial', 'not-ready'].includes(String(payload['completeness'])) || typeof payload['classification'] !== 'string' || typeof payload['freshness'] !== 'string' || typeof payload['redaction'] !== 'string') throw new PlatformApiError(500);
+    return { collection: payload['collection'], records: payload['records'].map(record), completeness: payload['completeness'] as Projection['completeness'], classification: payload['classification'], freshness: payload['freshness'], redaction: payload['redaction'] };
   }
 
   private async get(path: string, tenantId: string | undefined, signal: AbortSignal | undefined): Promise<unknown> {

@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { createRequire } from 'node:module';
+import { createClerkClient, verifyToken } from '@clerk/backend';
 import { canonicalJson, correlationId, decodeContract, descriptorFor, digest, encodeContract, messageId, tenantId, type ContractEnvelope, type NormalizedError } from '../../contracts/src/index.js';
 import { IdentityStore, type ExecutionContext, type Proof } from '../../identity/src/index.js';
 
@@ -11,9 +11,7 @@ export interface ClerkSessionClaims { issuer: string; subject: string; sessionId
 export interface ClerkSessionPort { verifySessionToken(token: string): Promise<ClerkSessionClaims> | ClerkSessionClaims; getSession(sessionId: string): Promise<{ subject: string; status: 'active' | 'ended' | 'revoked' }> | { subject: string; status: 'active' | 'ended' | 'revoked' }; }
 export interface ClerkSessionConfig { issuer: string; publishableKey: string; audience: string; authorizedParties: readonly string[]; }
 export interface ClerkBackend { verifyToken(token: string, options: { audience: string; authorizedParties: string[]; secretKey: string }): Promise<Record<string, unknown> | undefined>; sessions: { getSession(sessionId: string): Promise<{ userId: string; status: string }>; }; }
-type ClerkSdk = { verifyToken: ClerkBackend['verifyToken']; createClerkClient(options: { secretKey: string }): { sessions: ClerkBackend['sessions']; }; };
-const clerkSdk = createRequire(import.meta.url)('@clerk/backend') as ClerkSdk;
-const clerkBackend = (secretKey: string): ClerkBackend => ({ verifyToken: clerkSdk.verifyToken, sessions: clerkSdk.createClerkClient({ secretKey }).sessions });
+const clerkBackend = (secretKey: string): ClerkBackend => ({ verifyToken, sessions: createClerkClient({ secretKey }).sessions });
 const required = (environment: Readonly<Record<string, string | undefined>>, name: string): string => { const value = environment[name]?.trim(); if (!value) throw new Error(`Missing ${name}.`); return value; };
 const claim = (value: Record<string, unknown>, name: string): string => typeof value[name] === 'string' && value[name] ? value[name] : (() => { throw new Error('DENIED'); })();
 const expiresAt = (value: Record<string, unknown>): string => typeof value['exp'] === 'number' && Number.isSafeInteger(value['exp']) ? new Date(value['exp'] * 1000).toISOString() : (() => { throw new Error('DENIED'); })();
@@ -85,18 +83,21 @@ export class ImprovementWorkbench {
 }
 
 export interface SafePackageProjection { tenantId: string; collection: 'packages' | 'installations'; completeness: 'full' | 'partial'; version: string; records: readonly Record<string, unknown>[]; }
-/** Safe Studio/Catalog client state; a Tenant or contract change cannot retain an old draft or view. */
 export class PackageWorkbench {
-  #tenantId: string | undefined; #draft: Record<string, unknown> | undefined;
+  #tenantId: string | undefined;
   ingest(input: SafePackageProjection): SafePackageProjection {
-    tenantId(input.tenantId); if (input.version !== '1.0.0' || input.records.some((record) => !safeBrowserValue(record))) throw new Error('INVALID_BROWSER_DTO'); if (this.#tenantId !== undefined && this.#tenantId !== input.tenantId) this.#draft = undefined; this.#tenantId = input.tenantId;
-    const partial = input.completeness === 'partial' || input.records.some((record) => record['stale'] === true || record['quarantined'] === true || record['incompatible'] === true); return Object.freeze({ ...input, completeness: partial ? 'partial' : 'full', records: Object.freeze(input.records.map((record) => Object.freeze(JSON.parse(canonicalJson(record)) as Record<string, unknown>))) });
+    tenantId(input.tenantId);
+    if (this.#tenantId !== undefined && this.#tenantId !== input.tenantId || input.version !== '1.0.0' || input.records.some((record) => !safeBrowserValue(record))) throw new Error('INVALID_BROWSER_DTO');
+    this.#tenantId = input.tenantId;
+    return Object.freeze({ ...input, records: Object.freeze(input.records.map((record) => Object.freeze(JSON.parse(canonicalJson(record)) as Record<string, unknown>))) });
   }
-  draft(input: { tenantId: string; values: Record<string, unknown>; schemaKeys: readonly string[] }): { accepted: boolean; values?: Record<string, unknown> } {
-    if (this.#tenantId !== input.tenantId || Object.keys(input.values).some((key) => !input.schemaKeys.includes(key)) || !safeBrowserValue(input.values)) return { accepted: false, ...(this.#draft === undefined ? {} : { values: this.#draft }) }; this.#draft = JSON.parse(canonicalJson(input.values)) as Record<string, unknown>; return { accepted: true, values: this.#draft };
+  draft(input: { tenantId: string; values: Record<string, unknown>; schemaKeys: readonly string[] }): { accepted: true; values: Record<string, unknown> } {
+    if (input.tenantId !== this.#tenantId || Object.keys(input.values).some((key) => !input.schemaKeys.includes(key)) || !safeBrowserValue(input.values)) throw new Error('INVALID_BROWSER_DRAFT');
+    return { accepted: true, values: JSON.parse(canonicalJson(input.values)) as Record<string, unknown> };
   }
-  command(input: { name: 'sign' | 'publish' | 'install' | 'activate' | 'upgrade' | 'quarantine' | 'retire'; expectedVersion: number; exactVersion: string; approvalCurrent: boolean; idempotencyKey: string; arguments: Record<string, unknown> }): Readonly<typeof input> {
-    if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0 || !input.exactVersion || !input.approvalCurrent || !input.idempotencyKey || (['quarantine', 'retire'].includes(input.name) && !Array.isArray(input.arguments['manifest']))) throw new Error('INVALID_BROWSER_COMMAND'); return Object.freeze({ ...input, arguments: JSON.parse(canonicalJson(input.arguments)) as Record<string, unknown> });
+  command(input: { name: 'activate' | 'quarantine' | 'retire'; expectedVersion: number; exactVersion: string; approvalCurrent: boolean; idempotencyKey: string; arguments: Record<string, unknown> }): Readonly<typeof input> {
+    if (this.#tenantId === undefined || !Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0 || input.exactVersion !== '1.0.0' || !input.approvalCurrent || !input.idempotencyKey || !safeBrowserValue(input.arguments) || input.name === 'quarantine' && (!Array.isArray(input.arguments['manifest']) || input.arguments['manifest'].length === 0)) throw new Error('INVALID_BROWSER_COMMAND');
+    return Object.freeze({ ...input, arguments: JSON.parse(canonicalJson(input.arguments)) as Record<string, unknown> });
   }
 }
 
@@ -132,7 +133,7 @@ const collections = new Set(['cases', 'interventions', 'capabilities', 'installa
 export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
   { method: 'GET', path: '/api/v1/session', owner: 'identity', action: 'identity.session.read', ready: true },
   { method: 'GET', path: '/api/v1/tenants', owner: 'identity', action: 'identity.membership.list', ready: true },
-  { method: 'GET', path: '/api/v1/tenants/:tenantId/{cases,interventions,capabilities,installations,memory,evaluations,improvements,packages,operations,deployments}[/:id]', owner: 'projection', action: 'projection.read', ready: false },
+  { method: 'GET', path: '/api/v1/tenants/:tenantId/{cases,interventions,capabilities,installations,memory,evaluations,improvements,packages,operations,deployments,readiness,vendor-assessments,access-grants}[/:id]', owner: 'projection', action: 'projection.read', ready: false },
   { method: 'POST', path: '/api/v1/tenants/:tenantId/commands/:owner/:name', owner: 'named registry', action: 'owner.command', ready: false },
   { method: 'GET', path: '/api/v1/tenants/:tenantId/events', owner: 'operations', action: 'operations.events.read', ready: false },
 ]);
@@ -192,7 +193,8 @@ export class BrowserV1Transport {
   private async error(request: BrowserRequest, status: number, error: NormalizedError, selectedTenant?: string): Promise<BrowserResponse> { return this.response(request, status, selectedTenant, { error }); }
   private async response(request: BrowserRequest, status: number, selectedTenant: string | undefined, payload: Record<string, unknown>): Promise<BrowserResponse> {
     const correlation = header(request, 'x-correlation-id'); const id = UUID.test(correlation ?? '') ? correlation ?? '' : '11111111-1111-4111-8111-111111111111';
-    const envelope: ContractEnvelope = { messageId: messageId(id), contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: this.#now(), sender: 'browser-transport', classification: 'restricted-operational', payload: { ...JSON.parse(canonicalJson(payload)) as Record<string, unknown>, completeness: 'not-ready' } };
+    const safePayload = JSON.parse(canonicalJson(payload)) as Record<string, unknown>;
+    const envelope: ContractEnvelope = { messageId: messageId(id), contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: this.#now(), sender: 'browser-transport', classification: 'restricted-operational', payload: { ...safePayload, completeness: safePayload['completeness'] ?? 'not-ready' } };
     envelope.tenantId = tenantId(selectedTenant ?? '11111111-1111-4111-8111-111111111111'); if (correlation !== undefined && UUID.test(correlation)) envelope.correlationId = correlationId(correlation);
     const encoded = await encodeContract(descriptorFor('browser.v1'), envelope);
     return { status, headers: { 'content-type': MEDIA_TYPE, 'x-contract-version': '1.0.0', 'x-correlation-id': id }, body: encoded.bytes };

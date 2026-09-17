@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@clerk/react": "^6.16.0",
+    "@fluentui/react-components": "^9.72.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   },
