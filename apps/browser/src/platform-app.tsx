@@ -1,9 +1,9 @@
 import { Badge, Button, Card, CardHeader, Dropdown, MessageBar, MessageBarBody, Option, Spinner, Text, Title1, Title2 } from '@fluentui/react-components';
 import { Show, SignInButton, SignUpButton, UserButton, useAuth } from '@clerk/react';
-import { useEffect, useMemo, useState } from 'react';
+import { type MouseEvent, useEffect, useMemo, useState } from 'react';
 import { PlatformApi, PlatformApiError, type Projection } from './platform-api.js';
 import { routeForPath, routeHref, routesForSurface, type CollectionRoute, type Surface } from './platform-routes.js';
-import { browserState, selectTenant, signedIn, signedOut, type BrowserState } from './session-state.js';
+import { browserState, selectPath, selectTenant, signedIn, signedOut, type BrowserState } from './session-state.js';
 
 type View = 'loading' | 'ready' | 'signed-out' | 'no-membership' | 'forbidden' | 'unavailable';
 const surfaceLabels: Record<Surface, string> = { studio: 'Solution Studio', catalog: 'Governed Catalog', operations: 'Operations', technical: 'Technical Implementation', vendor: 'Vendor Risk & Access' };
@@ -12,7 +12,30 @@ export function App() {
   const { getToken, isLoaded, isSignedIn, sessionId } = useAuth();
   const [state, setState] = useState<BrowserState>(() => browserState(`${window.location.pathname}${window.location.search}`));
   const [view, setView] = useState<View>('loading');
-  const api = useMemo(() => new PlatformApi(getToken), [getToken]);
+  const apiOrigin = (import.meta.env['VITE_PLATFORM_API_ORIGIN'] ?? '').replace(/\/+$/u, '');
+  const api = useMemo(() => new PlatformApi(getToken, apiOrigin), [getToken, apiOrigin]);
+
+  useEffect(() => {
+    const restore = () => setState((current) => selectPath(current, `${window.location.pathname}${window.location.search}`));
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, []);
+
+  const navigate = (path: string) => {
+    if (!path.startsWith('/') || path.startsWith('//')) return;
+    if (`${window.location.pathname}${window.location.search}` !== path) window.history.pushState(null, '', path);
+    setState((current) => selectPath(current, path));
+  };
+
+  const navigateLink = (event: MouseEvent<HTMLElement>) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.defaultPrevented) return;
+    const link = (event.target as Element).closest<HTMLAnchorElement>('a[href]');
+    if (link === null) return;
+    const href = link.getAttribute('href');
+    if (href === null || link.target && link.target !== '_self' || link.hasAttribute('download')) return;
+    event.preventDefault();
+    navigate(href);
+  };
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -27,16 +50,15 @@ export function App() {
         setView('no-membership');
         return;
       }
-      restorePath(state.path);
       setState((current) => signedIn(current, { tenantId: session.tenantId, tenantIds: tenants.map((tenant) => tenant.id), sessionId }));
       setView('ready');
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) setView(error instanceof PlatformApiError && error.status === 401 ? 'signed-out' : error instanceof PlatformApiError && (error.status === 403 || error.status === 404 || error.status === 400 || error.category === 'denied') ? 'forbidden' : 'unavailable');
     });
     return () => controller.abort();
-  }, [api, isLoaded, isSignedIn, sessionId, state.path, state.tenantId, state.cacheEpoch, state.streamEpoch]);
+  }, [api, isLoaded, isSignedIn, sessionId, state.tenantId, state.cacheEpoch, state.streamEpoch]);
 
-  return <main className="shell"><header className="app-header"><a className="brand" href="/studio">Platform Control</a><span className="environment">Authorized workspace</span><Show when="signed-out"><SignInButton forceRedirectUrl={state.path}><Button appearance="primary">Sign in</Button></SignInButton><SignUpButton forceRedirectUrl={state.path}><Button>Sign up</Button></SignUpButton></Show><Show when="signed-in"><UserButton /></Show></header>{view === 'loading' && <Loading label="Checking your authorized session" />}{view === 'signed-out' && <State title="Sign in required">Sign in to load the requested Tenant-scoped projection.</State>}{view === 'no-membership' && <State title="No Tenant membership">Your account does not currently have access to a platform Tenant.</State>}{view === 'forbidden' && <State title="Access changed">This object is unavailable to the current session. No record details were revealed.</State>}{view === 'unavailable' && <State title="Platform unavailable">The session could not be projected safely. Try again shortly.</State>}{view === 'ready' && state.tenantId !== undefined && <TenantShell api={api} state={state} onTenantChange={(tenantId) => setState((current) => selectTenant(current, tenantId))} />}</main>;
+  return <main className="shell" onClick={navigateLink}><header className="app-header"><a className="brand" href="/studio">Platform Control</a><span className="environment">Authorized workspace</span><Show when="signed-out"><SignInButton forceRedirectUrl={state.path}><Button appearance="primary">Sign in</Button></SignInButton><SignUpButton forceRedirectUrl={state.path}><Button>Sign up</Button></SignUpButton></Show><Show when="signed-in"><UserButton /></Show></header>{view === 'loading' && <Loading label="Checking your authorized session" />}{view === 'signed-out' && <State title="Sign in required">Sign in to load the requested Tenant-scoped projection.</State>}{view === 'no-membership' && <State title="No Tenant membership">Your account does not currently have access to a platform Tenant.</State>}{view === 'forbidden' && <State title="Access changed">This object is unavailable to the current session. No record details were revealed.</State>}{view === 'unavailable' && <State title="Platform unavailable">The session could not be projected safely. Try again shortly.</State>}{view === 'ready' && state.tenantId !== undefined && <TenantShell api={api} state={state} onTenantChange={(tenantId) => setState((current) => selectTenant(current, tenantId))} />}</main>;
 }
 
 function TenantShell({ api, state, onTenantChange }: { api: PlatformApi; state: BrowserState; onTenantChange: (tenantId: string) => void }) {
@@ -64,7 +86,7 @@ function SurfaceView({ api, tenantId, route, id, epoch, onProjection }: { api: P
 
 function ProjectionView({ projection, route, detail }: { projection: Projection; route: CollectionRoute; detail: boolean }) {
   const blocked = projection.completeness !== 'full' || projection.classification === 'fixture' || projection.records.some((record) => record['freshness'] !== 'current' || record['state'] === 'unavailable' || record['state'] === 'not-ready' || record['redaction'] === 'applied');
-  return <><div className="evidence-strip" aria-label="Evidence state"><Badge color="informative">Classification: {projection.classification}</Badge><Badge appearance="outline">Freshness: {projection.freshness}</Badge><Badge appearance="outline">Completeness: {projection.completeness}</Badge><Badge appearance="outline">Redaction: {projection.redaction}</Badge></div>{blocked && <MessageBar intent="warning"><MessageBarBody>This projection cannot support an owner action until the server reports complete, current, non-redacted evidence and the required owner prerequisite.</MessageBarBody></MessageBar>}{projection.records.length === 0 ? <State title="No authorized records">There are no records available at this scope.</State> : <div className={detail ? 'detail-stack' : 'projection-grid'}>{projection.records.map((record) => <RecordCard key={String(record['id'])} record={record} route={route} detail={detail} />)}</div>}{detail && <ActionPrerequisite route={route} blocked={blocked} />}</>;
+  return <><div className="evidence-strip" aria-label="Evidence state"><Badge color="informative">Classification: {projection.classification}</Badge><Badge appearance="outline">Freshness: {projection.freshness}</Badge><Badge appearance="outline">Completeness: {projection.completeness}</Badge><Badge appearance="outline">Redaction: {projection.redaction}</Badge>{projection.publishedAt !== undefined && <Badge appearance="outline">Published: {projection.publishedAt}</Badge>}{projection.watermark !== undefined && <Badge appearance="outline">Watermark: {projection.watermark}</Badge>}</div>{blocked && <MessageBar intent="warning"><MessageBarBody>This projection cannot support an owner action until the server reports complete, current, non-redacted evidence and the required owner prerequisite.</MessageBarBody></MessageBar>}{projection.records.length === 0 ? projection.completeness === 'not-ready' ? <State title="Projection not ready">The owner has not published this collection yet.</State> : <State title="No authorized records">There are no records available at this scope.</State> : <div className={detail ? 'detail-stack' : 'projection-grid'}>{projection.records.map((record) => <RecordCard key={String(record['id'])} record={record} route={route} detail={detail} />)}</div>}{detail && <ActionPrerequisite route={route} blocked={blocked} />}</>;
 }
 
 function RecordCard({ record, route, detail }: { record: Record<string, unknown>; route: CollectionRoute; detail: boolean }) {
@@ -84,4 +106,3 @@ function Nav({ href, active, children }: { href: string; active: boolean; childr
 function display(value: unknown): string { return typeof value === 'string' ? value : value === null ? 'None' : JSON.stringify(value); }
 function opaqueId(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value); }
 function label(value: string) { return value.replace(/([A-Z])/g, ' $1').replace(/^./, (letter) => letter.toUpperCase()); }
-function restorePath(path: string): void { if (`${window.location.pathname}${window.location.search}` !== path) window.history.replaceState(null, '', path); }

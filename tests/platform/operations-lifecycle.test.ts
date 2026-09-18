@@ -55,6 +55,8 @@ describe('package change lifecycle and operations seams', () => {
     packages.ingest({ tenantId: tenant, collection: 'packages', completeness: 'full', version: '1.0.0', records: [{ id: 'technical', digest: 'a'.repeat(64), readiness: 'ready' }] });
     expect(packages.draft({ tenantId: tenant, values: { name: 'technical' }, schemaKeys: ['name'] }).accepted).toBe(true);
     expect(packages.command({ name: 'quarantine', expectedVersion: 1, exactVersion: '1.0.0', approvalCurrent: true, idempotencyKey: 'package-1', arguments: { manifest: ['technical'] } }).name).toBe('quarantine');
+    expect(() => packages.ingest({ tenantId: foreignTenant, collection: 'packages', completeness: 'full', version: '1.0.0', records: [] })).toThrow();
+    expect(() => packages.command({ name: 'quarantine', expectedVersion: 1, exactVersion: '1.0.0', approvalCurrent: true, idempotencyKey: 'package-2', arguments: { manifest: [] } })).toThrow();
   });
 
   test('keeps audit and unknown cost separate from owner command receipts and uses the shared technical package lifecycle', async () => {

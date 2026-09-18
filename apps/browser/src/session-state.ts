@@ -25,6 +25,11 @@ export function selectTenant(state: BrowserState, tenantId: string): BrowserStat
   return { ...state, tenantId, cacheEpoch: state.cacheEpoch + 1, streamEpoch: state.streamEpoch + 1 };
 }
 
+export function selectPath(state: BrowserState, path: string): BrowserState {
+  const nextPath = internalPath(path) ? path : '/';
+  return state.path === nextPath ? state : { ...state, path: nextPath };
+}
+
 function internalPath(path: string): boolean {
   return path.startsWith('/') && !path.startsWith('//');
 }

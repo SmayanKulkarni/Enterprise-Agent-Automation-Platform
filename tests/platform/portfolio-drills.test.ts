@@ -16,15 +16,15 @@ describe('portfolio drill harness', () => {
   test('publishes immutable fixture evidence and scores a complete second-operator run', async () => {
     const { harness: local, manifest } = await run(); const claims: RubricClaim[] = (['product', 'engineering', 'operational'] as const).flatMap((pillar) => Array.from({ length: 12 }, (_, index) => ({ pillar, id: `${pillar}-${String(index)}`, evidenceIds: [manifest.evidence[index % manifest.evidence.length]?.id ?? ''], passed: true })));
     await expect(local.score(manifest, claims)).resolves.toMatchObject({ complete: true, total: 36, pillars: { product: 12, engineering: 12, operational: 12 } });
-    await expect(local.publish({ ...manifest, digest: undefined as never })).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(local.publish({ ...manifest, digest: undefined } as unknown as Omit<DemoRunManifest, 'digest'>)).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
   test('fails closed for tampering, secrets, forged live labels and incomplete scoring', async () => {
     const { harness: local, manifest } = await run(); const first = manifest.evidence[0] as DemoEvidence;
-    await expect(local.publish({ ...manifest, id: 'tampered', digest: undefined as never, evidence: [{ ...first, digest: '0'.repeat(64) }, ...manifest.evidence.slice(1)] })).rejects.toMatchObject({ code: 'DENIED' });
+    await expect(local.publish({ ...manifest, id: 'tampered', digest: undefined, evidence: [{ ...first, digest: '0'.repeat(64) }, ...manifest.evidence.slice(1)] } as unknown as Omit<DemoRunManifest, 'digest'>)).rejects.toMatchObject({ code: 'DENIED' });
     await expect(local.evidence({ ...first, id: 'secret', payload: { token: 'never' } })).rejects.toMatchObject({ code: 'INVALID' });
     const live = await local.evidence({ ...first, classification: 'live' });
-    await expect(local.publish({ ...manifest, id: 'forged-live', digest: undefined as never, evidence: [live, ...manifest.evidence.slice(1)] })).rejects.toMatchObject({ code: 'DENIED' });
+    await expect(local.publish({ ...manifest, id: 'forged-live', digest: undefined, evidence: [live, ...manifest.evidence.slice(1)] } as unknown as Omit<DemoRunManifest, 'digest'>)).rejects.toMatchObject({ code: 'DENIED' });
     await expect(local.score({ ...manifest, evidence: [...manifest.evidence, first] }, [])).rejects.toMatchObject({ code: 'DENIED' });
     const claims: RubricClaim[] = Array.from({ length: 36 }, (_, index) => ({ pillar: index < 12 ? 'product' : index < 24 ? 'engineering' : 'operational', id: `claim-${String(index)}`, evidenceIds: [first.id], passed: index !== 0, critical: index === 0 }));
     await expect(local.score(manifest, claims)).resolves.toMatchObject({ complete: false, total: 35 });

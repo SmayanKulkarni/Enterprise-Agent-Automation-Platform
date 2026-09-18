@@ -28,4 +28,12 @@ describe('PlatformApi', () => {
     await expect(new PlatformApi(() => Promise.resolve('short-lived')).projection('11111111-1111-4111-8111-111111111111', 'cases', '22222222-2222-4222-8222-222222222222')).resolves.toMatchObject({ collection: 'cases' });
     expect(fetch).toHaveBeenCalledWith('/api/v1/tenants/11111111-1111-4111-8111-111111111111/cases/22222222-2222-4222-8222-222222222222', { headers: { accept: 'application/vnd.platform.browser.v1+json', authorization: 'Bearer short-lived', 'x-platform-tenant': '11111111-1111-4111-8111-111111111111' } });
   });
+
+  test('uses the configured external API origin', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: { tenants: [] } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(new PlatformApi(() => Promise.resolve('short-lived'), 'https://api.example.com').tenants()).resolves.toEqual([]);
+    expect(fetch).toHaveBeenCalledWith('https://api.example.com/api/v1/tenants', { headers: { accept: 'application/vnd.platform.browser.v1+json', authorization: 'Bearer short-lived' } });
+  });
 });

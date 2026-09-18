@@ -45,11 +45,11 @@
         },
         {
           "path": "package.json",
-          "sha256": "7ad592e81b28e2f012f5e57752d724d99d4919c587d20067afcff10e1662d9de"
+          "sha256": "42cf03a428f5bc811ef5f124798f2771da308578079c432288e04ecc30b0b85a"
         },
         {
           "path": "pnpm-lock.yaml",
-          "sha256": "cc27bc18a63eafda641b04289f484d7688ce7f37bbabdf35af6a8d326649e199"
+          "sha256": "3692cbebd06fdf10e5b2e5bf3179bbcea0598d8bf7a93bd39fae7ec9147fbc3e"
         },
         {
           "path": "pnpm-workspace.yaml",
@@ -61,7 +61,7 @@
         },
         {
           "path": "tsconfig.json",
-          "sha256": "617c9349ef826a23e0493ca28886da080d5841fa097e09b16538aac8c00f6c5a"
+          "sha256": "70ca4f194abfbd1f71959f26335940d9a246ba6e5c49dabf27b329186efdc786"
         }
       ],
       "interface": {
@@ -81,11 +81,16 @@
       "issue": ".scratch/platform-implementation/issues/001-workspace.md",
       "outputScan": {
         "paths": [
+          "apps/browser/dist",
           "packages/contracts/dist"
         ],
         "repositoryBounded": true
       },
       "packageGraph": [
+        {
+          "name": "@platform/browser-app",
+          "path": "apps/browser"
+        },
         {
           "name": "@platform/contracts",
           "path": "packages/contracts"
@@ -152,6 +157,13 @@
       ],
       "interface": "ClerkSessionAdapter current-session proof, safe session/Tenant DTOs and scoped Case workbench state",
       "issue": ".scratch/platform-implementation/issues/009a-clerk-browser-session.md"
+    },
+    "009b-live-clerk-integration": {
+      "checks": [
+        "tests/platform/gateway-browser.test.ts"
+      ],
+      "interface": "Official Clerk Backend SDK session-token verification, active-session recheck and browser bearer-header helper",
+      "issue": ".scratch/platform-implementation/issues/009b-live-clerk-integration.md"
     },
     "016-invocation-admission": {
       "checks": [
@@ -236,6 +248,160 @@
       ],
       "interface": "Eligibility-before-ranking query, provenance projections, graph-epoch cache key, bounded result budgets and non-widening unavailable-adapter fallback",
       "issue": ".scratch/platform-implementation/issues/026-retrieval.md"
+    },
+    "039-change-lifecycle": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "SolutionLifecycle compatible activation change, immutable migration checkpoint, rollback disposition, quarantine and hold/retire fences",
+      "issue": ".scratch/platform-implementation/issues/039-change-lifecycle.md"
+    },
+    "039a-studio-catalog-view": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "browser.v1 Tenant-scoped packages/installations projection routes and owner-command boundary",
+      "issue": ".scratch/platform-implementation/issues/039a-studio-catalog-view.md"
+    },
+    "040-operations-intake": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "OperationsRuntime packed operations.event decode, correlation/causation-preserving safe transform, idempotent dedupe and non-leaking quarantine",
+      "issue": ".scratch/platform-implementation/issues/040-operations-intake.md"
+    },
+    "041-operations-projection": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "Deterministic Tenant projection with source versions, watermark, gap completeness and Tenant-bound cursor",
+      "issue": ".scratch/platform-implementation/issues/041-operations-projection.md"
+    },
+    "041a-mongo-operations-read-model": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "Disposable Mongo-shaped safe snapshot read model with exact Tenant partition purge and rebuild equivalence",
+      "issue": ".scratch/platform-implementation/issues/041a-mongo-operations-read-model.md"
+    },
+    "042-signals-cost": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "Append-only audit evidence, bounded safe projections and explicit estimated/final/unknown/shared rate-versioned cost states",
+      "issue": ".scratch/platform-implementation/issues/042-signals-cost.md"
+    },
+    "043-operations-commands": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "Fresh-authority exact-digest owner command transport with stored retry receipt and separate projection catch-up state",
+      "issue": ".scratch/platform-implementation/issues/043-operations-commands.md"
+    },
+    "043a-operations-browser": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "Safe OperationsWorkbench projection and approval/manifest-fenced owner command intent",
+      "issue": ".scratch/platform-implementation/issues/043a-operations-browser.md"
+    },
+    "044-operations-experience": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "Tenant-scoped operational evidence/cost projection plus versioned runbook alert fire/group/clear state",
+      "issue": ".scratch/platform-implementation/issues/044-operations-experience.md"
+    },
+    "045-technical-implementation-package": {
+      "checks": [
+        "tests/platform/operations-lifecycle.test.ts"
+      ],
+      "interface": "Signed fixture-only Technical Implementation package carrying exact SQL/Blob/Boards capabilities through shared activation",
+      "issue": ".scratch/platform-implementation/issues/045-technical-implementation-package.md"
+    },
+    "046-deterministic-tools": {
+      "checks": [
+        "tests/platform/technical-implementation.test.ts"
+      ],
+      "interface": "Version-fenced public bootstrap, seed and readiness commands with two-Tenant fixture inventory and digests",
+      "issue": ".scratch/platform-implementation/issues/046-deterministic-tools.md"
+    },
+    "047-technical-implementation-success": {
+      "checks": [
+        "tests/platform/technical-implementation.test.ts"
+      ],
+      "interface": "Fixture-only Technical Implementation Case with information intervention, exact package pin, SQL/Blob/Boards receipts and evaluation evidence",
+      "issue": ".scratch/platform-implementation/issues/047-technical-implementation-success.md"
+    },
+    "048-technical-implementation-negatives-recovery": {
+      "checks": [
+        "tests/platform/technical-implementation.test.ts"
+      ],
+      "interface": "Labeled local denial, stale approval, throttle, conflict, reconciliation and replay recovery manifest",
+      "issue": ".scratch/platform-implementation/issues/048-technical-implementation-negatives-recovery.md"
+    },
+    "049-reset-repeat": {
+      "checks": [
+        "tests/platform/technical-implementation.test.ts"
+      ],
+      "interface": "Paired deterministic run digests plus exact reset/resume, held-evidence and foreign-object residual reports",
+      "issue": ".scratch/platform-implementation/issues/049-reset-repeat.md"
+    },
+    "049a-technical-browser-journey": {
+      "checks": [
+        "tests/platform/technical-implementation.test.ts"
+      ],
+      "interface": "Registered browser.v1 Case run/reset commands requiring current Tenant proof and exact seeded fixture version",
+      "issue": ".scratch/platform-implementation/issues/049a-technical-browser-journey.md"
+    },
+    "050-policy-iac-shell": {
+      "checks": [
+        "tests/platform/technical-implementation.test.ts"
+      ],
+      "interface": "Bicep policy-tag shell and fail-closed environment plan allowlist for region, SKU, tags, lease, scope, cost and destructive target",
+      "issue": ".scratch/platform-implementation/issues/050-policy-iac-shell.md"
+    },
+    "051-foundations-data": {
+      "checks": [
+        "tests/platform/deployment-provider.test.ts"
+      ],
+      "interface": "Private-ingress, least-privilege foundation inventory with reference-only configuration, backup coverage and Tenant-scoped quarantine restore",
+      "issue": ".scratch/platform-implementation/issues/051-foundations-data.md"
+    },
+    "052-compute-telemetry": {
+      "checks": [
+        "tests/platform/deployment-provider.test.ts"
+      ],
+      "interface": "Managed-identity internal compute port with no ambient network handles, safe diagnostics, durable audit receipt and attributable cost",
+      "issue": ".scratch/platform-implementation/issues/052-compute-telemetry.md"
+    },
+    "053-delivery-readiness": {
+      "checks": [
+        "tests/platform/deployment-provider.test.ts"
+      ],
+      "interface": "Trusted protected-source OIDC, immutable artifact/config/reference manifest, generation fence, migration backup gate and vector rollback",
+      "issue": ".scratch/platform-implementation/issues/053-delivery-readiness.md"
+    },
+    "054-azure-resilience": {
+      "checks": [
+        "tests/platform/deployment-provider.test.ts"
+      ],
+      "interface": "Tenant-bound quarantine recovery gate with duplicate-effect, rollback-vector and declared RPO/RTO fences",
+      "issue": ".scratch/platform-implementation/issues/054-azure-resilience.md"
+    },
+    "055-azure-close": {
+      "checks": [
+        "tests/platform/deployment-provider.test.ts"
+      ],
+      "interface": "Authorized admission-drain/evidence-export close gate that deletes only exact manifest inventory and preserves held evidence",
+      "issue": ".scratch/platform-implementation/issues/055-azure-close.md"
+    },
+    "056-provider-certification-harness": {
+      "checks": [
+        "tests/platform/deployment-provider.test.ts"
+      ],
+      "interface": "Provider-neutral allow/deny/pagination/throttle/idempotency/timeout/reconciliation/credential/reset suite with trusted live-label and recording-safety gate",
+      "issue": ".scratch/platform-implementation/issues/056-provider-certification-harness.md"
     }
   }
 }

@@ -1,4 +1,5 @@
 import { canonicalJson, digest, tenantId, type TenantId } from '../../contracts/src/index.js';
+import sql from 'mssql';
 
 export type IdentityErrorCode = 'DENIED' | 'CONFLICT' | 'INVALID' | 'NOT_FOUND' | 'STALE' | 'INDETERMINATE';
 export class IdentityError extends Error {
@@ -16,6 +17,10 @@ export interface Approval extends ApprovalBinding { id: string; tenantId: Tenant
 export type IngressMode = 'interactive' | 'workload' | 'worker' | 'webhook';
 export interface Proof { mode: IngressMode; issuer: string; subject: string; audience: string; expiresAt: string; tokenUse: string; sessionId?: string; nonce?: string; origin?: string; replayKey?: string; }
 export interface ExecutionContext { mode: IngressMode; userId: string; tenantId: TenantId; expiresAt: string; membershipEpoch: number; tenantEpoch: number; sessionId?: string; }
+export interface IdentityReadStore {
+  authenticate(proof: Proof, selectedTenant: string, audience: string, now?: string): ExecutionContext | Promise<ExecutionContext>;
+  membershipsForProof(proof: Proof): readonly Pick<Membership, 'tenantId' | 'profiles' | 'epoch'>[] | Promise<readonly Pick<Membership, 'tenantId' | 'profiles' | 'epoch'>[]>;
+}
 
 export class IdentityStore {
   #tenants = new Map<string, Tenant>();
@@ -90,10 +95,44 @@ export class IdentityStore {
   membershipsForUser(userId: string): readonly Pick<Membership, 'tenantId' | 'profiles' | 'epoch'>[] {
     return [...this.#memberships.values()].filter((membership) => membership.userId === userId && membership.status === 'current' && this.#tenants.get(membership.tenantId)?.status === 'active').map(({ tenantId: id, profiles, epoch }) => ({ tenantId: id, profiles: [...profiles], epoch }));
   }
+  membershipsForProof(proof: Proof): readonly Pick<Membership, 'tenantId' | 'profiles' | 'epoch'>[] { return this.membershipsForUser(this.userForExternal(proof.issuer, proof.subject).id); }
   userForExternal(issuer: string, subject: string): User { const userId = this.#subjectUsers.get(`${issuer}\u0000${subject}`); const user = userId === undefined ? undefined : this.#users.get(userId); return user ?? deny('DENIED'); }
   exportManifest(id: string): { tenantId: TenantId; status: TenantStatus; users: number; memberships: number; approvals: number } { const tenant = this.tenant(id); const memberships = [...this.#memberships.values()].filter((membership) => membership.tenantId === tenant.id); return { tenantId: tenant.id, status: tenant.status, users: new Set(memberships.map((membership) => membership.userId)).size, memberships: memberships.length, approvals: [...this.#approvals.values()].filter((approval) => approval.tenantId === tenant.id).length }; }
   tenant(id: string | TenantId): Tenant { const value = this.#tenants.get(tenantId(id)); if (value === undefined) throw new IdentityError('DENIED'); return value; }
   private currentMembership(id: TenantId, userId: string): Membership { const membership = this.#memberships.get(this.key(id, userId)); if (membership === undefined || membership.status !== 'current') throw new IdentityError('DENIED'); return membership; }
   private key(id: TenantId, userId: string): string { return `${id}\u0000${userId}`; }
   private binding(approval: Approval): ApprovalBinding { const { caseId, generation, action, target, argumentDigest, requiredProfile, risk } = approval; return { caseId, generation, action, target, argumentDigest, requiredProfile, risk }; }
+}
+
+/** Azure SQL read boundary; writes remain administrator-controlled migrations or provisioning work. */
+export class AzureSqlIdentityStore implements IdentityReadStore {
+  constructor(private readonly connectionString: string) { if (!connectionString.trim()) throw new Error('Missing AZURE_SQL_CONNECTION_STRING.'); }
+  async authenticate(proof: Proof, selectedTenant: string, audience: string, now = new Date().toISOString()): Promise<ExecutionContext> {
+    this.validate(proof, audience, now);
+    const tenant = tenantId(selectedTenant); const result = await this.call('identity.read_current_session', (request) => request.input('tenant_id', sql.UniqueIdentifier, String(tenant)).input('issuer', sql.NVarChar(512), proof.issuer).input('subject', sql.NVarChar(256), proof.subject));
+    const row = result.recordset[0] as { user_id?: string; tenant_epoch?: number; membership_epoch?: number } | undefined;
+    const userId = row?.user_id; const tenantEpoch = row?.tenant_epoch; const membershipEpoch = row?.membership_epoch;
+    if (!userId || !Number.isSafeInteger(tenantEpoch) || !Number.isSafeInteger(membershipEpoch)) deny();
+    return { mode: proof.mode, userId: userId as string, tenantId: tenant, expiresAt: proof.expiresAt, membershipEpoch: membershipEpoch as number, tenantEpoch: tenantEpoch as number, ...(proof.sessionId === undefined ? {} : { sessionId: proof.sessionId }) };
+  }
+  async membershipsForProof(proof: Proof): Promise<readonly Pick<Membership, 'tenantId' | 'profiles' | 'epoch'>[]> {
+    const result = await this.call('identity.list_current_tenants', (request) => request.input('issuer', sql.NVarChar(512), proof.issuer).input('subject', sql.NVarChar(256), proof.subject));
+    const memberships = new Map<string, { tenantId: TenantId; profiles: string[]; epoch: number }>();
+    for (const row of result.recordset as { tenant_id?: string; membership_epoch?: number; profile_key?: string | null }[]) {
+      if (!row.tenant_id || !Number.isSafeInteger(row.membership_epoch)) continue;
+      const id = tenantId(row.tenant_id); const existing = memberships.get(String(id));
+      if (existing !== undefined) { if (typeof row.profile_key === 'string') existing.profiles.push(row.profile_key); continue; }
+      const item = { tenantId: id, profiles: typeof row.profile_key === 'string' ? [row.profile_key] : [], epoch: row.membership_epoch as number };
+      memberships.set(String(id), item);
+    }
+    return [...memberships.values()].map((membership) => ({ ...membership, profiles: [...new Set(membership.profiles)].sort() }));
+  }
+  private validate(proof: Proof, audience: string, now: string): void {
+    const tokenUse: Record<IngressMode, string> = { interactive: 'session', workload: 'workload', worker: 'workload', webhook: 'webhook' };
+    if (proof.audience !== audience || proof.tokenUse !== tokenUse[proof.mode] || !proof.issuer || !proof.subject || Date.parse(proof.expiresAt) <= Date.parse(now) || (proof.mode === 'interactive' && proof.sessionId === undefined)) deny();
+  }
+  private async call(procedure: string, bind: (request: sql.Request) => sql.Request): Promise<sql.IProcedureResult<unknown>> {
+    const pool = await new sql.ConnectionPool(this.connectionString).connect();
+    try { return await bind(pool.request()).execute(procedure); } finally { await pool.close(); }
+  }
 }

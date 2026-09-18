@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { browserState, selectTenant, signedIn, signedOut } from './session-state.js';
+import { browserState, selectPath, selectTenant, signedIn, signedOut } from './session-state.js';
 
 describe('browser session state', () => {
   test('restores an allowed deep link after sign-in and clears scoped state on Tenant change', () => {
@@ -28,5 +28,11 @@ describe('browser session state', () => {
   test('clears scoped state when Clerk changes the live session', () => {
     const first = signedIn(browserState('/operations'), { tenantId: '11111111-1111-4111-8111-111111111111', tenantIds: ['11111111-1111-4111-8111-111111111111'], sessionId: 'session-a' });
     expect(signedIn(first, { tenantId: '11111111-1111-4111-8111-111111111111', tenantIds: first.tenantIds, sessionId: 'session-b' })).toMatchObject({ cacheEpoch: 1, streamEpoch: 1 });
+  });
+
+  test('changes only an allowed in-app path', () => {
+    const state = browserState('/studio');
+    expect(selectPath(state, '/catalog/packages')).toMatchObject({ path: '/catalog/packages' });
+    expect(selectPath(state, 'https://attacker.example')).toMatchObject({ path: '/' });
   });
 });

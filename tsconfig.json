@@ -3,11 +3,12 @@
   "compilerOptions": {
     "allowJs": true,
     "checkJs": true,
-    "lib": ["DOM", "ES2024"],
+    "lib": ["DOM", "DOM.Iterable", "ES2024"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "skipLibCheck": true,
     "target": "ES2024",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["eslint.config.mjs", "tools/**/*.mjs", "tests/**/*.mjs", "tests/**/*.ts", "packages/**/*.ts"]
+  "include": ["apps/**/*.ts", "eslint.config.mjs", "tools/**/*.mjs", "tests/**/*.mjs", "tests/**/*.ts", "packages/**/*.ts"]
 }

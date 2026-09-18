@@ -18,6 +18,8 @@ export interface Projection {
   classification: string;
   freshness: string;
   redaction: string;
+  watermark?: number;
+  publishedAt?: string;
 }
 
 export class PlatformApiError extends Error {
@@ -27,7 +29,7 @@ export class PlatformApiError extends Error {
 }
 
 export class PlatformApi {
-  constructor(private readonly getToken: GetToken) {}
+  constructor(private readonly getToken: GetToken, private readonly apiOrigin = '') {}
 
   async session(tenantId?: string, signal?: AbortSignal): Promise<Session> {
     const payload = await this.get('/api/v1/session', tenantId, signal);
@@ -52,13 +54,14 @@ export class PlatformApi {
     const detail = id === undefined ? '' : `/${encodeURIComponent(id)}`;
     const payload = record(await this.get(`/api/v1/tenants/${encodeURIComponent(tenantId)}/${collection}${detail}`, tenantId, signal));
     if (!Array.isArray(payload['records']) || typeof payload['collection'] !== 'string' || !['full', 'partial', 'not-ready'].includes(String(payload['completeness'])) || typeof payload['classification'] !== 'string' || typeof payload['freshness'] !== 'string' || typeof payload['redaction'] !== 'string') throw new PlatformApiError(500);
-    return { collection: payload['collection'], records: payload['records'].map(record), completeness: payload['completeness'] as Projection['completeness'], classification: payload['classification'], freshness: payload['freshness'], redaction: payload['redaction'] };
+    if (payload['watermark'] !== undefined && (!Number.isSafeInteger(payload['watermark']) || Number(payload['watermark']) < 0) || payload['publishedAt'] !== undefined && (typeof payload['publishedAt'] !== 'string' || !Number.isFinite(Date.parse(payload['publishedAt'])))) throw new PlatformApiError(500);
+    return { collection: payload['collection'], records: payload['records'].map(record), completeness: payload['completeness'] as Projection['completeness'], classification: payload['classification'], freshness: payload['freshness'], redaction: payload['redaction'], ...(payload['watermark'] === undefined ? {} : { watermark: payload['watermark'] as number }), ...(payload['publishedAt'] === undefined ? {} : { publishedAt: payload['publishedAt'] }) };
   }
 
   private async get(path: string, tenantId: string | undefined, signal: AbortSignal | undefined): Promise<unknown> {
     const headers: Record<string, string> = { accept: 'application/vnd.platform.browser.v1+json', ...(await clerkAuthorizationHeader(this.getToken)) };
     if (tenantId !== undefined) headers['x-platform-tenant'] = tenantId;
-    const response = await fetch(path, { headers, ...(signal === undefined ? {} : { signal }) });
+    const response = await fetch(`${this.apiOrigin}${path}`, { headers, ...(signal === undefined ? {} : { signal }) });
     const body: unknown = await response.json();
     const payload = record(body)['payload'];
     if (!response.ok) throw new PlatformApiError(response.status, errorCategory(payload));
