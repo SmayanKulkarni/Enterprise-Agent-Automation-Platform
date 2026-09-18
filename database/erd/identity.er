@@ -1,0 +1,26 @@
+# Azure SQL identity schema — source: migrations/001_identity_tenant_access.sql
+
+[identity.tenants]
+*id {label:"uniqueidentifier"}
+slug {label:"nvarchar(128) UNIQUE"}
+status {label:"nvarchar(16) active|suspended"}
+epoch {label:"bigint default 1"}
+created_at {label:"datetime2(7) UTC"}
+
+[identity.users]
+*id {label:"uniqueidentifier"}
+issuer {label:"nvarchar(512) UNIQUE with subject"}
+subject {label:"nvarchar(256) UNIQUE with issuer"}
+display_name {label:"nvarchar(256) nullable"}
+created_at {label:"datetime2(7) UTC"}
+
+[identity.memberships]
+*id {label:"uniqueidentifier"}
+tenant_id {label:"uniqueidentifier FK → identity.tenants"}
+user_id {label:"uniqueidentifier FK → identity.users"}
+status {label:"nvarchar(16) current|revoked"}
+epoch {label:"bigint default 1"}
+created_at {label:"datetime2(7) UTC"}
+
+identity.tenants 1--* identity.memberships
+identity.users 1--* identity.memberships

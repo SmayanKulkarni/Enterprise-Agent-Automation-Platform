@@ -1,0 +1,45 @@
+digraph identity_erd {
+  graph [rankdir=LR, bgcolor="white", pad="0.25", nodesep="0.8", ranksep="1.4", labelloc=t, label="Azure SQL Identity ERD", fontsize=20, fontname="Helvetica"];
+  node [shape=plain, fontname="Helvetica"];
+  edge [color="#4f81bd", penwidth=1.8, fontname="Helvetica", fontsize=11];
+
+  tenants [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7">
+      <TR><TD BGCOLOR="#d9eaf7"><B>identity.tenants</B></TD></TR>
+      <TR><TD PORT="id" ALIGN="LEFT"><B>PK</B>  id : uniqueidentifier</TD></TR>
+      <TR><TD ALIGN="LEFT">slug : nvarchar(128) UNIQUE</TD></TR>
+      <TR><TD ALIGN="LEFT">status : nvarchar(16)</TD></TR>
+      <TR><TD ALIGN="LEFT">epoch : bigint</TD></TR>
+      <TR><TD ALIGN="LEFT">created_at : datetime2(7)</TD></TR>
+    </TABLE>
+  >];
+
+  users [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7">
+      <TR><TD BGCOLOR="#d9eaf7"><B>identity.users</B></TD></TR>
+      <TR><TD PORT="id" ALIGN="LEFT"><B>PK</B>  id : uniqueidentifier</TD></TR>
+      <TR><TD ALIGN="LEFT">issuer : nvarchar(512)</TD></TR>
+      <TR><TD ALIGN="LEFT">subject : nvarchar(256)</TD></TR>
+      <TR><TD ALIGN="LEFT">display_name : nvarchar(256) NULL</TD></TR>
+      <TR><TD ALIGN="LEFT">created_at : datetime2(7)</TD></TR>
+      <TR><TD ALIGN="LEFT"><I>UNIQUE (issuer, subject)</I></TD></TR>
+    </TABLE>
+  >];
+
+  memberships [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="7">
+      <TR><TD BGCOLOR="#e8f3e1"><B>identity.memberships</B></TD></TR>
+      <TR><TD ALIGN="LEFT"><B>PK</B>  id : uniqueidentifier</TD></TR>
+      <TR><TD PORT="tenant_id" ALIGN="LEFT"><B>FK</B>  tenant_id : uniqueidentifier</TD></TR>
+      <TR><TD PORT="user_id" ALIGN="LEFT"><B>FK</B>  user_id : uniqueidentifier</TD></TR>
+      <TR><TD ALIGN="LEFT">status : nvarchar(16)</TD></TR>
+      <TR><TD ALIGN="LEFT">epoch : bigint</TD></TR>
+      <TR><TD ALIGN="LEFT">created_at : datetime2(7)</TD></TR>
+      <TR><TD ALIGN="LEFT"><I>UNIQUE (tenant_id, user_id)</I></TD></TR>
+    </TABLE>
+  >];
+
+  { rank=same; tenants; users; }
+  tenants:id:e -> memberships:tenant_id:w [dir=none, label="referenced by", taillabel="1", headlabel="0..N", labeldistance=2];
+  users:id:e -> memberships:user_id:w [dir=none, label="referenced by", taillabel="1", headlabel="0..N", labeldistance=2];
+}
