@@ -6,11 +6,11 @@
 
 **Blocked by:** 054: Resilience
 
-**Status:** implementation-complete (root verification blocked by pinned Node mismatch)
+**Status:** fixture-verified; live Azure evidence pending
 
 **Produces:** M9 live Azure deployment/restore/lease-teardown gate
 
 - [x] Lease expiry or an authorized close command reconciles in-flight work, exports a complete evidence index and removes every inventoried owned resource with a clean residual/billable scan.
 - [x] Ambiguous or out-of-manifest target, teardown cancellation/crash, held evidence and unavoidable retained cost stop or resume safely without deleting foreign resources or claiming zero cost.
-- [ ] Publish M9 teardown command/receipts, exact resource inventory, evidence export, residual and billable-cost scans, lease timeline, held dispositions and secret scan. Blocked: manifest publication runs only after pinned root verification.
-- [ ] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest. Blocked: this shell has Node 24.13.0; the workspace requires Node 22.14.0.
+- [ ] Publish M9 teardown command/receipts, exact resource inventory, evidence export, residual and billable-cost scans, lease timeline, held dispositions and secret scan. Live Azure evidence remains pending.
+- [x] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.

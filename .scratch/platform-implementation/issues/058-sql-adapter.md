@@ -15,4 +15,4 @@
 - [ ] Publish dated live SQL certification with identity/schema versions, transaction/idempotency results, receipts/checkpoints, throttling, reset inventory and secret scan.
 - [ ] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.
 
-Evidence: `SqlAdapter` admits only declared table names and identifier-shaped named parameters, leaves SQL text to the parameterizing transport, and shares safe reconciliation/reset behavior covered by `tests/platform/provider-adapters.test.ts`. Live Entra/SQL transaction certification remains external.
+Evidence: `SqlAdapter` admits only declared table names and identifier-shaped named parameters, leaves SQL text to the parameterizing transport, and shares safe reconciliation/reset behavior covered by `tests/platform/provider-adapters.test.ts`. Live SQL transaction certification remains external.

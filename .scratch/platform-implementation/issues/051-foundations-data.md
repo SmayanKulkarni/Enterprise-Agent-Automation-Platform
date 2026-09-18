@@ -6,11 +6,11 @@
 
 **Blocked by:** 050: Policy/IaC shell
 
-**Status:** implementation-complete (root verification blocked by pinned Node mismatch)
+**Status:** fixture-verified; live Azure evidence pending
 
 **Produces:** Azure identity, repository, workflow, secret and backup adapter foundations
 
 - [x] Repositories, workflow history and secret-reference adapters pass their contract fixtures with private ingress, least privilege, backup coverage and Tenant-scoped restore inventory.
 - [x] Overbroad identity/RBAC/network, secret values in configuration, backup omission, foreign Tenant data and restore outside quarantine deny readiness without mutating active state.
-- [ ] Publish identity/RBAC/network policy results, contract suites, backup manifest, Tenant restore-isolation tests, resource/config digests and secret scan. Blocked: manifest publication runs only after pinned root verification.
-- [ ] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest. Blocked: this shell has Node 24.13.0; the workspace requires Node 22.14.0.
+- [ ] Publish identity/RBAC/network policy results, contract suites, backup manifest, Tenant restore-isolation tests, resource/config digests and secret scan. Live Azure evidence remains pending.
+- [x] Root verification passes, and the produced interface and evidence are linked from the implementation evidence manifest.

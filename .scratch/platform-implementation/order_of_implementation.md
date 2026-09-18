@@ -26,6 +26,8 @@ Progress update (2026-09-16): implementation-complete 057–061. Added one const
 
 Progress update (2026-09-16): implemented fixture-safe boundaries for 062–067a. Combined provider readiness now requires the exact Technical Implementation/Vendor Risk and Access allocation and never infers live status; the second package shares Technical Implementation module locks; Assessment/Grant lifecycle fences stale and foreign paths; and browser DTOs reject unverified-live or foreign linked-case state. Focused fixture tests and lint passed. M10/M11 ledger rows remain unchecked because dated live provider/browser evidence and pinned root verification require allocated providers, Azure and Node 22.14.0/pnpm 10.15.1.
 
+Progress update (2026-09-16): implemented 068–072a as a compact fixture drill boundary. `PortfolioDrillHarness` version-fences immutable eleven-journey manifests, blocks tampered/secret/forged-live evidence, and applies the 9/12-per-pillar and 30/36 rubric. The focused harness test passed; root verification remains unavailable in this shell because Node 24.13.0/pnpm 9.15.9 do not match the pinned Node 22.14.0/pnpm 10.15.1. Live second-operator, Azure and provider/browser evidence remains explicitly pending.
+
 | Done | Ticket | Source slice | Blocked by | Owning spec | Produced interface/gate |
 | --- | --- | --- | --- | --- | --- |
 | - [x] | [001: Workspace](issues/001-workspace.md) | 1.1 | None | [Repository and executable contract foundation specification](../../docs/superpowers/specs/2026-09-14-01-repository-contract-foundation-spec.md#ordered-implementation-slices) | Workspace conventions and clean root verification seam; foundation toward M1 |
@@ -113,3 +115,17 @@ Progress update (2026-09-16): implemented fixture-safe boundaries for 062–067a
 | - [ ] | [071: Reliability close](issues/071-reliability-close.md) | 14.4 | [070: Improvement drill](issues/070-improvement-drill.md) | [Portfolio hardening, drill suite and repeatable evidence specification](../../docs/superpowers/specs/2026-09-14-14-portfolio-hardening-evidence-spec.md#ordered-implementation-slices) | Integrated reliability, restore, removal and teardown closure evidence |
 | - [ ] | [072: Independent repeat](issues/072-independent-repeat.md) | 14.5 | [071: Reliability close](issues/071-reliability-close.md) | [Portfolio hardening, drill suite and repeatable evidence specification](../../docs/superpowers/specs/2026-09-14-14-portfolio-hardening-evidence-spec.md#ordered-implementation-slices) | M12 portfolio completion decision and independently repeatable scored evidence pack |
 | - [ ] | [072a: Browser coverage close](issues/072a-browser-coverage-close.md) | browser seam | [072: Independent repeat](issues/072-independent-repeat.md) | [Portfolio hardening, drill suite and repeatable evidence specification](../../docs/superpowers/specs/2026-09-14-14-portfolio-hardening-evidence-spec.md#ordered-implementation-slices) | second-operator browser integration evidence |
+
+## Deferred external-service activation
+
+These operational tickets start only after external tracker ticket 073 confirms complete implementation and pinned root verification. They configure real services and collect live evidence without changing platform semantics.
+
+| Done | Ticket | Blocked by | Produced record |
+| --- | --- | --- | --- |
+| - [ ] | [074: Clerk live cutover](issues/074-clerk-live-cutover.md) | 073: Full implementation complete | Redacted Clerk configuration and browser acceptance record |
+| - [ ] | [075: Azure live environment](issues/075-azure-live-environment.md) | 074: Clerk live cutover | M9-compatible Azure environment and checkpoint record |
+| - [ ] | [076: Graph live installation](issues/076-graph-live-installation.md) | 075: Azure live environment | Graph consent, installation and certification record |
+| - [ ] | [077: Azure SQL live installation](issues/077-sql-live-installation.md) | 076: Graph live installation | SQL transaction and reconciliation record |
+| - [ ] | [078: Blob live installation](issues/078-blob-live-installation.md) | 077: Azure SQL live installation | Blob conditional-write and change-feed record |
+| - [ ] | [079: Azure Boards live installation](issues/079-boards-live-installation.md) | 078: Blob live installation | Boards permission and WIQL/revision record |
+| - [ ] | [080: Jira live installation](issues/080-jira-live-installation.md) | 079: Azure Boards live installation | Jira 3LO and JQL reconciliation record |

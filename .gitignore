@@ -4,3 +4,12 @@ node_modules/
 coverage/
 dist/
 *.tsbuildinfo
+apps/browser/.env.local
+apps/browser/.env.server.local
+.vercel
+.env*
+.scratch/
+docs
+.superpowers/
+.agents
+tests/
