@@ -1,10 +1,11 @@
 import { canonicalJson, digest, tenantId, type TenantId } from '../../contracts/src/index.js';
+import { assemblePackage, type StudioDraft } from './studio.js';
 
 export class LifecycleError extends Error { constructor(public readonly code: 'CONFLICT' | 'DENIED' | 'INVALID' | 'NOT_FOUND' | 'STALE') { super('Lifecycle request was not accepted.'); this.name = 'LifecycleError'; } }
 const fail = (code: LifecycleError['code']): never => { throw new LifecycleError(code); };
 const validDigest = (value: string): boolean => /^[a-f0-9]{64}$/u.test(value);
 const frozen = <Value>(value: Value): Value => Object.freeze(JSON.parse(canonicalJson(value)) as Value);
-const safeContent = (value: unknown): boolean => value === null || typeof value !== 'object' ? true : Array.isArray(value) ? value.every(safeContent) : Object.entries(value as Record<string, unknown>).every(([key, child]) => !/secret|token|password|executable/iu.test(key) && safeContent(child));
+const safeContent = (value: unknown): boolean => value === null || typeof value !== 'object' ? true : Array.isArray(value) ? value.every(safeContent) : Object.entries(value as Record<string, unknown>).every(([key, child]) => (key === 'tokens' || !/secret|token|password|executable/iu.test(key)) && safeContent(child));
 
 export interface PackageArtifact { id: string; version: string; digest: string; kind: 'agent' | 'skill' | 'workflow' | 'evaluation' | 'documentation'; content: Record<string, unknown>; }
 export interface PackageDraft { id: string; version: string; author: string; artifacts: readonly PackageArtifact[]; dependencies: readonly { id: string; version: string; digest: string }[]; bindings: readonly string[]; overlayPaths: readonly string[]; }
@@ -25,6 +26,7 @@ export class SolutionLifecycle {
     if (!input.id || !input.version || !input.author || !input.artifacts.length || this.#drafts.has(`${input.id}@${input.version}`) || new Set(input.artifacts.map((artifact) => artifact.id)).size !== input.artifacts.length || input.artifacts.some((artifact) => !artifact.id || !artifact.version || !validDigest(artifact.digest) || !safeContent(artifact.content))) fail('INVALID');
     const draft = frozen({ ...input, artifacts: [...input.artifacts].sort((a, b) => a.id.localeCompare(b.id)), dependencies: [...input.dependencies].sort((a, b) => a.id.localeCompare(b.id)), bindings: [...new Set(input.bindings)].sort(), overlayPaths: [...new Set(input.overlayPaths)].sort() }); this.#drafts.set(`${draft.id}@${draft.version}`, draft); return draft;
   }
+  async authorStudio(input: StudioDraft): Promise<PackageDraft> { return this.author(await assemblePackage(input)); }
   async resolve(id: string, version: string, overlay: Record<string, unknown> = {}): Promise<ResolvedPackage> {
     const draft = this.#drafts.get(`${id}@${version}`) ?? fail('NOT_FOUND'); const lock = draft.dependencies;
     if (new Set(lock.map((dependency) => dependency.id)).size !== lock.length || lock.some((dependency) => !dependency.id || !dependency.version || !validDigest(dependency.digest) || this.#revoked.has(dependency.digest)) || Object.keys(overlay).some((path) => !draft.overlayPaths.includes(path) || /artifact|schema|signature|approver|risk|audit|gateway/iu.test(path))) fail('DENIED');
