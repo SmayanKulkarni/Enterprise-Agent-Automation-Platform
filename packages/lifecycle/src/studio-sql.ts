@@ -7,7 +7,7 @@ export type StudioState = 'draft' | 'candidate' | 'approved' | 'signed' | 'publi
 export interface StudioStoredDraft { id: string; tenantId: string; revision: number; state: StudioState; digest: string; author: string; draft: StudioDraft; createdAt: string; }
 export interface StudioRunEvidence { id: string; revision: number; subjectDigest: string; kind: 'checks' | 'simulation' | 'evaluation'; status: 'passed' | 'failed' | 'blocked' | 'inconclusive'; report: Record<string, unknown>; }
 export interface StudioReviewEvidence { id: string; revision: number; candidateDigest: string; decision: 'approved' | 'rejected' | 'signed' | 'published'; actorId: string; reason: string; evidenceIds: readonly string[]; }
-export interface CommandReceipt { commandId: string; objectId: string; revision: number; state: StudioState; digest: string; evidenceIds: readonly string[]; }
+export interface CommandReceipt extends Record<string, unknown> { commandId: string; objectId: string; revision: number; state: StudioState; digest: string; evidenceIds: readonly string[]; }
 export interface StudioStore {
   create(context: ExecutionContext, id: string, draft: StudioDraft): Promise<StudioStoredDraft>;
   get(context: ExecutionContext, id: string): Promise<StudioStoredDraft>;

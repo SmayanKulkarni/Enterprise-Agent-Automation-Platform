@@ -5,7 +5,7 @@ import { type IdentityReadStore, type ExecutionContext, type Proof } from '../..
 
 export interface BrowserRequest { method: 'GET' | 'POST'; path: string; headers: Readonly<Record<string, string | undefined>>; body?: Uint8Array; }
 export interface BrowserResponse { status: number; headers: Record<string, string>; body: Uint8Array; }
-export interface BrowserCommand { tenantId: string; owner: string; name: string; idempotencyKey: string; correlationId: string; expectedVersion: number; digest: string; envelope: ContractEnvelope; }
+export interface BrowserCommand { context: ExecutionContext; tenantId: string; owner: string; name: string; idempotencyKey: string; correlationId: string; expectedVersion: number; digest: string; envelope: ContractEnvelope; }
 export type BrowserCommandHandler = (command: BrowserCommand) => Promise<Record<string, unknown>> | Record<string, unknown>;
 export interface ClerkSessionClaims { issuer: string; subject: string; sessionId: string; audience: string; expiresAt: string; tokenUse: string; authorizedParty: string; }
 export interface ClerkSessionPort { verifySessionToken(token: string): Promise<ClerkSessionClaims> | ClerkSessionClaims; getSession(sessionId: string): Promise<{ subject: string; status: 'active' | 'ended' | 'revoked' }> | { subject: string; status: 'active' | 'ended' | 'revoked' }; }
@@ -181,13 +181,13 @@ export class BrowserV1Transport {
   private assertOrigin(request: BrowserRequest): void { const origin = header(request, 'origin'); if (origin === undefined || !this.options.allowedOrigins.includes(origin)) throw new Error('DENIED'); }
   private async command(request: BrowserRequest, routeTenant: string, owner: string, name: string): Promise<BrowserResponse> {
     const authorization = header(request, 'authorization'); const key = header(request, 'idempotency-key'); const correlation = header(request, 'x-correlation-id'); const contentType = header(request, 'content-type');
-    if (!authorization?.startsWith('Bearer ') || authorization.length < 8 || key === undefined || !UUID.test(correlation ?? '') || contentType !== MEDIA_TYPE || request.body === undefined) throw new Error('DENIED');
-    await this.context(request, routeTenant); const envelope = decodeContract(descriptorFor('browser.v1'), request.body, routeTenant);
+    if (!authorization?.startsWith('Bearer ') || authorization.length < 8 || key === undefined || !UUID.test(key) || !UUID.test(correlation ?? '') || contentType !== MEDIA_TYPE || request.body === undefined) throw new Error('DENIED');
+    const context = await this.context(request, routeTenant); if (context === undefined) return this.featureNotReady(request, routeTenant); const envelope = decodeContract(descriptorFor('browser.v1'), request.body, routeTenant);
     const payload = envelope.payload; const expectedVersion = payload['expectedVersion']; const argumentsValue = payload['arguments']; const ifMatch = header(request, 'if-match');
-    if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0 || ifMatch !== String(expectedVersion)) throw new Error('STALE'); const version = expectedVersion;
-    const command: BrowserCommand = { tenantId: routeTenant, owner, name, idempotencyKey: key, correlationId: correlationId(correlation), expectedVersion: version, digest: await digest(argumentsValue), envelope };
+    if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0 || ifMatch !== String(expectedVersion) || argumentsValue === null || Array.isArray(argumentsValue) || typeof argumentsValue !== 'object' || Buffer.byteLength(canonicalJson(argumentsValue)) > 65536) throw new Error('STALE'); const version = expectedVersion;
+    const command: BrowserCommand = { context, tenantId: routeTenant, owner, name, idempotencyKey: key, correlationId: correlationId(correlation), expectedVersion: version, digest: await digest(argumentsValue), envelope };
     const handler = this.#commands[`${owner}.${name}`]; if (handler === undefined) return this.featureNotReady(request, routeTenant);
-    await this.context(request, routeTenant); return this.success(request, routeTenant, await handler(command));
+    const current = await this.context(request, routeTenant); if (current === undefined || current.tenantEpoch !== context.tenantEpoch || current.membershipEpoch !== context.membershipEpoch) throw new Error('STALE'); return this.success(request, routeTenant, await handler({ ...command, context: current }));
   }
   private async featureNotReady(request: BrowserRequest, selectedTenant: string | undefined): Promise<BrowserResponse> { return this.error(request, 501, { category: 'terminal', code: 'FEATURE_NOT_READY', message: 'This feature is not ready.', redacted: true }, selectedTenant); }
   private async success(request: BrowserRequest, selectedTenant: string | undefined, payload: Record<string, unknown>): Promise<BrowserResponse> { return this.response(request, 200, selectedTenant, payload); }
