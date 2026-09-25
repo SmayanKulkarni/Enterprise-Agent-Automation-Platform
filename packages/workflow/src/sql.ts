@@ -1,0 +1,94 @@
+import sql from 'mssql';
+import { canonicalJson } from '../../contracts/src/index.js';
+import type { ExecutionContext } from '../../identity/src/index.js';
+import type { WorkflowDefinition } from './graph.js';
+
+export type RecordKind = 'installation' | 'run' | 'effect' | 'summary' | 'grant' | 'circuit' | 'webhook-credential' | 'webhook-dispatch' | 'memory-import' | 'memory-item' | 'memory-lifecycle' | 'memory-retrieval';
+export interface WorkflowRecord<T = Record<string, unknown>> { id: string; kind: RecordKind; version: number; state: string; data: T; }
+export interface PublishedDefinition { id: string; draftId: string; draftRevision: number; digest: string; definition: WorkflowDefinition; }
+export interface PendingWebhookDispatch { tenantId: string; runId: string; }
+export interface WorkflowStore {
+  assertProfile(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator'): Promise<void>;
+  read<T>(context: ExecutionContext, kind: RecordKind, id: string): Promise<WorkflowRecord<T> | undefined>;
+  list<T>(context: ExecutionContext, kind: RecordKind): Promise<readonly WorkflowRecord<T>[]>;
+  write(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator', kind: RecordKind, id: string, expectedVersion: number, state: string, data: unknown, key: string, requestDigest: string, receipt: Record<string, unknown>): Promise<{ receipt: Record<string, unknown>; replayed: boolean }>;
+  workerRead<T>(tenantId: string, kind: RecordKind, id: string): Promise<WorkflowRecord<T> | undefined>;
+  workerList<T>(tenantId: string, kind: RecordKind): Promise<readonly WorkflowRecord<T>[]>;
+  workerWrite<T>(tenantId: string, kind: RecordKind, id: string, expectedVersion: number, state: string, data: T): Promise<WorkflowRecord<T>>;
+  admitWebhookRun?(tenantId: string, runId: string, definitionId: string, inputDigest: string, run: unknown): Promise<boolean>;
+  pendingWebhookDispatches?(): Promise<readonly PendingWebhookDispatch[]>;
+  workerDefinition(tenantId: string, id: string): Promise<PublishedDefinition | undefined>;
+  definitions(context: ExecutionContext, id?: string): Promise<readonly PublishedDefinition[]>;
+  publish(context: ExecutionContext, definition: WorkflowDefinition, draftId: string, draftRevision: number, draftDigest: string, reviewDigest: string): Promise<void>;
+}
+
+const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
+const mapError = (error: unknown): never => {
+  const number = error !== null && typeof error === 'object' && 'number' in error ? error.number : undefined;
+  if (number === 50001) fail('DENIED');
+  if (number === 50002) fail('INVALID');
+  if (number === 50003) fail('STALE');
+  if (number === 50004) fail('CONFLICT');
+  throw error;
+};
+const rowRecord = <T>(row: Record<string, unknown>): WorkflowRecord<T> => ({ id: String(row['id']), kind: String(row['kind']) as RecordKind, version: Number(row['version']), state: String(row['state']), data: JSON.parse(String(row['data_json'])) as T });
+const pools = new Map<string, Promise<sql.ConnectionPool>>();
+
+export class AzureSqlWorkflowStore implements WorkflowStore {
+  constructor(private readonly connectionString: string) { if (!connectionString.trim()) fail('INVALID'); }
+  private context(context: ExecutionContext): (request: sql.Request) => sql.Request { return (request) => request.input('tenant_id', sql.UniqueIdentifier, String(context.tenantId)).input('user_id', sql.UniqueIdentifier, context.userId).input('tenant_epoch', sql.BigInt, context.tenantEpoch).input('membership_epoch', sql.BigInt, context.membershipEpoch); }
+  private async call(procedure: string, bind: (request: sql.Request) => sql.Request): Promise<sql.IProcedureResult<unknown>> {
+    let pool = pools.get(this.connectionString);
+    if (!pool) { pool = new sql.ConnectionPool(this.connectionString).connect(); pools.set(this.connectionString, pool); }
+    try { return await bind((await pool).request()).execute(procedure); } catch (error) { return mapError(error); }
+  }
+  async assertProfile(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator'): Promise<void> {
+    await this.call('workflow.check_profile', (request) => this.context(context)(request).input('profile', sql.NVarChar(32), profile));
+  }
+  async read<T>(context: ExecutionContext, kind: RecordKind, id: string): Promise<WorkflowRecord<T> | undefined> {
+    const result = await this.call('workflow.read_record', (request) => this.context(context)(request).input('kind', sql.NVarChar(24), kind).input('id', sql.UniqueIdentifier, id));
+    const row = result.recordset[0] as Record<string, unknown> | undefined; return row && rowRecord<T>(row);
+  }
+  async list<T>(context: ExecutionContext, kind: RecordKind): Promise<readonly WorkflowRecord<T>[]> {
+    const result = await this.call('workflow.read_record', (request) => this.context(context)(request).input('kind', sql.NVarChar(24), kind).input('id', sql.UniqueIdentifier, null));
+    return (result.recordset as Record<string, unknown>[]).map(rowRecord<T>);
+  }
+  async write(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator', kind: RecordKind, id: string, expectedVersion: number, state: string, data: unknown, key: string, requestDigest: string, receipt: Record<string, unknown>): Promise<{ receipt: Record<string, unknown>; replayed: boolean }> {
+    const result = await this.call('workflow.write_record', (request) => this.context(context)(request).input('profile', sql.NVarChar(32), profile).input('kind', sql.NVarChar(24), kind).input('id', sql.UniqueIdentifier, id).input('expected_version', sql.BigInt, expectedVersion).input('state', sql.NVarChar(32), state).input('data_json', sql.NVarChar(sql.MAX), canonicalJson(data)).input('idempotency_key', sql.UniqueIdentifier, key).input('request_digest', sql.Char(64), requestDigest).input('receipt_json', sql.NVarChar(sql.MAX), canonicalJson(receipt)));
+    const row = result.recordset[0] as { receipt_json?: string; replayed?: boolean } | undefined;
+    if (row === undefined || typeof row.receipt_json !== 'string') throw Object.assign(new Error('INVALID'), { code: 'INVALID' });
+    return { receipt: JSON.parse(row.receipt_json) as Record<string, unknown>, replayed: Boolean(row.replayed) };
+  }
+  async workerRead<T>(tenantId: string, kind: RecordKind, id: string): Promise<WorkflowRecord<T> | undefined> {
+    const result = await this.call('workflow.worker_read_record', (request) => request.input('tenant_id', sql.UniqueIdentifier, tenantId).input('kind', sql.NVarChar(24), kind).input('id', sql.UniqueIdentifier, id));
+    const row = result.recordset[0] as Record<string, unknown> | undefined; return row && rowRecord<T>(row);
+  }
+  async workerList<T>(tenantId: string, kind: RecordKind): Promise<readonly WorkflowRecord<T>[]> {
+    const result = await this.call('workflow.worker_list_records', (request) => request.input('tenant_id', sql.UniqueIdentifier, tenantId).input('kind', sql.NVarChar(24), kind));
+    return (result.recordset as Record<string, unknown>[]).map(rowRecord<T>);
+  }
+  async workerWrite<T>(tenantId: string, kind: RecordKind, id: string, expectedVersion: number, state: string, data: T): Promise<WorkflowRecord<T>> {
+    const result = await this.call('workflow.worker_write_record', (request) => request.input('tenant_id', sql.UniqueIdentifier, tenantId).input('kind', sql.NVarChar(24), kind).input('id', sql.UniqueIdentifier, id).input('expected_version', sql.BigInt, expectedVersion).input('state', sql.NVarChar(32), state).input('data_json', sql.NVarChar(sql.MAX), canonicalJson(data)));
+    const row = result.recordset[0] as Record<string, unknown> | undefined; return row ? rowRecord<T>(row) : fail('INVALID');
+  }
+  async admitWebhookRun(tenantId: string, runId: string, definitionId: string, inputDigest: string, run: unknown): Promise<boolean> {
+    const result = await this.call('workflow.admit_webhook_run', (request) => request.input('tenant_id', sql.UniqueIdentifier, tenantId).input('run_id', sql.UniqueIdentifier, runId).input('definition_id', sql.UniqueIdentifier, definitionId).input('input_digest', sql.Char(64), inputDigest).input('run_json', sql.NVarChar(sql.MAX), canonicalJson(run)));
+    return Boolean((result.recordset[0] as { admitted?: boolean } | undefined)?.admitted);
+  }
+  async pendingWebhookDispatches(): Promise<readonly PendingWebhookDispatch[]> {
+    const result = await this.call('workflow.worker_pending_webhook_dispatches', (request) => request);
+    return (result.recordset as Record<string, unknown>[]).map((row) => ({ tenantId: String(row['tenant_id']), runId: String(row['id']) }));
+  }
+  async definitions(context: ExecutionContext, id?: string): Promise<readonly PublishedDefinition[]> {
+    const result = await this.call('workflow.read_definitions', (request) => this.context(context)(request).input('id', sql.UniqueIdentifier, id ?? null));
+    return (result.recordset as Record<string, unknown>[]).map((row) => ({ id: String(row['id']), draftId: String(row['draft_id']), draftRevision: Number(row['draft_revision']), digest: String(row['digest']), definition: JSON.parse(String(row['definition_json'])) as WorkflowDefinition }));
+  }
+  async workerDefinition(tenantId: string, id: string): Promise<PublishedDefinition | undefined> {
+    const result = await this.call('workflow.worker_read_definition', (request) => request.input('tenant_id', sql.UniqueIdentifier, tenantId).input('id', sql.UniqueIdentifier, id));
+    const row = result.recordset[0] as Record<string, unknown> | undefined;
+    return row && { id: String(row['id']), draftId: String(row['draft_id']), draftRevision: Number(row['draft_revision']), digest: String(row['digest']), definition: JSON.parse(String(row['definition_json'])) as WorkflowDefinition };
+  }
+  async publish(context: ExecutionContext, definition: WorkflowDefinition, draftId: string, draftRevision: number, draftDigest: string, reviewDigest: string): Promise<void> {
+    await this.call('workflow.publish_definition', (request) => this.context(context)(request).input('id', sql.UniqueIdentifier, definition.id).input('draft_id', sql.UniqueIdentifier, draftId).input('revision', sql.BigInt, draftRevision).input('draft_digest', sql.Char(64), draftDigest).input('digest', sql.Char(64), definition.digest).input('definition_json', sql.NVarChar(sql.MAX), canonicalJson(definition)).input('review_digest', sql.Char(64), reviewDigest));
+  }
+}

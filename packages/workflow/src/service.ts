@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { digest } from '../../contracts/src/index.js';
 import type { ExecutionContext } from '../../identity/src/index.js';
 import type { StudioStore, StudioStoredDraft } from '../../lifecycle/src/studio-sql.js';
@@ -10,14 +10,78 @@ import type { WorkflowRecord, WorkflowStore } from './sql.js';
 export interface CapabilityManifest { digest: string; version: string; certified: boolean; capabilities: readonly { name: string; risk: 'R1' | 'R2' | 'R3'; inputSchema: JsonSchema; outputSchema: JsonSchema }[]; }
 export interface Installation { id: string; route: 'public' | 'private'; endpoint?: string; tokenHash?: string; health: 'healthy' | 'offline' | 'revoked'; manifest: CapabilityManifest; }
 export interface CapabilityGrant { draftId: string; nodeId: string; installationId: string; capability: string; manifestDigest: string; }
+export interface WebhookCredential { definitionId: string; secret: string; enabled: boolean; rotatedAt: string; previousSecret?: string; previousExpiresAt?: string; }
+interface WebhookDispatch { definitionId: string; }
 export interface RunEvent { nodeId: string; kind: string; state: 'attempted' | 'completed' | 'waiting' | 'failed' | 'unknown-outcome'; at: string; detail?: string; receiptId?: string; bindingDigest?: string; }
-export interface WorkflowRun { id: string; tenantId: string; ownerId: string; stableDefinitionId: string; definitionId: string; definitionRevision: number; definitionDigest: string; inputDigest: string; input: Record<string, unknown>; status: 'queued' | 'running' | 'waiting-approval' | 'waiting-connector' | 'unknown-outcome' | 'failed' | 'completed'; history: RunEvent[]; outputs: Record<string, Record<string, unknown>>; nodeDeadlines?: Record<string, string>; waiting?: { nodeId: string; bindingDigest: string; expiresAt: string }; summaryStatus?: 'pending' | 'ready' | 'failed' | 'disabled' | 'unavailable'; }
+export interface WorkflowRun { id: string; tenantId: string; ownerId: string; stableDefinitionId: string; definitionId: string; definitionRevision: number; definitionDigest: string; inputDigest: string; input: Record<string, unknown>; status: 'queued' | 'running' | 'waiting-approval' | 'waiting-connector' | 'unknown-outcome' | 'failed' | 'completed'; history: RunEvent[]; outputs: Record<string, Record<string, unknown>>; nodeDeadlines?: Record<string, string>; waiting?: { nodeId: string; bindingDigest: string; expiresAt: string; review?: { revision: number; installationId: string; capability: string; target: string; argumentsDigest: string; arguments: readonly { name: string; type: string }[] } }; summaryStatus?: 'pending' | 'ready' | 'failed' | 'disabled' | 'unavailable'; }
 export interface Scheduler { start(runId: string, tenantId: string, definitionId: string): Promise<void>; raise(runId: string, name: string, value: unknown): Promise<void>; promoteMemory?(runId: string, tenantId: string): Promise<void>; correctMemory?(itemId: string, tenantId: string, text: string): Promise<void>; removeMemory?(itemId: string, tenantId: string): Promise<void>; }
+export type WebhookDeliveryOutcome = 'accepted' | 'invalid-shape' | 'signature' | 'freshness' | 'replay' | 'credential-state' | 'not-found';
+export interface WebhookDelivery { outcome: WebhookDeliveryOutcome; runId?: string; }
 type MemoryReadiness = 'disabled' | 'not-configured' | 'ready' | 'unavailable';
 
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const id = (value: unknown): string => typeof value === 'string' && uuid.test(value) ? value : fail('INVALID');
+const webhookMessage = (tenantId: string, definitionId: string, timestamp: string, eventId: string, body: Uint8Array): Buffer => Buffer.concat([Buffer.from(`${tenantId}:${definitionId}:${timestamp}:${eventId}:`), Buffer.from(body)]);
+const credentialSecrets = (credential: WorkflowRecord<WebhookCredential> | undefined, fallback: string | undefined, now: number): readonly string[] => {
+  if (!credential) return fallback ? [fallback] : [];
+  if (credential.state !== 'active' || !credential.data.enabled) return [];
+  return [credential.data.secret, ...(credential.data.previousSecret && credential.data.previousExpiresAt && Date.parse(credential.data.previousExpiresAt) > now ? [credential.data.previousSecret] : [])];
+};
+
+export async function deliverWebhook(store: WorkflowStore, scheduler: Scheduler, request: { tenantId: string | undefined; definitionId: string | undefined; eventId: string | undefined; timestamp: string | undefined; signature: string | undefined; body: Uint8Array; fallbackSecret?: string; now?: number }): Promise<WebhookDelivery> {
+  const { tenantId, definitionId, eventId, timestamp, signature, body } = request;
+  const now = request.now ?? Date.now();
+  if (!uuid.test(tenantId ?? '') || !uuid.test(definitionId ?? '') || !uuid.test(eventId ?? '') || !timestamp || !signature || !/^sha256=[a-f0-9]{64}$/iu.test(signature)) return { outcome: 'invalid-shape' };
+  const tenant = tenantId as string; const definition = definitionId as string; const event = eventId as string; const signedAt = timestamp as string; const signedValue = signature as string;
+  const time = Date.parse(signedAt);
+  if (!Number.isFinite(time) || Math.abs(now - time) > 300000) return { outcome: 'freshness' };
+  const published = await store.workerDefinition(tenant, definition);
+  if (!published) return { outcome: 'not-found' };
+  const credential = await store.workerRead<WebhookCredential>(tenant, 'webhook-credential', definition);
+  const secrets = credentialSecrets(credential, request.fallbackSecret, now);
+  if (!secrets.length) return { outcome: 'credential-state' };
+  const received = Buffer.from(signedValue.slice(7), 'hex');
+  if (!secrets.some((secret) => timingSafeEqual(createHmac('sha256', secret).update(webhookMessage(tenant, definition, signedAt, event, body)).digest(), received))) return { outcome: 'signature' };
+  let input: unknown;
+  try { input = JSON.parse(Buffer.from(body).toString('utf8')); } catch { return { outcome: 'invalid-shape' }; }
+  const trigger = published.definition.nodes.find((node) => node.id === published.definition.start);
+  if (trigger?.config['mode'] !== 'webhook' || !validateValue(input, trigger.config['inputSchema'] as JsonSchema)) return { outcome: 'invalid-shape' };
+  const run: WorkflowRun = { id: event, tenantId: tenant, ownerId: `webhook:${definition}`, stableDefinitionId: published.draftId, definitionId: definition, definitionRevision: published.draftRevision, definitionDigest: published.digest, inputDigest: await digest(input), input: input as Record<string, unknown>, status: 'queued', history: [], outputs: {}, summaryStatus: 'pending' };
+  let admitted: boolean;
+  try { admitted = store.admitWebhookRun ? await store.admitWebhookRun(tenant, event, definition, run.inputDigest, run) : (await store.workerWrite(tenant, 'run', event, 0, 'queued', run), await store.workerWrite(tenant, 'webhook-dispatch', event, 0, 'pending', { definitionId: definition }), true); }
+  catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'STALE')) throw error;
+    const previous = await store.workerRead<WorkflowRun>(tenant, 'run', event);
+    if (!previous || previous.data.definitionId !== definition || previous.data.inputDigest !== run.inputDigest) return { outcome: 'replay' };
+    admitted = false;
+  }
+  if (!admitted) {
+    const previous = await store.workerRead<WorkflowRun>(tenant, 'run', event);
+    if (!previous || previous.data.definitionId !== definition || previous.data.inputDigest !== run.inputDigest) return { outcome: 'replay' };
+  }
+  await recoverWebhookDispatch(store, scheduler, tenant, event);
+  return { outcome: admitted ? 'accepted' : 'replay', runId: event };
+}
+
+export async function recoverWebhookDispatch(store: WorkflowStore, scheduler: Scheduler, tenantId: string, runId?: string): Promise<number> {
+  const intents = runId ? [await store.workerRead<WebhookDispatch>(tenantId, 'webhook-dispatch', runId)].filter((value): value is WorkflowRecord<WebhookDispatch> => value !== undefined) : await store.workerList<WebhookDispatch>(tenantId, 'webhook-dispatch');
+  let recovered = 0;
+  for (const intent of intents) {
+    if (intent.state !== 'pending') continue;
+    try { await scheduler.start(intent.id, tenantId, intent.data.definitionId); }
+    catch { continue; }
+    await store.workerWrite(tenantId, 'webhook-dispatch', intent.id, intent.version, 'scheduled', intent.data);
+    recovered += 1;
+  }
+  return recovered;
+}
+
+export async function recoverPendingWebhookDispatches(store: WorkflowStore, scheduler: Scheduler): Promise<number> {
+  const pending = await store.pendingWebhookDispatches?.() ?? [];
+  const recovered = await Promise.all(pending.map((item) => recoverWebhookDispatch(store, scheduler, item.tenantId, item.runId)));
+  return recovered.reduce((total, value) => total + value, 0);
+}
 const graph = (stored: StudioStoredDraft<StudioDraft | GraphDraft>): GraphDraft => {
   const value = stored.draft as unknown as GraphDraft;
   if (value.kind !== 'graph-v1') fail('INVALID');
@@ -116,6 +180,42 @@ export class WorkflowService {
     await this.store.write(context, 'admin', 'grant', id(key), 0, 'active', data, key, requestDigest, { commandId: key, objectId: key, revision: 1, state: 'active', digest: data.manifestDigest, evidenceIds: [] });
   }
 
+  async webhookCredential(context: ExecutionContext, definitionId: string, action: 'provision' | 'rotate' | 'disable', expectedVersion: number, key: string, requestDigest: string): Promise<string | undefined> {
+    await this.store.assertProfile(context, 'admin');
+    const published = (await this.store.definitions(context, id(definitionId)))[0];
+    if (!published || published.definition.nodes.find((node) => node.id === published.definition.start)?.config['mode'] !== 'webhook') fail('INVALID');
+    const current = await this.store.read<WebhookCredential>(context, 'webhook-credential', definitionId);
+    if ((current?.version ?? 0) !== expectedVersion || action === 'provision' && current) fail('STALE');
+    const secret = action === 'disable' ? undefined : randomBytes(32).toString('base64url');
+    const now = new Date().toISOString();
+    const data: WebhookCredential = action === 'disable'
+      ? { ...current!.data, enabled: false, rotatedAt: now }
+      : {
+        definitionId,
+        secret: secret!,
+        enabled: true,
+        rotatedAt: now,
+        ...(action === 'rotate' && current?.data.enabled
+          ? { previousSecret: current.data.secret, previousExpiresAt: new Date(Date.now() + 300000).toISOString() }
+          : {}),
+      };
+    const state = data.enabled ? 'active' : 'disabled';
+    const receipt = { commandId: key, objectId: definitionId, revision: expectedVersion + 1, state, digest: await digest({ definitionId, enabled: data.enabled, rotatedAt: data.rotatedAt }), evidenceIds: [] };
+    const result = await this.store.write(context, 'admin', 'webhook-credential', definitionId, expectedVersion, state, data, key, requestDigest, receipt);
+    return result.replayed ? undefined : secret;
+  }
+
+  async testWebhook(context: ExecutionContext, definitionId: string, input: Record<string, unknown>): Promise<WebhookDelivery> {
+    const scheduler = this.scheduler ?? fail('FEATURE_NOT_READY');
+    await this.store.assertProfile(context, 'admin');
+    const tenantId = String(context.tenantId); const idValue = id(definitionId);
+    const credential = await this.store.read<WebhookCredential>(context, 'webhook-credential', idValue);
+    if (!credential || credential.state !== 'active' || !credential.data.enabled) return { outcome: 'credential-state' };
+    const eventId = randomUUID(); const timestamp = new Date().toISOString(); const body = Buffer.from(JSON.stringify(input));
+    const signature = `sha256=${createHmac('sha256', credential.data.secret).update(webhookMessage(tenantId, idValue, timestamp, eventId, body)).digest('hex')}`;
+    return deliverWebhook(this.store, scheduler, { tenantId, definitionId: idValue, eventId, timestamp, signature, body });
+  }
+
   async importMemory(context: ExecutionContext, targetDefinitionId: string, sourceDefinitionId: string, key: string, requestDigest: string): Promise<void> {
     await this.store.assertProfile(context, 'admin');
     const target = (await this.store.definitions(context, id(targetDefinitionId)))[0];
@@ -210,10 +310,11 @@ export class WorkflowService {
     else if (collection === 'workflow-runs') {
       const effects = await this.store.list<{ runId: string; nodeId: string; requestDigest: string; argumentsDigest: string }>(context, 'effect');
       const retrievals = await this.store.list<{ runId: string; nodeId: string; status: string; itemIds: readonly string[]; importIds: readonly string[]; failure?: string }>(context, 'memory-retrieval');
-      records = (await this.store.list<WorkflowRun>(context, 'run')).map((item) => ({ id: item.id, version: item.version, status: item.data.status, definitionId: item.data.definitionId, stableDefinitionId: item.data.stableDefinitionId, definitionRevision: item.data.definitionRevision, definitionDigest: item.data.definitionDigest, inputDigest: item.data.inputDigest, history: item.data.history, effects: effects.filter((effect) => effect.data.runId === item.id).map((effect) => ({ id: effect.id, nodeId: effect.data.nodeId, state: effect.state, requestDigest: effect.data.requestDigest, argumentsDigest: effect.data.argumentsDigest })), retrievals: retrievals.filter((entry) => entry.data.runId === item.id).map((entry) => ({ id: entry.id, nodeId: entry.data.nodeId, status: entry.data.status, itemIds: entry.data.itemIds, importIds: entry.data.importIds, ...(memoryFailure(entry.data.failure) ? { failure: memoryFailure(entry.data.failure) } : {}) })), ...(item.data.waiting ? { waiting: item.data.waiting } : {}), ...(item.data.summaryStatus ? { summaryStatus: item.data.summaryStatus } : {}) }));
+      records = (await this.store.list<WorkflowRun>(context, 'run')).slice(0, 50).map((item) => ({ id: item.id, version: item.version, status: item.data.status, definitionId: item.data.definitionId, stableDefinitionId: item.data.stableDefinitionId, definitionRevision: item.data.definitionRevision, definitionDigest: item.data.definitionDigest, inputDigest: item.data.inputDigest, inputSummary: Object.entries(item.data.input).map(([field, value]) => ({ field, type: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value })), history: item.data.history, effects: effects.filter((effect) => effect.data.runId === item.id).map((effect) => ({ id: effect.id, nodeId: effect.data.nodeId, state: effect.state, requestDigest: effect.data.requestDigest, argumentsDigest: effect.data.argumentsDigest })), retrievals: retrievals.filter((entry) => entry.data.runId === item.id).map((entry) => ({ id: entry.id, nodeId: entry.data.nodeId, status: entry.data.status, itemIds: entry.data.itemIds, importIds: entry.data.importIds, ...(memoryFailure(entry.data.failure) ? { failure: memoryFailure(entry.data.failure) } : {}) })), ...(item.data.waiting ? { waiting: item.data.waiting } : {}), ...(item.data.summaryStatus ? { summaryStatus: item.data.summaryStatus } : {}) }));
     }
     else if (collection === 'connector-installations') records = (await this.store.list<Installation>(context, 'installation')).map((item) => ({ id: item.id, version: item.version, state: item.state, route: item.data.route, health: item.data.health, manifest: item.data.manifest }));
     else if (collection === 'workflow-grants') records = (await this.store.list<CapabilityGrant>(context, 'grant')).map((item) => ({ id: item.id, version: item.version, state: item.state, ...item.data }));
+    else if (collection === 'workflow-webhook-credentials') records = (await this.store.list<WebhookCredential>(context, 'webhook-credential')).map((item) => ({ id: item.id, version: item.version, state: item.state, definitionId: item.data.definitionId, enabled: item.data.enabled, rotatedAt: item.data.rotatedAt, ...(item.data.previousExpiresAt ? { previousExpiresAt: item.data.previousExpiresAt } : {}) }));
     else if (collection === 'workflow-memory-imports') records = (await this.store.list<MemoryImport>(context, 'memory-import')).map((item) => ({ id: item.id, version: item.version, ...item.data }));
     else if (collection === 'workflow-memory-items') records = (await this.store.list<MemoryItem>(context, 'memory-item')).map((item) => ({ id: item.id, version: item.version, state: item.state, stableDefinitionId: item.data.stableDefinitionId, definitionId: item.data.definitionId, producingRevision: item.data.producingRevision, type: item.data.type, sourceId: item.data.sourceId, sourceDigest: item.data.sourceDigest, ownerScoped: item.data.ownerId !== undefined, ...(item.data.predecessorId ? { predecessorId: item.data.predecessorId } : {}), ...(item.data.promotedAt ? { promotedAt: item.data.promotedAt } : {}), ...(item.data.expiresAt ? { expiresAt: item.data.expiresAt } : {}), hold: item.data.hold === true, ...(memoryFailure(item.data.failure) ? { failure: memoryFailure(item.data.failure) } : {}), vectorState: item.data.vectorState }));
     else if (collection === 'workflow-memory-readiness') { const state = this.memoryReadiness(tenantId); records = [{ id: '00000000-0000-5000-8000-000000000001', state, enabled: state === 'ready', provider: 'upstash-vector' }]; }
