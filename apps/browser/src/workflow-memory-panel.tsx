@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { PlatformApi, Projection } from './platform-api.js';
+import { expiryInstant, localDateTime } from './workflow-model.js';
+import { PlatformApiError, type PlatformApi, type Projection } from './platform-api.js';
 
 type MemoryItem = Record<string, unknown>;
 type Retrieval = Record<string, unknown> & { runId: unknown };
@@ -9,12 +10,14 @@ export function WorkflowMemoryPanel({ api, tenantId, definitionId, admin }: { ap
   const [readiness, setReadiness] = useState<Projection>();
   const [runs, setRuns] = useState<Projection>();
   const [replacement, setReplacement] = useState<Record<string, string>>({});
+  const [expiry, setExpiry] = useState<Record<string, string>>({});
+  const [expiryError, setExpiryError] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string>();
   const refresh = async (active = () => true) => {
     const [nextItems, nextReadiness, nextRuns] = await Promise.all([api.projection(tenantId, 'workflow-memory-items'), api.projection(tenantId, 'workflow-memory-readiness'), api.projection(tenantId, 'workflow-runs')]);
     if (active()) { setItems(nextItems); setReadiness(nextReadiness); setRuns(nextRuns); }
   };
-  useEffect(() => { let active = true; setItems(undefined); setReadiness(undefined); setRuns(undefined); setReplacement({}); setMessage(undefined); void refresh(() => active).catch(() => active && setMessage('Memory status could not be loaded.')); return () => { active = false; }; }, [api, tenantId, definitionId]);
+  useEffect(() => { let active = true; setItems(undefined); setReadiness(undefined); setRuns(undefined); setReplacement({}); setExpiry({}); setExpiryError({}); setMessage(undefined); void refresh(() => active).catch(() => active && setMessage('Memory status could not be loaded.')); return () => { active = false; }; }, [api, tenantId, definitionId]);
   const action = async (name: 'withdraw-memory' | 'hold-memory' | 'release-memory-hold' | 'delete-memory', item: MemoryItem) => {
     try { await api.command({ tenantId, owner: 'workflow', name, expectedVersion: Number(item['version']), arguments: { id: String(item['id']), reason: 'Administrator lifecycle action.' } }); setMessage('Memory lifecycle action recorded.'); await refresh(); }
     catch { setMessage('Memory lifecycle action was not accepted.'); }
@@ -28,11 +31,19 @@ export function WorkflowMemoryPanel({ api, tenantId, definitionId, admin }: { ap
     try { await api.command({ tenantId, owner: 'workflow', name: 'invalidate-memory-source', expectedVersion: 0, arguments: { sourceId } }); setMessage('Source invalidated for future retrieval.'); await refresh(); }
     catch { setMessage('Source invalidation was not accepted.'); }
   };
+  const setItemExpiry = async (item: MemoryItem) => {
+    const itemId = String(item['id']);
+    const result = expiryInstant(expiry[itemId] ?? localDateTime(String(item['expiresAt'] ?? '')), String(item['expiresAt'] ?? ''));
+    if (!result.iso) { setExpiryError((value) => ({ ...value, [itemId]: result.error! })); return; }
+    try { await api.command({ tenantId, owner: 'workflow', name: 'set-memory-expiry', expectedVersion: Number(item['version']), arguments: { id: itemId, expiresAt: result.iso } }); setExpiryError((value) => ({ ...value, [itemId]: '' })); setMessage('Memory expiry was shortened and refreshed.'); await refresh(); }
+    catch (error) { const category = error instanceof PlatformApiError ? error.category : undefined; setExpiryError((value) => ({ ...value, [itemId]: category === 'conflict' ? 'This item changed. Refresh and try again.' : category === 'denied' ? 'You are not allowed to change this expiry.' : category === 'invalid' ? 'This expiry is not valid. Choose an earlier value.' : 'Expiry could not be updated. Try again.' })); }
+  };
   const state = String(readiness?.records[0]?.['state'] ?? 'loading');
   const scoped = items?.records.filter((item) => item['stableDefinitionId'] === definitionId || item['definitionId'] === definitionId) ?? [];
   const retrievals: Retrieval[] = runs?.records.filter((run) => run['definitionId'] === definitionId || run['stableDefinitionId'] === definitionId).flatMap((run) => Array.isArray(run['retrievals']) ? (run['retrievals'] as Record<string, unknown>[]).map((item) => ({ ...item, runId: run['id'] })) : []) ?? [];
   return <section className="memory-import-panel" aria-label="Workflow memory">
     <strong>Operational memory</strong><span>Provider state: {state}</span>
+    <p>Promotion and removal retry automatically; terminal failures remain visible here.</p>
     {state === 'loading' && <p>Loading provider readiness.</p>}
     {state === 'disabled' && <p>Memory is disabled. A tenant administrator must enable it.</p>}
     {state === 'not-configured' && <p>Hosted memory is not configured. A deployment operator must configure the integration.</p>}
@@ -49,6 +60,7 @@ export function WorkflowMemoryPanel({ api, tenantId, definitionId, admin }: { ap
         <button onClick={() => void action(item['hold'] === true ? 'release-memory-hold' : 'hold-memory', item)}>{item['hold'] === true ? 'Release hold' : 'Hold'}</button>
         {item['hold'] !== true && <button onClick={() => void action('delete-memory', item)}>Delete</button>}
         <button onClick={() => void invalidate(String(item['sourceId']))}>Invalidate source</button>
+        {typeof item['expiresAt'] === 'string' && <label>Expiry<input type="datetime-local" aria-describedby={expiryError[String(item['id'])] ? `expiry-${String(item['id'])}` : undefined} value={expiry[String(item['id'])] ?? localDateTime(item['expiresAt'])} max={localDateTime(item['expiresAt'])} onChange={(event) => { const itemId = String(item['id']); setExpiry((value) => ({ ...value, [itemId]: event.target.value })); setExpiryError((value) => ({ ...value, [itemId]: '' })); }} /><button onClick={() => void setItemExpiry(item)}>Set expiry</button>{expiryError[String(item['id'])] && <span id={`expiry-${String(item['id'])}`} role="alert">{expiryError[String(item['id'])]}</span>}</label>}
         <input aria-label={`Correct ${String(item['id'])}`} value={replacement[String(item['id'])] ?? ''} onChange={(event) => setReplacement((value) => ({ ...value, [String(item['id'])]: event.target.value }))} placeholder="Corrected redacted fact" />
         <button disabled={!replacement[String(item['id'])]} onClick={() => void correct(item)}>Correct</button>
       </div>}

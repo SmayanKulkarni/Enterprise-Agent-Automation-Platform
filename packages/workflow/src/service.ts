@@ -138,7 +138,7 @@ export class WorkflowService {
     const current = await this.store.read<MemoryItem>(context, 'memory-item', id(itemId));
     if (!current || current.version !== expectedVersion) return fail('STALE');
     if (action === 'delete' && current.data.hold) return fail('DENIED');
-    if (action === 'set-expiry' && (!expiresAt || Number.isNaN(Date.parse(expiresAt)) || Date.parse(expiresAt) > Date.now() + 90 * 86400000)) return fail('INVALID');
+    if (action === 'set-expiry' && (!expiresAt || !current.data.expiresAt || Number.isNaN(Date.parse(expiresAt)) || Number.isNaN(Date.parse(current.data.expiresAt)) || new Date(expiresAt).toISOString() !== expiresAt || Date.parse(expiresAt) > Date.parse(current.data.expiresAt) || Date.parse(expiresAt) > Date.now() + 90 * 86400000)) return fail('INVALID');
     const state = action === 'withdraw' ? 'withdrawn' : action === 'delete' ? 'delete-requested' : current.state;
     const data: MemoryItem = { ...current.data, ...(action === 'hold' ? { hold: true } : {}), ...(action === 'release-hold' ? { hold: false } : {}), ...(action === 'set-expiry' && expiresAt ? { expiresAt } : {}), ...(action === 'delete' || action === 'withdraw' ? { vectorState: 'remove-pending' } : {}) };
     const receiptId = id(key);

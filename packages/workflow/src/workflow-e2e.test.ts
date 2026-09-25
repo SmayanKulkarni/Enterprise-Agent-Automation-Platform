@@ -226,4 +226,14 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   await proposalWorker.step(tenant, proposalRunId, proposalDefinitionId, 'start'); await proposalWorker.step(tenant, proposalRunId, proposalDefinitionId, 'agent'); await proposalWorker.step(tenant, proposalRunId, proposalDefinitionId, 'end'); await proposalWorker.promote(tenant, proposalRunId);
   const proposalStates = (await store.workerList<MemoryItem>(tenant, 'memory-item')).filter((candidate) => candidate.data.sourceId.includes(proposalRunId)).map((candidate) => candidate.state);
   expect(proposalStates).toEqual(expect.arrayContaining(['promoted', 'rejected']));
+
+  const expiryItemId = randomUUID(); const currentExpiry = new Date(Date.now() + 86400000).toISOString(); const shorterExpiry = new Date(Date.now() + 3600000).toISOString();
+  await store.workerWrite<MemoryItem>(tenant, 'memory-item', expiryItemId, 0, 'promoted', { stableDefinitionId: memoryDraftId, definitionId: targetDefinitionId, producingRevision: 1, type: 'task-fact', sourceId: `event:${importedId}:expiry`, sourceDigest: 'a'.repeat(64), sourceKind: 'event', fingerprint: 'c'.repeat(64), expiresAt: currentExpiry, vectorState: 'ready' });
+  expect((await command(admin, 'workflow.set-memory-expiry', 1, { id: expiryItemId, expiresAt: shorterExpiry })).status).toBe(200);
+  expect((await store.workerRead<MemoryItem>(tenant, 'memory-item', expiryItemId))?.data.expiresAt).toBe(shorterExpiry);
+  expect((await command(admin, 'workflow.set-memory-expiry', 1, { id: expiryItemId, expiresAt: shorterExpiry })).payload['error']).toMatchObject({ category: 'conflict', code: 'STALE' });
+  expect((await command(editor, 'workflow.set-memory-expiry', 2, { id: expiryItemId, expiresAt: shorterExpiry })).payload['error']).toMatchObject({ category: 'denied' });
+  expect((await command(admin, 'workflow.set-memory-expiry', 2, { id: expiryItemId, expiresAt: currentExpiry })).payload['error']).toMatchObject({ category: 'invalid' });
+  expect((await command(admin, 'workflow.hold-memory', 2, { id: expiryItemId, reason: 'retention review' })).status).toBe(200);
+  expect((await command(admin, 'workflow.delete-memory', 3, { id: expiryItemId, reason: 'retention review' })).payload['error']).toMatchObject({ category: 'denied' });
 });
