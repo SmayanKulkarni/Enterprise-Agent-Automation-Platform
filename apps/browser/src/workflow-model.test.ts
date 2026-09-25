@@ -1,11 +1,20 @@
 import { describe, expect, test } from 'vitest';
-import { connect, disconnect, expiryInstant, initialEdges, initialNodes, localDateTime, memoryProposalsEnabled, setMemoryProposals, updateIntegerConfig } from './workflow-model.js';
+import { conditionFields, conditionSources, connect, disconnect, expiryInstant, initialEdges, initialNodes, localDateTime, mappingFields, memoryProposalsEnabled, parseTriggerInput, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
 
 describe('workflow graph', () => {
   test('only creates valid, non-duplicate connections', () => {
     expect(connect(initialNodes, initialEdges, 'trigger', 'plan')).toHaveLength(initialEdges.length + 1);
     expect(connect(initialNodes, initialEdges, 'trigger', 'triage')).toEqual(initialEdges);
     expect(connect(initialNodes, initialEdges, 'trigger', 'missing')).toEqual(initialEdges);
+  });
+
+  test('offers only preceding typed condition sources and prevents duplicate branches', () => {
+    const nodes = [...starterNodes, { id: 'condition', kind: 'condition' as const, title: 'Condition', detail: '', x: 0, y: 0, instructions: '', config: { source: 'agent', field: 'result', equals: 'ready' } }];
+    const edges = [...starterEdges.slice(0, 1), { id: 'agent-condition', from: 'agent', to: 'condition' }];
+    expect(conditionSources(nodes, edges, 'condition').map((node) => node.id)).toEqual(['trigger', 'agent']);
+    expect(conditionFields(nodes[1]!)).toEqual([['result', 'string']]);
+    const branched = connect(nodes, edges, 'condition', 'trigger', 'true');
+    expect(connect(nodes, branched, 'condition', 'agent', 'true')).toEqual(branched);
   });
 
   test('removes a connection by id', () => {
@@ -33,5 +42,19 @@ describe('workflow graph', () => {
     expect(expiryInstant('', current).error).toBe('Enter an expiry date and time.');
     expect(expiryInstant('2026-02-30T12:00', current).error).toBe('Enter a valid expiry date and time.');
     expect(expiryInstant('2026-10-02T12:00', current).error).toBe('Expiry can only be shortened.');
+  });
+
+  test('edits a trigger contract and parses typed manual input', () => {
+    const schema = setSchemaField({ type: 'object', properties: {}, required: [], additionalProperties: false }, 'priority', 'number', true);
+    expect(schema).toEqual({ type: 'object', properties: { priority: { type: 'number' } }, required: ['priority'], additionalProperties: false });
+    expect(parseTriggerInput(schema, { priority: '3' })).toEqual({ input: { priority: 3 } });
+    expect(parseTriggerInput(schema, { priority: '' })).toEqual({ errors: { priority: 'Required.' } });
+  });
+
+  test('offers only preceding fields with the requested mapping type', () => {
+    const nodes = [...starterNodes, { id: 'mcp', kind: 'mcp' as const, title: 'Action', detail: '', x: 0, y: 0, instructions: '', config: {} }];
+    const edges = [...starterEdges, { id: 'agent-mcp', from: 'agent', to: 'mcp' }];
+    expect(mappingFields(nodes, edges, 'mcp', 'string')).toEqual([['$node.agent.result', 'Classify request · result']]);
+    expect(mappingFields(nodes, edges, 'mcp', 'number')).toEqual([]);
   });
 });

@@ -64,8 +64,36 @@ export function createNode(kind: WorkflowNodeKind, x: number, y: number, sequenc
 }
 
 export function connect(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], from: string, to: string, branch?: 'true' | 'false'): WorkflowEdge[] {
-  if (from === to || !nodes.some((node) => node.id === from) || !nodes.some((node) => node.id === to) || edges.some((edge) => edge.from === from && edge.to === to)) return [...edges];
+  if (from === to || !nodes.some((node) => node.id === from) || !nodes.some((node) => node.id === to) || edges.some((edge) => edge.from === from && (edge.to === to || branch !== undefined && edge.branch === branch))) return [...edges];
   return [...edges, { id: `${from}-${to}`, from, to, ...(branch ? { branch } : {}) }];
+}
+
+export function conditionSources(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], conditionId: string): readonly WorkflowNode[] {
+  const preceding = new Set<string>(); const visit = (id: string): void => { for (const edge of edges.filter((item) => item.to === id)) if (!preceding.has(edge.from)) { preceding.add(edge.from); visit(edge.from); } };
+  visit(conditionId);
+  return nodes.filter((node) => preceding.has(node.id) && (node.kind === 'trigger' || node.kind === 'agent'));
+}
+
+export function conditionFields(node: WorkflowNode): readonly [string, 'string' | 'number' | 'boolean'][] {
+  const schema = node.kind === 'trigger' ? node.config?.['inputSchema'] : node.config?.['responseSchema'];
+  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return [];
+  const properties = (schema as Record<string, unknown>)['properties'];
+  if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) return [];
+  return Object.entries(properties).flatMap(([name, value]) => value !== null && typeof value === 'object' && !Array.isArray(value) && ['string', 'number', 'boolean'].includes(String((value as Record<string, unknown>)['type'])) ? [[name, (value as Record<string, unknown>)['type'] as 'string' | 'number' | 'boolean']] : []);
+}
+
+export function mappingFields(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], targetId: string, type: TriggerFieldType): readonly [string, string][] {
+  const preceding = new Set<string>();
+  const visit = (id: string): void => { for (const edge of edges.filter((item) => item.to === id)) if (!preceding.has(edge.from)) { preceding.add(edge.from); visit(edge.from); } };
+  visit(targetId);
+  return nodes.flatMap((node) => {
+    if (!preceding.has(node.id) || node.kind !== 'trigger' && node.kind !== 'agent') return [];
+    const schema = node.kind === 'trigger' ? node.config?.['inputSchema'] : node.config?.['responseSchema'];
+    if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return [];
+    const properties = (schema as Record<string, unknown>)['properties'];
+    if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) return [];
+    return Object.entries(properties).flatMap(([name, field]) => field !== null && typeof field === 'object' && !Array.isArray(field) && (field as Record<string, unknown>)['type'] === type ? [[node.kind === 'trigger' ? `$input.${name}` : `$node.${node.id}.${name}`, `${node.title} · ${name}`] as [string, string]] : []);
+  });
 }
 
 export function disconnect(edges: readonly WorkflowEdge[], edgeId: string): WorkflowEdge[] { return edges.filter((edge) => edge.id !== edgeId); }
@@ -74,6 +102,37 @@ export function updateIntegerConfig(config: Record<string, unknown>, key: 'limit
   const parsed = Number(value);
   if (value.trim() === '' || !Number.isFinite(parsed) || !Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) return { error: `Enter a whole number from ${minimum} to ${maximum}.` };
   return { config: { ...config, [key]: parsed } };
+}
+
+export type TriggerFieldType = 'string' | 'number' | 'boolean' | 'object' | 'array';
+export interface TriggerSchema { type: 'object'; properties: Record<string, { type: TriggerFieldType }>; required: string[]; additionalProperties: false; }
+
+export function setSchemaField(schema: TriggerSchema, name: string, type: TriggerFieldType, required: boolean, previousName?: string): TriggerSchema {
+  const normalized = name.trim();
+  const properties = Object.fromEntries(Object.entries(schema.properties).filter(([key]) => key !== previousName || previousName === normalized));
+  if (normalized) properties[normalized] = { type };
+  const requiredFields = schema.required.filter((field) => field !== previousName && field !== normalized);
+  return { ...schema, properties, required: required && normalized ? [...requiredFields, normalized] : requiredFields };
+}
+
+export function removeSchemaField(schema: TriggerSchema, name: string): TriggerSchema {
+  const properties = Object.fromEntries(Object.entries(schema.properties).filter(([key]) => key !== name));
+  return { ...schema, properties, required: schema.required.filter((field) => field !== name) };
+}
+
+export function parseTriggerInput(schema: TriggerSchema, values: Record<string, unknown>): { input?: Record<string, unknown>; errors?: Record<string, string> } {
+  const input: Record<string, unknown> = {}; const errors: Record<string, string> = {};
+  for (const [name, property] of Object.entries(schema.properties)) {
+    const value = values[name]; const empty = value === '' || value === undefined;
+    if (empty && schema.required.includes(name)) { errors[name] = 'Required.'; continue; }
+    if (empty) continue;
+    if (property.type === 'number') { const parsed = Number(value); if (!Number.isFinite(parsed)) { errors[name] = 'Enter a number.'; continue; } input[name] = parsed; continue; }
+    if (property.type === 'boolean') { if (typeof value !== 'boolean') { errors[name] = 'Choose true or false.'; continue; } input[name] = value; continue; }
+    if (property.type === 'object') { if (value === null || typeof value !== 'object' || Array.isArray(value)) { errors[name] = 'Add at least one named value.'; continue; } input[name] = value; continue; }
+    if (property.type === 'array') { if (!Array.isArray(value)) { errors[name] = 'Add one or more values.'; continue; } input[name] = value; continue; }
+    if (typeof value !== 'string') { errors[name] = 'Enter text.'; continue; } input[name] = value;
+  }
+  return Object.keys(errors).length ? { errors } : { input };
 }
 
 export function localDateTime(iso: string): string {
