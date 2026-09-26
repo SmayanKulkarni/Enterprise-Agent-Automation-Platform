@@ -36,7 +36,7 @@ export default defineConfig(() => ({
         const result = await transport.handle({ method: request.method === 'POST' ? 'POST' : 'GET', path: `/api/v1${request.url ?? '/'}`, headers: headers(request.headers, trustedOrigin), ...(body === undefined ? {} : { body }) });
         response.writeHead(result.status, result.headers);
         response.end(result.body);
-      })().catch(() => { response.writeHead(500); response.end(); }); });
+      })().catch((error: unknown) => { console.error('Local browser API failed:', error instanceof Error && 'code' in error ? error.code : 'UNKNOWN'); response.writeHead(503); response.end(); }); });
     },
   }],
 }));

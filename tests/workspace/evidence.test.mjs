@@ -19,7 +19,7 @@ function createRoot() {
 }
 
 describe('workspace evidence', () => {
-  test('builds deterministic machine-readable results linked to issue 001', () => {
+  test('builds deterministic machine-readable results from code checks', () => {
     const evidence = buildWorkspaceEvidence({
       commands: [
         { command: 'pnpm lint', exitCode: 0, name: 'lint' },
@@ -50,10 +50,8 @@ describe('workspace evidence', () => {
             rootCommands: ['contracts', 'lint', 'test', 'typecheck', 'verify', 'workspace:check'],
             workspacePatterns: ['apps/*', 'packages/*'],
           },
-          issue: '.scratch/platform-implementation/issues/001-workspace.md',
           outputScan: { paths: [], repositoryBounded: true },
           packageGraph: [],
-          sourceSpec: 'docs/superpowers/specs/2026-09-14-01-repository-contract-foundation-spec.md#ordered-implementation-slices',
           toolchain: {
             actual: { node: '22.14.0', pnpm: '10.15.1' },
             digest: '707710c2f268ea012fe92d2cf433f5c40d327778835d311d922459e152e3c4a2',

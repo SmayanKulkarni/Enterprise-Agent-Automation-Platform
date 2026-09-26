@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { digest } from '../../../packages/contracts/src/index.js';
-import type { WorkflowNode } from './workflow-model.js';
+import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
 import { mappingFields } from './workflow-model.js';
 import type { PlatformApi, Projection } from './platform-api.js';
 
@@ -10,7 +10,7 @@ interface ConnectorPanelProps {
   draftId: string | undefined;
   node: WorkflowNode;
   nodes: readonly WorkflowNode[];
-  edges: readonly { from: string; to: string }[];
+  edges: readonly WorkflowEdge[];
   admin: boolean;
   onPin: (config: Record<string, unknown>) => void;
 }
@@ -49,9 +49,10 @@ function constant(type: FieldType, value: string): unknown {
 }
 
 export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, admin, onPin }: ConnectorPanelProps) {
+  const config = node.config ?? {};
   const [installations, setInstallations] = useState<Projection>();
-  const [installationId, setInstallationId] = useState(String(node.config['installationId'] ?? ''));
-  const [capabilityName, setCapabilityName] = useState(String(node.config['capability'] ?? ''));
+  const [installationId, setInstallationId] = useState(String(config['installationId'] ?? ''));
+  const [capabilityName, setCapabilityName] = useState(String(config['capability'] ?? ''));
   const [newInstallationId, setNewInstallationId] = useState('');
   const [manifestText, setManifestText] = useState(certificationTemplate);
   const [token, setToken] = useState<string>();
@@ -66,8 +67,8 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
   }, [api, tenantId]);
 
   useEffect(() => {
-    setInstallationId(String(node.config['installationId'] ?? ''));
-    setCapabilityName(String(node.config['capability'] ?? ''));
+    setInstallationId(String(config['installationId'] ?? ''));
+    setCapabilityName(String(config['capability'] ?? ''));
   }, [node.id, node.config]);
 
   const choices = certifiedInstallations(installations);
@@ -78,19 +79,19 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
   const selectInstallation = (nextId: string) => {
     setInstallationId(nextId);
     setCapabilityName('');
-    onPin({ ...node.config, installationId: nextId, capability: '', manifestDigest: '', grantId: '', target: '', arguments: {} });
+    onPin({ ...config, installationId: nextId, capability: '', manifestDigest: '', grantId: '', target: '', arguments: {} });
   };
 
   const selectCapability = (nextName: string) => {
     setCapabilityName(nextName);
-    onPin({ ...node.config, installationId, capability: nextName, manifestDigest: manifest?.digest ?? '', grantId: '', target: '', arguments: {} });
+    onPin({ ...config, installationId, capability: nextName, manifestDigest: manifest?.digest ?? '', grantId: '', target: '', arguments: {} });
   };
 
   const grant = async () => {
     if (!draftId || !capability || !manifest?.digest) return;
     try {
       const result = await api.command({ tenantId, owner: 'workflow', name: 'grant', expectedVersion: 0, arguments: { id: draftId, nodeId: node.id, installationId, capability: capability.name } });
-      onPin({ ...node.config, installationId, capability: capability.name, manifestDigest: manifest.digest, grantId: result.objectId });
+      onPin({ ...config, installationId, capability: capability.name, manifestDigest: manifest.digest, grantId: result.objectId });
       setMessage('Capability granted to this node. Save the draft, then run the server check.');
       await refresh();
     } catch {
@@ -154,7 +155,7 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
         {manifest?.capabilities?.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.risk}</option>)}
       </select>
     </label>
-    {capability && <ArgumentMappings capability={capability} config={node.config} nodes={nodes} edges={edges} targetId={node.id} onPin={onPin} />}
+    {capability && <ArgumentMappings capability={capability} config={config} nodes={nodes} edges={edges} targetId={node.id} onPin={onPin} />}
     {admin && <button disabled={!draftId || !capability} onClick={() => void grant()}>Grant to this node</button>}
     {!admin && <p>An administrator must grant the selected Capability before publication.</p>}
     {admin && <section className="connector-certify">
@@ -170,7 +171,7 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
   </section>;
 }
 
-function ArgumentMappings({ capability, config, nodes, edges, targetId, onPin }: { capability: Capability; config: Record<string, unknown>; nodes: readonly WorkflowNode[]; edges: readonly { from: string; to: string }[]; targetId: string; onPin: (config: Record<string, unknown>) => void }) {
+function ArgumentMappings({ capability, config, nodes, edges, targetId, onPin }: { capability: Capability; config: Record<string, unknown>; nodes: readonly WorkflowNode[]; edges: readonly WorkflowEdge[]; targetId: string; onPin: (config: Record<string, unknown>) => void }) {
   const values = config['arguments'] && typeof config['arguments'] === 'object' && !Array.isArray(config['arguments']) ? config['arguments'] as Record<string, unknown> : {};
   const update = (name: string, value: unknown) => onPin({ ...config, arguments: { ...values, [name]: value } });
 

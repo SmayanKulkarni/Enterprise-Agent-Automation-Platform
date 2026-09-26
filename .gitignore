@@ -9,7 +9,14 @@ apps/browser/.env.server.local
 .vercel
 .env*
 .scratch/
-docs
+graphify-out/
+outputs/
+SYSTEM_DESIGN_REPORT.*
+docs/*
+!docs/diagram-workflow-v1-decisions.md
+!docs/adr/
+docs/adr/*
+!docs/adr/0004-private-mcp-extension-boundary.md
 .superpowers/
 .agents
 tests/

@@ -6,6 +6,11 @@ export class IdentityError extends Error {
   constructor(public readonly code: IdentityErrorCode) { super('Identity request was not accepted.'); this.name = 'IdentityError'; }
 }
 const deny = (code: IdentityErrorCode = 'DENIED'): never => { throw new IdentityError(code); };
+const sqlEpoch = (value: unknown): number | undefined => {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !/^[1-9][0-9]*$/u.test(value))) return undefined;
+  const epoch = Number(value);
+  return Number.isSafeInteger(epoch) && epoch > 0 ? epoch : undefined;
+};
 
 export type TenantStatus = 'provisioning' | 'active' | 'suspended' | 'deleting' | 'deleted';
 export interface Tenant { id: TenantId; status: TenantStatus; version: number; epoch: number; legalHold: boolean; }
@@ -110,19 +115,20 @@ export class AzureSqlIdentityStore implements IdentityReadStore {
   async authenticate(proof: Proof, selectedTenant: string, audience: string, now = new Date().toISOString()): Promise<ExecutionContext> {
     this.validate(proof, audience, now);
     const tenant = tenantId(selectedTenant); const result = await this.call('identity.read_current_session', (request) => request.input('tenant_id', sql.UniqueIdentifier, String(tenant)).input('issuer', sql.NVarChar(512), proof.issuer).input('subject', sql.NVarChar(256), proof.subject));
-    const row = result.recordset[0] as { user_id?: string; tenant_epoch?: number; membership_epoch?: number } | undefined;
-    const userId = row?.user_id; const tenantEpoch = row?.tenant_epoch; const membershipEpoch = row?.membership_epoch;
-    if (!userId || !Number.isSafeInteger(tenantEpoch) || !Number.isSafeInteger(membershipEpoch)) deny();
-    return { mode: proof.mode, userId: userId as string, tenantId: tenant, expiresAt: proof.expiresAt, membershipEpoch: membershipEpoch as number, tenantEpoch: tenantEpoch as number, ...(proof.sessionId === undefined ? {} : { sessionId: proof.sessionId }) };
+    const row = result.recordset[0] as { user_id?: string; tenant_epoch?: number | string; membership_epoch?: number | string } | undefined;
+    const userId = row?.user_id; const tenantEpoch = sqlEpoch(row?.tenant_epoch); const membershipEpoch = sqlEpoch(row?.membership_epoch);
+    if (!userId || tenantEpoch === undefined || membershipEpoch === undefined) throw new IdentityError('DENIED');
+    return { mode: proof.mode, userId: userId as string, tenantId: tenant, expiresAt: proof.expiresAt, membershipEpoch, tenantEpoch, ...(proof.sessionId === undefined ? {} : { sessionId: proof.sessionId }) };
   }
   async membershipsForProof(proof: Proof): Promise<readonly Pick<Membership, 'tenantId' | 'profiles' | 'epoch'>[]> {
     const result = await this.call('identity.list_current_tenants', (request) => request.input('issuer', sql.NVarChar(512), proof.issuer).input('subject', sql.NVarChar(256), proof.subject));
     const memberships = new Map<string, { tenantId: TenantId; profiles: string[]; epoch: number }>();
-    for (const row of result.recordset as { tenant_id?: string; membership_epoch?: number; profile_key?: string | null }[]) {
-      if (!row.tenant_id || !Number.isSafeInteger(row.membership_epoch)) continue;
+    for (const row of result.recordset as { tenant_id?: string; membership_epoch?: number | string; profile_key?: string | null }[]) {
+      const epoch = sqlEpoch(row.membership_epoch);
+      if (!row.tenant_id || epoch === undefined) continue;
       const id = tenantId(row.tenant_id); const existing = memberships.get(String(id));
       if (existing !== undefined) { if (typeof row.profile_key === 'string') existing.profiles.push(row.profile_key); continue; }
-      const item = { tenantId: id, profiles: typeof row.profile_key === 'string' ? [row.profile_key] : [], epoch: row.membership_epoch as number };
+      const item = { tenantId: id, profiles: typeof row.profile_key === 'string' ? [row.profile_key] : [], epoch };
       memberships.set(String(id), item);
     }
     return [...memberships.values()].map((membership) => ({ ...membership, profiles: [...new Set(membership.profiles)].sort() }));

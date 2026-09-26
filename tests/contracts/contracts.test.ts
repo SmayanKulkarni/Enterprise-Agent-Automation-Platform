@@ -1,38 +1,45 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import {
   assertCompatible,
   canonicalJson,
   ContractValidationError,
+  CONTRACT_DESCRIPTORS,
   decodeContract,
   descriptorFor,
   digest,
   encodeContract,
 } from '../../packages/contracts/src/index.js';
 
-const fixtures = resolve('docs/contracts/v1/fixtures');
 const tenant = '22222222-2222-4222-8222-222222222222';
-const fixture = (name: string): Record<string, unknown> => JSON.parse(readFileSync(resolve(fixtures, name), 'utf8')) as Record<string, unknown>;
+const fixture = (contract: string, contractVersion = '1.0.0') => ({
+  messageId: '11111111-1111-4111-8111-111111111111' as const,
+  contract,
+  contractVersion,
+  occurredAt: '2099-01-01T00:00:00.000Z',
+  sender: 'contract-test',
+  tenantId: tenant,
+  classification: descriptorFor(contract).classification,
+  payload: { outcome: 'success' },
+});
 
 describe('@platform/contracts', () => {
-  test('validates every portable fixture through the packed codec shape', async () => {
-    for (const name of readdirSync(fixtures).filter((name) => name !== 'version-mismatch.json')) {
+  test('validates every declared contract through the packed codec shape', async () => {
+    for (const name of Object.keys(CONTRACT_DESCRIPTORS)) {
       const value = fixture(name);
-      const descriptor = descriptorFor(value['contract'] as string);
+      const descriptor = descriptorFor(name);
       const encoded = await encodeContract(descriptor, value as never);
       expect(decodeContract(descriptor, encoded.bytes, tenant).messageId).toBe(value['messageId']);
       expect(encoded.digest).toBe(await digest(value));
     }
-    const mismatch = fixture('version-mismatch.json');
-    expect(() => decodeContract(descriptorFor(mismatch['contract'] as string), JSON.stringify(mismatch), tenant)).toThrow(
+    const mismatch = fixture('case.command', '2.0.0');
+    expect(() => decodeContract(descriptorFor(mismatch.contract), JSON.stringify(mismatch), tenant)).toThrow(
       expect.objectContaining({ code: 'INCOMPATIBLE_VERSION' }),
     );
   });
 
   test('fails closed for duplicate JSON, wrong tenant, unsafe data, and incompatible versions', () => {
-    const value = fixture('success.json');
+    const value = fixture('case.command');
     const descriptor = descriptorFor('case.command');
     const duplicated = JSON.stringify(value).replace('"messageId":', '"messageId":"11111111-1111-4111-8111-111111111110","messageId":');
     expect(() => decodeContract(descriptor, duplicated, tenant)).toThrow(expect.objectContaining({ code: 'DUPLICATE_KEY' }));

@@ -12,7 +12,13 @@ const defaultRoute: CollectionRoute = { collection: 'packages', label: 'Packages
 
 export const collectionRoutes: readonly CollectionRoute[] = [
   defaultRoute,
+  { collection: 'agent-teams', label: 'Agent Teams', surface: 'studio', description: 'Declared members, delegation boundaries, joins, and bounded team budgets.', commandPrerequisite: 'Studio must publish a current draft revision and a trusted author command.' },
+  { collection: 'workflows', label: 'Workflows', surface: 'studio', description: 'Stage transitions, interventions, and agent assignment for the selected package.', commandPrerequisite: 'Studio must publish a current draft revision and a trusted author command.' },
+  { collection: 'skills', label: 'Skills', surface: 'studio', description: 'Scoped agent instructions, schemas, capability allowlists, and evidence requirements.', commandPrerequisite: 'Studio must publish a current draft revision and a trusted author command.' },
   { collection: 'evaluations', label: 'Evaluations', surface: 'studio', description: 'Evaluation ledger, comparison evidence, and gate results.', commandPrerequisite: 'Evaluation must publish current gate evidence and an owner command.' },
+  { collection: 'test-runs', label: 'Test runs', surface: 'studio', description: 'Checks, simulations, and evaluation evidence tied to an exact package revision.', commandPrerequisite: 'Studio must publish an exact revision and a trusted run command.' },
+  { collection: 'reviews', label: 'Reviews', surface: 'studio', description: 'Independent review decisions, signatures, and release prerequisites.', commandPrerequisite: 'Lifecycle must publish current review authority and the exact revision command.' },
+  { collection: 'versions', label: 'Package versions', surface: 'studio', description: 'Revision history, semantic changes, and governed publication state.', commandPrerequisite: 'Lifecycle must publish a current version history projection.' },
   { collection: 'improvements', label: 'Improvements', surface: 'studio', description: 'Candidate, shadow, canary, promotion, and rollback evidence.', commandPrerequisite: 'Improvement must publish current gates and independent approval.' },
   { collection: 'packages', label: 'Discover', surface: 'catalog', description: 'Approved package trust, provenance, and version history.', commandPrerequisite: 'Lifecycle must publish an approved package action with its exact version.' },
   { collection: 'installations', label: 'Installations', surface: 'catalog', description: 'Installation configuration references, readiness, and activation state.', commandPrerequisite: 'Lifecycle must publish current readiness and the installation owner command.' },

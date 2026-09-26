@@ -1,14 +1,15 @@
 import { localBrowserTransport } from './local-browser-host.js';
 import type { ClerkBackend } from './index.js';
+import type { Scheduler } from '../../workflow/src/service.js';
 
 const mediaType = 'application/vnd.platform.browser.v1+json';
 
-export async function browserResponse(request: Request, environment: Readonly<Record<string, string | undefined>> = process.env, backend?: ClerkBackend): Promise<Response> {
+export async function browserResponse(request: Request, environment: Readonly<Record<string, string | undefined>> = process.env, backend?: ClerkBackend, scheduler?: Scheduler): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'POST') return new Response(null, { status: 405 });
   const headers = Object.fromEntries(request.headers.entries());
   if (request.method === 'GET' && headers['origin'] === undefined) headers['origin'] = new URL(request.url).origin;
   try {
-    const result = await localBrowserTransport(environment, backend).handle({
+    const result = await localBrowserTransport(environment, backend, scheduler).handle({
       method: request.method,
       path: `${new URL(request.url).pathname}${new URL(request.url).search}`,
       headers,

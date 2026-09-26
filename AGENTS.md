@@ -1,0 +1,33 @@
+# Repository instructions
+
+- Use `$ponytail` for every coding task, including writing, editing, refactoring, and reviewing code.
+- Do not add code comments. This preference overrides `$ponytail` guidance to leave `ponytail:` comments.
+- Keep `CONTEXT.md` as a glossary. Record workflow implementation decisions in `docs/diagram-workflow-v1-decisions.md`.
+# Backend Production Standards
+- Prioritize correctness, security, reliability, maintainability, then performance.
+- Prefer clear, explicit code over clever or overly compressed code.
+- Keep functions small and single-purpose; use guard clauses to reduce nesting.
+- Separate controllers/routes, business logic/services, and data access.
+- Keep business logic out of controllers and database code.
+- Use strong typing; avoid `any`/untyped structures unless necessary.
+- Validate all external input at system boundaries.
+- Never trust client input, headers, webhooks, files, or external API responses.
+- Use consistent API conventions, status codes, and error response formats.
+- Use typed/domain-specific errors and centralized error handling.
+- Never expose stack traces, secrets, SQL errors, or internal details to clients.
+- Use structured logging with request/correlation IDs; never log secrets or tokens.
+- Store secrets only in environment/config systems, never source code.
+- Enforce authentication and authorization server-side for every protected resource.
+- Use parameterized queries/ORMs; never construct SQL from raw user input.
+- Use database transactions for atomic multi-step writes.
+- Add indexes intentionally and avoid N+1 queries/unbounded database reads.
+- Paginate large collections and enforce sensible request/resource limits.
+- Add timeouts, retries with backoff, and circuit breakers for external services where appropriate.
+- Make retryable write operations idempotent where possible.
+- Avoid blocking operations in request paths when asynchronous processing is appropriate.
+- Keep configuration environment-specific and validate required config on startup.
+- Write tests for business-critical behavior, validation, permissions, and failure cases.
+- Do not add dependencies, abstractions, or complexity without a clear need.
+- Follow existing repository conventions before introducing new architectural patterns.
+- Remove dead code, debug logs, commented-out code, and unused imports.
+- When changing code, make the smallest safe change and preserve backward compatibility unless explicitly instructed otherwise.

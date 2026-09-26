@@ -129,11 +129,11 @@ export class VendorCaseWorkbench {
 
 const MEDIA_TYPE = 'application/vnd.platform.browser.v1+json';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const collections = new Set(['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants']);
+const collections = new Set(['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'agent-teams', 'workflows', 'skills', 'test-runs', 'reviews', 'versions', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants', 'workflow-drafts', 'workflow-definitions', 'workflow-runs', 'workflow-grants', 'workflow-webhook-credentials', 'workflow-memory-imports', 'workflow-memory-items', 'workflow-memory-readiness', 'connector-installations']);
 export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
   { method: 'GET', path: '/api/v1/session', owner: 'identity', action: 'identity.session.read', ready: true },
   { method: 'GET', path: '/api/v1/tenants', owner: 'identity', action: 'identity.membership.list', ready: true },
-  { method: 'GET', path: '/api/v1/tenants/:tenantId/{cases,interventions,capabilities,installations,memory,evaluations,improvements,packages,operations,deployments,readiness,vendor-assessments,access-grants}[/:id]', owner: 'projection', action: 'projection.read', ready: false },
+  { method: 'GET', path: '/api/v1/tenants/:tenantId/{cases,interventions,capabilities,installations,memory,evaluations,improvements,packages,agent-teams,workflows,skills,test-runs,reviews,versions,operations,deployments,readiness,vendor-assessments,access-grants}[/:id]', owner: 'projection', action: 'projection.read', ready: false },
   { method: 'POST', path: '/api/v1/tenants/:tenantId/commands/:owner/:name', owner: 'named registry', action: 'owner.command', ready: false },
   { method: 'GET', path: '/api/v1/tenants/:tenantId/events', owner: 'operations', action: 'operations.events.read', ready: false },
 ]);

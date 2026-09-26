@@ -1,6 +1,6 @@
 import { digest } from '../../contracts/src/index.js';
 import { EvaluationLedger, GateCalculator } from '../../memory/src/index.js';
-import { assemblePackage, validateStudioDraft } from './studio.js';
+import { assemblePackage, validateStudioDraft, type StudioDraft } from './studio.js';
 import type { StudioStoredDraft } from './studio-sql.js';
 
 export interface StudioReport { subjectDigest: string; engine: string; engineVersion: '1.0.0'; environment: 'local'; classification: 'fixture' | 'unverified' | 'live'; startedAt: string; completedAt: string; status: 'passed' | 'failed' | 'blocked' | 'inconclusive'; evidenceIds: readonly string[]; reasonCodes: readonly string[]; }
@@ -10,11 +10,12 @@ export interface GateReport extends StudioReport { ledgerId: string; gates: read
 const now = (): string => new Date().toISOString();
 const report = <Value extends StudioReport>(value: Value): Value => Object.freeze({ ...value, evidenceIds: Object.freeze([...value.evidenceIds]), reasonCodes: Object.freeze([...value.reasonCodes]) }) as Value;
 const uuidFromDigest = (value: string): string => `${value.slice(0, 8)}-${value.slice(8, 12)}-4${value.slice(13, 16)}-8${value.slice(17, 20)}-${value.slice(20, 32)}`;
+const packageDraft = (revision: StudioStoredDraft): StudioDraft => { if ('kind' in revision.draft) throw new Error('INVALID_STUDIO_DRAFT'); return revision.draft; };
 
 /** Static checks are tied to one saved revision; missing or failed checks never become a pass. */
 export async function runChecks(revision: StudioStoredDraft): Promise<CheckReport> {
-  const startedAt = now(); const issues = validateStudioDraft(revision.draft); let manifest = false;
-  try { await assemblePackage(revision.draft); manifest = true; } catch { manifest = false; }
+  const startedAt = now(); const draft = packageDraft(revision); const issues = validateStudioDraft(draft); let manifest = false;
+  try { await assemblePackage(draft); manifest = true; } catch { manifest = false; }
   const checks = [...issues.map((item) => ({ name: item.code, passed: false })), { name: 'manifest-digest', passed: manifest }, { name: 'revision-digest', passed: /^[a-f0-9]{64}$/u.test(revision.digest) }];
   const passed = checks.every((check) => check.passed); const evidenceId = await digest({ subjectDigest: revision.digest, checks });
   return report({ subjectDigest: revision.digest, engine: 'studio-checks', engineVersion: '1.0.0', environment: 'local', classification: 'unverified', startedAt, completedAt: now(), status: passed ? 'passed' : 'failed', evidenceIds: [evidenceId], reasonCodes: passed ? [] : checks.filter((check) => !check.passed).map((check) => check.name), checks: Object.freeze(checks) });
@@ -22,8 +23,8 @@ export async function runChecks(revision: StudioStoredDraft): Promise<CheckRepor
 
 /** Fixture simulation never dispatches a live provider; it only exposes bounded workflow outcomes. */
 export async function simulate(revision: StudioStoredDraft, fixtureId: string): Promise<SimulationReport> {
-  const startedAt = now(); const checks = await runChecks(revision); const totalTokens = revision.draft.agents.reduce((total, agent) => total + agent.budgets.tokens, 0); const exhausted = totalTokens > revision.draft.team.budgets.tokens;
-  const timeline = revision.draft.workflow.stages.map((stage) => ({ stageId: stage.id, agentId: stage.agentId, outcome: exhausted ? 'budget-exhausted' as const : 'completed' as const })); const status = checks.status === 'passed' && !exhausted ? 'passed' : 'failed'; const evidenceId = await digest({ subjectDigest: revision.digest, fixtureId, timeline });
+  const startedAt = now(); const checks = await runChecks(revision); const draft = packageDraft(revision); const totalTokens = draft.agents.reduce((total, agent) => total + agent.budgets.tokens, 0); const exhausted = totalTokens > draft.team.budgets.tokens;
+  const timeline = draft.workflow.stages.map((stage) => ({ stageId: stage.id, agentId: stage.agentId, outcome: exhausted ? 'budget-exhausted' as const : 'completed' as const })); const status = checks.status === 'passed' && !exhausted ? 'passed' : 'failed'; const evidenceId = await digest({ subjectDigest: revision.digest, fixtureId, timeline });
   return report({ subjectDigest: revision.digest, engine: 'studio-simulator', engineVersion: '1.0.0', environment: 'local', classification: 'fixture', startedAt, completedAt: now(), status, evidenceIds: [evidenceId], reasonCodes: status === 'passed' ? [] : exhausted ? ['BUDGET_EXHAUSTED'] : checks.reasonCodes, fixtureId, timeline: Object.freeze(timeline) });
 }
 

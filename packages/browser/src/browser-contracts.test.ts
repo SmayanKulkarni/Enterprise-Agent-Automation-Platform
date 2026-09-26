@@ -1,0 +1,28 @@
+import { describe, expect, test } from 'vitest';
+
+import { BrowserContractError, decodeActionHint, decodeCommandArguments, decodeProjection, decodeReceipt } from './browser-contracts.js';
+
+const tenantId = '11111111-1111-4111-8111-111111111111';
+const objectId = '22222222-2222-4222-8222-222222222222';
+
+describe('browser contracts', () => {
+  test('accepts only exact, Tenant-scoped safe DTOs', () => {
+    expect(decodeActionHint({ owner: 'studio', name: 'submit', objectId, expectedVersion: 0, risk: 'R1', approvalRequired: false })).toMatchObject({ objectId });
+    expect(decodeCommandArguments('studio', 'submit', { id: objectId })).toEqual({ id: objectId });
+    expect(decodeProjection({ tenantId, collection: 'cases', records: [{ id: objectId, title: 'Safe display name' }], completeness: 'full', classification: 'restricted-operational', freshness: 'current', redaction: 'none' }, tenantId, 'cases').records).toHaveLength(1);
+    expect(decodeReceipt({ commandId: objectId, objectId, owner: 'studio', name: 'submit', state: 'committed', version: 1, watermark: 2, affectedCollections: ['cases'], evidenceIds: [objectId], digest: 'a'.repeat(64) })).toMatchObject({ state: 'committed' });
+    expect(decodeCommandArguments('workflow', 'provision-webhook-credential', { id: objectId })).toEqual({ id: objectId });
+    expect(decodeCommandArguments('workflow', 'test-webhook', { id: objectId, input: { ready: true } })).toEqual({ id: objectId, input: { ready: true } });
+  });
+
+  test('rejects unknown fields, forged scopes, secrets, unsupported commands, and invalid versions', () => {
+    expect(() => decodeActionHint({ owner: 'studio', name: 'submit', objectId, expectedVersion: 0, risk: 'R1', approvalRequired: false, tenantId })).toThrow(BrowserContractError);
+    expect(() => decodeCommandArguments('studio', 'submit', { id: objectId, secret: 'nope' })).toThrow(BrowserContractError);
+    expect(() => decodeCommandArguments('studio', 'submit', { id: 'readable-id' })).toThrow(BrowserContractError);
+    expect(() => decodeCommandArguments('vendor', 'publish', {})).toThrow(BrowserContractError);
+    expect(() => decodeProjection({ tenantId: '33333333-3333-4333-8333-333333333333', collection: 'cases', records: [], completeness: 'full', classification: 'restricted-operational', freshness: 'current', redaction: 'none' }, tenantId, 'cases')).toThrow(BrowserContractError);
+    expect(() => decodeProjection({ tenantId, collection: 'cases', records: [{ id: objectId, accessToken: 'nope' }], completeness: 'full', classification: 'restricted-operational', freshness: 'current', redaction: 'none' }, tenantId, 'cases')).toThrow(BrowserContractError);
+    expect(() => decodeProjection({ tenantId, collection: 'workflow-webhook-credentials', records: [{ id: objectId, secret: 'nope' }], completeness: 'full', classification: 'restricted-operational', freshness: 'current', redaction: 'applied' }, tenantId, 'workflow-webhook-credentials')).toThrow(BrowserContractError);
+    expect(() => decodeReceipt({ commandId: objectId, objectId, owner: 'studio', name: 'submit', state: 'committed', version: -1, watermark: 2, affectedCollections: ['cases'], evidenceIds: [], digest: 'a'.repeat(64) })).toThrow(BrowserContractError);
+  });
+});

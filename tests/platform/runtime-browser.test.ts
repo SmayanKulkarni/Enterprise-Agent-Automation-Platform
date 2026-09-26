@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest';
 
-import { BrowserV1Transport } from '../../packages/browser/src/index.js';
+import { BrowserV1Transport, ClerkSessionAdapter } from '../../packages/browser/src/index.js';
 import { decodeContract, descriptorFor, messageId, tenantId, type ContractEnvelope } from '../../packages/contracts/src/index.js';
 import { AgentTeamRuntime, EffectIntentRuntime, InMemoryCaseWorkflow, InterventionRuntime, RecoveryRuntime, type CaseCommand } from '../../packages/case/src/index.js';
+import { IdentityStore } from '../../packages/identity/src/index.js';
 
 const tenant = '22222222-2222-4222-8222-222222222222';
 const correlation = '11111111-1111-4111-8111-111111111111';
@@ -29,10 +30,17 @@ describe('durable runtime and browser boundary', () => {
     expect((await effects.record(intent, { tenantId: tenant as CaseCommand['tenantId'], generation: 1, version: 2, authority: 'allow' }, () => { approvals += 1; })).duplicate).toBe(false);
     expect((await effects.record(intent, { tenantId: tenant as CaseCommand['tenantId'], generation: 1, version: 2, authority: 'allow' }, () => { approvals += 1; })).duplicate).toBe(true); expect(approvals).toBe(1);
 
-    const browser = new BrowserV1Transport({ allowedOrigins: ['https://app.example'], now: () => now, commands: { 'case.start': (input) => ({ receipt: input.idempotencyKey, digest: input.digest }) } });
+    const identity = new IdentityStore();
+    identity.provision(tenant); identity.transition(tenant, 1, 'activate'); identity.mapUser('https://clerk.example', 'user-1', 'user-1'); identity.membership(tenant, 'user-1', ['operator']); identity.setMembership(tenant, 'user-1', 1, 'current');
+    const clerk = new ClerkSessionAdapter({ issuer: 'https://clerk.example', publishableKey: 'pk_test', audience: 'platform-browser-api', authorizedParties: ['https://app.example'] }, {
+      verifySessionToken: () => ({ issuer: 'https://clerk.example', subject: 'user-1', sessionId: 'session-1', audience: 'platform-browser-api', expiresAt: '2099-01-01T01:00:00.000Z', tokenUse: 'session', authorizedParty: 'https://app.example' }),
+      getSession: () => ({ subject: 'user-1', status: 'active' }),
+    });
+    const browser = new BrowserV1Transport({ allowedOrigins: ['https://app.example'], clerk, identity, now: () => now, commands: { 'case.start': (input) => ({ receipt: input.idempotencyKey, digest: input.digest }) } });
     const envelope: ContractEnvelope = { messageId: messageId(correlation), contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: now, sender: 'browser-client', tenantId: tenantId(tenant), classification: 'restricted-operational', payload: { expectedVersion: 2, arguments: { resource: 'safe' } } };
-    const response = await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenant}/commands/case/start`, headers: { authorization: 'Bearer session-proof', origin: 'https://app.example', 'content-type': 'application/vnd.platform.browser.v1+json', 'idempotency-key': 'browser-key', 'x-correlation-id': correlation, 'if-match': '2' }, body: new TextEncoder().encode(JSON.stringify(envelope)) });
-    expect(response.status).toBe(200); expect(decodeContract(descriptorFor('browser.v1'), response.body).payload).toMatchObject({ receipt: 'browser-key' });
+    const idempotencyKey = '33333333-3333-4333-8333-333333333333';
+    const response = await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenant}/commands/case/start`, headers: { authorization: 'Bearer session-proof', origin: 'https://app.example', 'content-type': 'application/vnd.platform.browser.v1+json', 'idempotency-key': idempotencyKey, 'x-correlation-id': correlation, 'if-match': '2' }, body: new TextEncoder().encode(JSON.stringify(envelope)) });
+    expect(response.status).toBe(200); expect(decodeContract(descriptorFor('browser.v1'), response.body).payload).toMatchObject({ receipt: idempotencyKey });
     expect((await browser.handle({ method: 'GET', path: `/api/v1/tenants/${tenant}/events`, headers: { origin: 'https://app.example' } })).status).toBe(501);
   });
 });

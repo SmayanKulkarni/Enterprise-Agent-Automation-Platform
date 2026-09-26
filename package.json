@@ -19,6 +19,7 @@
     "verify": "node tools/workspace/verify.mjs",
     "build:showcase": "corepack pnpm --dir apps/browser --ignore-workspace build",
     "build:azure": "tsc -p tsconfig.azure.json",
+    "certify:upstash": "node tools/workflow/upstash-certification.cjs",
     "sql:migrate": "node tools/sql/azure-sql.mjs migrate",
     "sql:verify": "node tools/sql/azure-sql.mjs verify",
     "sql:status": "node tools/sql/azure-sql.mjs status",
@@ -36,6 +37,7 @@
   "dependencies": {
     "@azure/functions": "4.16.5",
     "@clerk/backend": "^3.17.2",
+    "durable-functions": "3.3.0",
     "mssql": "^12.7.2"
   }
 }

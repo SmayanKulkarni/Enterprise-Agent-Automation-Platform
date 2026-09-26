@@ -85,7 +85,7 @@ BEGIN
     INNER JOIN [identity].memberships AS m ON m.tenant_id = t.id
     WHERE t.id = @tenant_id AND t.status = N''active'' AND t.epoch = @tenant_epoch
       AND m.user_id = @user_id AND m.status = N''current'' AND m.epoch = @membership_epoch
-  ) THROW 50001, N''DENIED'', 1;
+  ) BEGIN ;THROW 50001, N''DENIED'', 1; END;
 END;
 ');
 
@@ -100,9 +100,9 @@ BEGIN
   EXEC [studio].assert_context @tenant_id, @user_id, @tenant_epoch, @membership_epoch;
   IF @draft_id IS NULL OR @draft_json IS NULL OR @digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) OR ISJSON(@draft_json) <> 1 OR LEFT(LTRIM(@draft_json), 1) <> N''{''
     OR LOWER(@draft_json) LIKE N''%"secret"%'' OR LOWER(@draft_json) LIKE N''%"password"%'' OR LOWER(@draft_json) LIKE N''%"executable"%''
-    THROW 50002, N''INVALID'', 1;
+    BEGIN ;THROW 50002, N''INVALID'', 1; END;
   BEGIN TRANSACTION;
-  IF EXISTS (SELECT 1 FROM [studio].draft_heads WITH (UPDLOCK, HOLDLOCK) WHERE tenant_id = @tenant_id AND id = @draft_id) THROW 50004, N''CONFLICT'', 1;
+  IF EXISTS (SELECT 1 FROM [studio].draft_heads WITH (UPDLOCK, HOLDLOCK) WHERE tenant_id = @tenant_id AND id = @draft_id) BEGIN ;THROW 50004, N''CONFLICT'', 1; END;
   INSERT INTO [studio].draft_heads (tenant_id, id, author_id, current_revision, state, current_digest) VALUES (@tenant_id, @draft_id, @user_id, 1, N''draft'', @digest);
   INSERT INTO [studio].draft_revisions (tenant_id, draft_id, revision, state, digest, author_id, draft_json) VALUES (@tenant_id, @draft_id, 1, N''draft'', @digest, @user_id, @draft_json);
   COMMIT TRANSACTION;
@@ -122,7 +122,7 @@ BEGIN
   SELECT h.id, h.tenant_id, h.current_revision AS revision, h.state, h.current_digest AS digest, h.author_id, r.draft_json, r.created_at
   FROM [studio].draft_heads AS h INNER JOIN [studio].draft_revisions AS r ON r.tenant_id = h.tenant_id AND r.draft_id = h.id AND r.revision = h.current_revision
   WHERE h.tenant_id = @tenant_id AND h.id = @draft_id;
-  IF @@ROWCOUNT = 0 THROW 50001, N''DENIED'', 1;
+  IF @@ROWCOUNT = 0 BEGIN ;THROW 50001, N''DENIED'', 1; END;
 END;
 ');
 
@@ -148,17 +148,21 @@ AS
 BEGIN
   SET NOCOUNT ON; SET XACT_ABORT ON;
   EXEC [studio].assert_context @tenant_id, @user_id, @tenant_epoch, @membership_epoch;
-  IF @expected_revision < 1 OR @idempotency_key IS NULL OR @request_digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) OR @digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) OR ISJSON(@draft_json) <> 1 OR LEFT(LTRIM(@draft_json), 1) <> N''{'' THROW 50002, N''INVALID'', 1;
+  IF @expected_revision < 1 OR @idempotency_key IS NULL OR @request_digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) OR @digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) OR ISJSON(@draft_json) <> 1 OR LEFT(LTRIM(@draft_json), 1) <> N''{'' BEGIN ;THROW 50002, N''INVALID'', 1; END;
   BEGIN TRANSACTION;
   IF EXISTS (SELECT 1 FROM [studio].command_receipts WITH (UPDLOCK, HOLDLOCK) WHERE tenant_id = @tenant_id AND idempotency_key = @idempotency_key)
   BEGIN
     IF EXISTS (SELECT 1 FROM [studio].command_receipts WHERE tenant_id = @tenant_id AND idempotency_key = @idempotency_key AND request_digest = @request_digest)
-    BEGIN COMMIT TRANSACTION; EXEC [studio].get_draft @tenant_id, @user_id, @tenant_epoch, @membership_epoch, @draft_id; RETURN; END
-    THROW 50004, N''CONFLICT'', 1;
+    BEGIN
+      COMMIT TRANSACTION;
+      EXEC [studio].get_draft @tenant_id, @user_id, @tenant_epoch, @membership_epoch, @draft_id;
+      RETURN;
+    END;
+    ;THROW 50004, N''CONFLICT'', 1;
   END;
   DECLARE @current bigint; SELECT @current = current_revision FROM [studio].draft_heads WITH (UPDLOCK, HOLDLOCK) WHERE tenant_id = @tenant_id AND id = @draft_id AND state = N''draft'';
-  IF @current IS NULL THROW 50001, N''DENIED'', 1;
-  IF @current <> @expected_revision THROW 50003, N''STALE'', 1;
+  IF @current IS NULL BEGIN ;THROW 50001, N''DENIED'', 1; END;
+  IF @current <> @expected_revision BEGIN ;THROW 50003, N''STALE'', 1; END;
   DECLARE @next bigint = @current + 1;
   INSERT INTO [studio].draft_revisions (tenant_id, draft_id, revision, state, digest, author_id, draft_json) VALUES (@tenant_id, @draft_id, @next, N''draft'', @digest, @user_id, @draft_json);
   UPDATE [studio].draft_heads SET current_revision = @next, current_digest = @digest, updated_at = SYSUTCDATETIME() WHERE tenant_id = @tenant_id AND id = @draft_id;
@@ -176,7 +180,7 @@ WITH EXECUTE AS OWNER
 AS
 BEGIN
   SET NOCOUNT ON; EXEC [studio].assert_context @tenant_id, @user_id, @tenant_epoch, @membership_epoch;
-  IF ISJSON(@report_json) <> 1 OR LEFT(LTRIM(@report_json), 1) <> N''{'' OR @subject_digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) THROW 50002, N''INVALID'', 1;
+  IF ISJSON(@report_json) <> 1 OR LEFT(LTRIM(@report_json), 1) <> N''{'' OR @subject_digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) BEGIN ;THROW 50002, N''INVALID'', 1; END;
   INSERT INTO [studio].run_evidence (tenant_id, id, draft_id, revision, subject_digest, kind, status, report_json) VALUES (@tenant_id, @evidence_id, @draft_id, @revision, @subject_digest, @kind, @status, @report_json);
 END;
 ');
@@ -188,7 +192,7 @@ WITH EXECUTE AS OWNER
 AS
 BEGIN
   SET NOCOUNT ON; EXEC [studio].assert_context @tenant_id, @user_id, @tenant_epoch, @membership_epoch;
-  IF @actor_id <> @user_id OR @reason IS NULL OR ISJSON(@evidence_ids_json) <> 1 OR LEFT(LTRIM(@evidence_ids_json), 1) <> N''['' OR @candidate_digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) THROW 50002, N''INVALID'', 1;
+  IF @actor_id <> @user_id OR @reason IS NULL OR ISJSON(@evidence_ids_json) <> 1 OR LEFT(LTRIM(@evidence_ids_json), 1) <> N''['' OR @candidate_digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) BEGIN ;THROW 50002, N''INVALID'', 1; END;
   INSERT INTO [studio].review_evidence (tenant_id, id, draft_id, revision, candidate_digest, decision, actor_id, reason, evidence_ids_json) VALUES (@tenant_id, @evidence_id, @draft_id, @revision, @candidate_digest, @decision, @actor_id, @reason, @evidence_ids_json);
 END;
 ');
@@ -200,11 +204,11 @@ WITH EXECUTE AS OWNER
 AS
 BEGIN
   SET NOCOUNT ON; SET XACT_ABORT ON;
-  IF @idempotency_key IS NULL OR @request_digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) OR ISJSON(@receipt_json) <> 1 OR LEFT(LTRIM(@receipt_json), 1) <> N''{'' THROW 50002, N''INVALID'', 1;
+  IF @idempotency_key IS NULL OR @request_digest NOT LIKE REPLICATE(N''[0-9a-f]'', 64) OR ISJSON(@receipt_json) <> 1 OR LEFT(LTRIM(@receipt_json), 1) <> N''{'' BEGIN ;THROW 50002, N''INVALID'', 1; END;
   BEGIN TRANSACTION;
   IF EXISTS (SELECT 1 FROM [studio].command_receipts WITH (UPDLOCK, HOLDLOCK) WHERE tenant_id = @tenant_id AND idempotency_key = @idempotency_key)
   BEGIN
-    IF NOT EXISTS (SELECT 1 FROM [studio].command_receipts WHERE tenant_id = @tenant_id AND idempotency_key = @idempotency_key AND request_digest = @request_digest) THROW 50004, N''CONFLICT'', 1;
+    IF NOT EXISTS (SELECT 1 FROM [studio].command_receipts WHERE tenant_id = @tenant_id AND idempotency_key = @idempotency_key AND request_digest = @request_digest) BEGIN ;THROW 50004, N''CONFLICT'', 1; END;
     SELECT receipt_json FROM [studio].command_receipts WHERE tenant_id = @tenant_id AND idempotency_key = @idempotency_key; COMMIT TRANSACTION; RETURN;
   END;
   INSERT INTO [studio].command_receipts (tenant_id, idempotency_key, request_digest, receipt_json) VALUES (@tenant_id, @idempotency_key, @request_digest, @receipt_json);
