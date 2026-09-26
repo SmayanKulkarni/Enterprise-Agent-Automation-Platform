@@ -2,6 +2,8 @@ import type { Installation, WorkflowRun } from './service.js';
 import type { JsonSchema } from './graph.js';
 import type { HostedMemoryItem, HostedMemoryMatch, HostedMemoryPort } from './memory.js';
 import type { McpPort, ModelPort, ModelRequest, ModelResult } from './runtime.js';
+import type { WorkflowStore } from './sql.js';
+import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrouter-connection.js';
 
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const required = (environment: Readonly<Record<string, string | undefined>>, key: string): string => environment[key]?.trim() || (() => { throw new Error(`Missing ${key}.`); })();
@@ -14,11 +16,13 @@ const responseJson = async (response: Response): Promise<Record<string, unknown>
 const schema = (properties: JsonSchema['properties'], requiredFields: string[]): JsonSchema => ({ type: 'object', properties, required: requiredFields, additionalProperties: false });
 
 export class HttpModelPort implements ModelPort {
-  constructor(private readonly environment: Readonly<Record<string, string | undefined>> = process.env) {}
+  constructor(private readonly environment: Readonly<Record<string, string | undefined>> = process.env, private readonly openRouter?: { store: WorkflowStore; crypto: OpenRouterConnectionCrypto }) {}
   async complete(request: ModelRequest): Promise<ModelResult> {
-    if (request.provider === 'openrouter' && !required(this.environment, 'WORKFLOW_OPENROUTER_TENANTS').split(',').includes(request.tenantId)) throw new Error('DENIED');
+    if (request.provider === 'openrouter' && !required(this.environment, 'WORKFLOW_OPENROUTER_MODELS').split(',').map((model) => model.trim()).includes(request.model)) throw new Error('DENIED');
+    const connection = request.provider === 'openrouter' ? await this.openRouter?.store.workerRead<OpenRouterConnection>(request.tenantId, 'openrouter-connection', '00000000-0000-5000-8000-000000000002') : undefined;
+    if (request.provider === 'openrouter' && (!connection || connection.state !== 'ready' || !connection.data.enabled || !connection.data.key)) throw new Error('DENIED');
     const url = request.provider === 'azure-openai' ? `${azureUrl(this.environment)}/chat/completions` : 'https://openrouter.ai/api/v1/chat/completions';
-    const headers = request.provider === 'azure-openai' ? azureHeaders(this.environment) : { 'content-type': 'application/json', authorization: `Bearer ${required(this.environment, 'OPENROUTER_API_KEY')}` };
+    const headers = request.provider === 'azure-openai' ? azureHeaders(this.environment) : { 'content-type': 'application/json', authorization: `Bearer ${this.openRouter!.crypto.open(request.tenantId, connection!.data.key!)}` };
     const body = { model: request.model, messages: [{ role: 'system', content: `${request.instructions}\nPrompt version: ${request.promptVersion}` }, { role: 'user', content: JSON.stringify({ input: request.input, context: request.context }) }], response_format: { type: 'json_schema', json_schema: { name: 'workflow_result', strict: true, schema: request.responseSchema } }, max_completion_tokens: request.policy.tokens };
     const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(request.policy.milliseconds) });
     const parsed = await responseJson(response); const choice = (parsed['choices'] as unknown[])?.[0];
@@ -26,7 +30,7 @@ export class HttpModelPort implements ModelPort {
     if (typeof content !== 'string') throw new Error('INVALID_MODEL_OUTPUT');
     const output: unknown = JSON.parse(content); if (!object(output)) throw new Error('INVALID_MODEL_OUTPUT');
     const usage = parsed['usage']; const tokens = object(usage) && typeof usage['total_tokens'] === 'number' ? usage['total_tokens'] : Infinity;
-    const rate = Number(required(this.environment, 'WORKFLOW_MAX_COST_PER_1K_TOKENS'));
+    const rate = Number(required(this.environment, request.provider === 'openrouter' ? 'WORKFLOW_OPENROUTER_MAX_COST_PER_1K_TOKENS' : 'WORKFLOW_MAX_COST_PER_1K_TOKENS'));
     if (!Number.isFinite(rate) || rate <= 0) throw new Error('INVALID_COST_RATE');
     return { output, model: request.model, tokens, cost: tokens / 1000 * rate };
   }

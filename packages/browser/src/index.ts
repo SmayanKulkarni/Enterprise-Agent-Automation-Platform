@@ -36,7 +36,8 @@ export class ClerkSessionAdapter {
 }
 export interface BrowserProjection { context: ExecutionContext; collection: string; id?: string; }
 export type BrowserProjectionHandler = (projection: BrowserProjection) => Promise<Record<string, unknown>> | Record<string, unknown>;
-export interface BrowserTransportOptions { allowedOrigins: readonly string[]; commands?: Readonly<Record<string, BrowserCommandHandler>>; clerk?: ClerkSessionAdapter; identity?: IdentityReadStore; projections?: BrowserProjectionHandler; now?: () => string; }
+export type BrowserConnectionHandler = (input: { context: ExecutionContext; action: 'connect' | 'rotate' | 'verify' | 'disconnect'; expectedVersion: number; idempotencyKey: string; key?: string }) => Promise<Record<string, unknown>>;
+export interface BrowserTransportOptions { allowedOrigins: readonly string[]; commands?: Readonly<Record<string, BrowserCommandHandler>>; connections?: BrowserConnectionHandler; clerk?: ClerkSessionAdapter; identity?: IdentityReadStore; projections?: BrowserProjectionHandler; now?: () => string; }
 export interface SafeCaseProjection { caseId: string; watermark: number; eventSequence: number; generation: number; version: number; classification: 'ordinary' | 'restricted-operational'; redacted: boolean; waiting?: string; approvalDigest?: string; unknownOutcome?: boolean; reconciliation?: string; }
 /** Browser-only Case state: a sequence gap refreshes only the affected Case. */
 export class CaseWorkbench {
@@ -129,7 +130,7 @@ export class VendorCaseWorkbench {
 
 const MEDIA_TYPE = 'application/vnd.platform.browser.v1+json';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const collections = new Set(['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'agent-teams', 'workflows', 'skills', 'test-runs', 'reviews', 'versions', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants', 'workflow-drafts', 'workflow-definitions', 'workflow-runs', 'workflow-grants', 'workflow-webhook-credentials', 'workflow-memory-imports', 'workflow-memory-items', 'workflow-memory-readiness', 'connector-installations']);
+const collections = new Set(['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'agent-teams', 'workflows', 'skills', 'test-runs', 'reviews', 'versions', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants', 'workflow-drafts', 'workflow-definitions', 'workflow-runs', 'workflow-grants', 'workflow-webhook-credentials', 'workflow-memory-imports', 'workflow-memory-items', 'workflow-memory-readiness', 'connector-installations', 'openrouter-connections']);
 export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
   { method: 'GET', path: '/api/v1/session', owner: 'identity', action: 'identity.session.read', ready: true },
   { method: 'GET', path: '/api/v1/tenants', owner: 'identity', action: 'identity.membership.list', ready: true },
@@ -162,6 +163,7 @@ export class BrowserV1Transport {
       const tail = match[2] ?? ''; this.validateQuery(url, routeTenant);
       if (request.method === 'GET' && tail === 'events') return await this.featureNotReady(request, routeTenant);
       if (request.method === 'GET' && this.collectionRoute(tail)) return await this.projection(request, String(routeTenant), tail);
+      if (request.method === 'POST' && tail === 'openrouter-connection') return await this.connection(request, String(routeTenant));
       const commandRoute = /^commands\/([a-z][a-z0-9-]*)\/([a-z][a-z0-9-]*)$/u.exec(tail);
       if (request.method !== 'POST' || commandRoute === null) return await this.error(request, 404, { category: 'invalid', code: 'NOT_FOUND', message: 'Route was not found.', redacted: true });
       return await this.command(request, String(routeTenant), commandRoute[1] ?? '', commandRoute[2] ?? '');
@@ -188,6 +190,15 @@ export class BrowserV1Transport {
     const command: BrowserCommand = { context, tenantId: routeTenant, owner, name, idempotencyKey: key, correlationId: correlationId(correlation), expectedVersion: version, digest: await digest(argumentsValue), envelope };
     const handler = this.#commands[`${owner}.${name}`]; if (handler === undefined) return this.featureNotReady(request, routeTenant);
     const current = await this.context(request, routeTenant); if (current === undefined || current.tenantEpoch !== context.tenantEpoch || current.membershipEpoch !== context.membershipEpoch) throw new Error('STALE'); return this.success(request, routeTenant, await handler({ ...command, context: current }));
+  }
+  private async connection(request: BrowserRequest, routeTenant: string): Promise<BrowserResponse> {
+    const key = header(request, 'idempotency-key'); const contentType = header(request, 'content-type');
+    if (!key || !UUID.test(key) || contentType !== 'application/json' || !request.body || !this.options.connections) throw new Error('DENIED');
+    const body: unknown = JSON.parse(Buffer.from(request.body).toString('utf8')); if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('INVALID');
+    const value = body as Record<string, unknown>; const action = value['action']; const expectedVersion = value['expectedVersion']; const secret = value['key'];
+    if (!['connect', 'rotate', 'verify', 'disconnect'].includes(String(action)) || !Number.isSafeInteger(expectedVersion) || (expectedVersion as number) < 0 || (secret !== undefined && (typeof secret !== 'string' || secret.length > 4096)) || ((action === 'connect' || action === 'rotate') && typeof secret !== 'string')) throw new Error('INVALID');
+    const context = await this.context(request, routeTenant); if (!context) return this.featureNotReady(request, routeTenant);
+    return this.success(request, routeTenant, await this.options.connections({ context, action: action as 'connect' | 'rotate' | 'verify' | 'disconnect', expectedVersion: expectedVersion as number, idempotencyKey: key, ...(typeof secret === 'string' ? { key: secret } : {}) }));
   }
   private async featureNotReady(request: BrowserRequest, selectedTenant: string | undefined): Promise<BrowserResponse> { return this.error(request, 501, { category: 'terminal', code: 'FEATURE_NOT_READY', message: 'This feature is not ready.', redacted: true }, selectedTenant); }
   private async success(request: BrowserRequest, selectedTenant: string | undefined, payload: Record<string, unknown>): Promise<BrowserResponse> { return this.response(request, 200, selectedTenant, payload); }

@@ -3,11 +3,12 @@ import type { InvocationContext } from '@azure/functions';
 import { AzureSqlWorkflowStore } from '../../../packages/workflow/src/sql.js';
 import { WorkflowWorker, type StepResult } from '../../../packages/workflow/src/runtime.js';
 import { HttpMcpPort, HttpModelPort, UpstashVectorMemoryPort } from '../../../packages/workflow/src/ports.js';
+import { OpenRouterConnectionCrypto } from '../../../packages/workflow/src/openrouter-connection.js';
 
 interface Input { tenantId: string; runId: string; definitionId: string; }
 
 const store = (): AzureSqlWorkflowStore => new AzureSqlWorkflowStore(process.env['AZURE_SQL_CONNECTION_STRING'] ?? '');
-const worker = (): WorkflowWorker => new WorkflowWorker(store(), new HttpModelPort(), new HttpMcpPort(), new UpstashVectorMemoryPort());
+const worker = (): WorkflowWorker => { const workflowStore = store(); const crypto = process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY'] && process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION'] ? OpenRouterConnectionCrypto.fromEnvironment(process.env) : undefined; return new WorkflowWorker(workflowStore, new HttpModelPort(process.env, crypto ? { store: workflowStore, crypto } : undefined), new HttpMcpPort(), new UpstashVectorMemoryPort()); };
 
 df.app.activity('workflowStep', { handler: async (input: Input & { nodeId: string }) => worker().step(input.tenantId, input.runId, input.definitionId, input.nodeId) });
 df.app.activity('workflowExpire', { handler: async (input: Input & { nodeId: string }) => worker().expire(input.tenantId, input.runId, input.nodeId) });

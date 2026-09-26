@@ -6,6 +6,7 @@ import type { StudioDraft } from '../../lifecycle/src/studio.js';
 import { compileGraph, validateGraph, validateSchema, validateValue, type CapabilityPin, type GraphDraft, type GraphIssue, type JsonSchema, type WorkflowDefinition } from './graph.js';
 import { memoryFingerprint, memoryItemId, redacted, type HostedMemoryPort, type MemoryImport, type MemoryItem } from './memory.js';
 import type { WorkflowRecord, WorkflowStore } from './sql.js';
+import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrouter-connection.js';
 
 export interface CapabilityManifest { digest: string; version: string; certified: boolean; capabilities: readonly { name: string; risk: 'R1' | 'R2' | 'R3'; inputSchema: JsonSchema; outputSchema: JsonSchema }[]; }
 export interface Installation { id: string; route: 'public' | 'private'; endpoint?: string; tokenHash?: string; health: 'healthy' | 'offline' | 'revoked'; manifest: CapabilityManifest; }
@@ -102,10 +103,30 @@ const memoryFailure = (value: unknown): string | undefined => {
 };
 
 export class WorkflowService {
-  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation) => boolean = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort) {}
+  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation) => boolean = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }) {}
 
   private providerIssues(context: ExecutionContext, draft: GraphDraft): GraphIssue[] {
-    return draft.nodes.flatMap((node, index) => node.kind !== 'agent' ? [] : !this.availableProviders.includes(String(node.config['provider'])) ? [{ path: `/nodes/${index}/config`, code: 'PROVIDER_NOT_READY', message: 'provider not ready' }] : node.config['provider'] === 'openrouter' && !this.openRouterTenants.includes(String(context.tenantId)) ? [{ path: `/nodes/${index}/config`, code: 'PROVIDER_DENIED', message: 'provider denied' }] : []);
+    return draft.nodes.flatMap((node, index) => node.kind !== 'agent' ? [] : !this.availableProviders.includes(String(node.config['provider'])) ? [{ path: `/nodes/${index}/config`, code: 'PROVIDER_NOT_READY', message: 'provider not ready' }] : []);
+  }
+
+  async openRouterConnection(context: ExecutionContext, action: 'connect' | 'rotate' | 'verify' | 'disconnect', expectedVersion: number, key: string, requestDigest: string, candidate?: string): Promise<{ version: number; state: string }> {
+    await this.store.assertProfile(context, 'admin');
+    const provider = this.openRouter; if (!provider) throw Object.assign(new Error('FEATURE_NOT_READY'), { code: 'FEATURE_NOT_READY' });
+    const crypto = provider.crypto;
+    const connectionId = '00000000-0000-5000-8000-000000000002'; const current = await this.store.read<OpenRouterConnection>(context, 'openrouter-connection', connectionId);
+    if ((current?.version ?? 0) !== expectedVersion) fail('STALE');
+    let data: OpenRouterConnection; let state: string;
+    if (action === 'disconnect') { data = { provider: 'openrouter', enabled: false }; state = 'disabled'; }
+    else {
+      const secret = action === 'verify' ? current?.data.key && crypto.open(String(context.tenantId), current.data.key) : candidate;
+      if (typeof secret !== 'string' || secret.length > 4096 || !await provider.verify(secret)) fail('DENIED');
+      const verifiedSecret = secret as string;
+      if (action === 'verify') data = { ...current!.data, verifiedAt: new Date().toISOString() };
+      else data = { provider: 'openrouter', enabled: true, key: crypto.seal(String(context.tenantId), verifiedSecret), digest: crypto.digest(String(context.tenantId), verifiedSecret), verifiedAt: new Date().toISOString() };
+      state = 'ready';
+    }
+    const result = await this.store.write(context, 'admin', 'openrouter-connection', connectionId, expectedVersion, state, data, key, requestDigest, { commandId: key, objectId: connectionId, revision: expectedVersion + 1, state, digest: await digest({ provider: data.provider, enabled: data.enabled, verifiedAt: data.verifiedAt }), evidenceIds: [] });
+    return { version: result.replayed ? expectedVersion + 1 : expectedVersion + 1, state };
   }
 
   async draft(context: ExecutionContext, draftId: string): Promise<StudioStoredDraft<StudioDraft | GraphDraft>> { return this.studio.get(context, id(draftId)); }
@@ -138,7 +159,6 @@ export class WorkflowService {
     if (expectedVersion !== undefined && stored.revision !== expectedVersion) fail('STALE');
     if (this.providerIssues(context, graph(stored)).length) fail('FEATURE_NOT_READY');
     const definition = await compileGraph(definitionId(draftId, stored.revision), stored.revision, graph(stored), pins);
-    if (definition.nodes.some((node) => node.kind === 'agent' && node.config['provider'] === 'openrouter') && !this.openRouterTenants.includes(String(context.tenantId))) fail('DENIED');
     if (reviewDigest !== definition.digest) fail('STALE');
     await this.store.publish(context, definition, draftId, stored.revision, stored.digest, reviewDigest);
     return definition;
@@ -315,6 +335,7 @@ export class WorkflowService {
     else if (collection === 'connector-installations') records = (await this.store.list<Installation>(context, 'installation')).map((item) => ({ id: item.id, version: item.version, state: item.state, route: item.data.route, health: item.data.health, manifest: item.data.manifest }));
     else if (collection === 'workflow-grants') records = (await this.store.list<CapabilityGrant>(context, 'grant')).map((item) => ({ id: item.id, version: item.version, state: item.state, ...item.data }));
     else if (collection === 'workflow-webhook-credentials') records = (await this.store.list<WebhookCredential>(context, 'webhook-credential')).map((item) => ({ id: item.id, version: item.version, state: item.state, definitionId: item.data.definitionId, enabled: item.data.enabled, rotatedAt: item.data.rotatedAt, ...(item.data.previousExpiresAt ? { previousExpiresAt: item.data.previousExpiresAt } : {}) }));
+    else if (collection === 'openrouter-connections') records = (await this.store.list<OpenRouterConnection>(context, 'openrouter-connection')).map((item) => ({ id: item.id, version: item.version, state: item.state, provider: item.data.provider, enabled: item.data.enabled, ...(item.data.verifiedAt ? { verifiedAt: item.data.verifiedAt } : {}) }));
     else if (collection === 'workflow-memory-imports') records = (await this.store.list<MemoryImport>(context, 'memory-import')).map((item) => ({ id: item.id, version: item.version, ...item.data }));
     else if (collection === 'workflow-memory-items') records = (await this.store.list<MemoryItem>(context, 'memory-item')).map((item) => ({ id: item.id, version: item.version, state: item.state, stableDefinitionId: item.data.stableDefinitionId, definitionId: item.data.definitionId, producingRevision: item.data.producingRevision, type: item.data.type, sourceId: item.data.sourceId, sourceDigest: item.data.sourceDigest, ownerScoped: item.data.ownerId !== undefined, ...(item.data.predecessorId ? { predecessorId: item.data.predecessorId } : {}), ...(item.data.promotedAt ? { promotedAt: item.data.promotedAt } : {}), ...(item.data.expiresAt ? { expiresAt: item.data.expiresAt } : {}), hold: item.data.hold === true, ...(memoryFailure(item.data.failure) ? { failure: memoryFailure(item.data.failure) } : {}), vectorState: item.data.vectorState }));
     else if (collection === 'workflow-memory-readiness') { const state = this.memoryReadiness(tenantId); records = [{ id: '00000000-0000-5000-8000-000000000001', state, enabled: state === 'ready', provider: 'upstash-vector' }]; }

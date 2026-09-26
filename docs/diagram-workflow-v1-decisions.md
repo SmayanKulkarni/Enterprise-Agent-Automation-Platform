@@ -44,6 +44,8 @@ Implement the compiler and published definition, sequential durable execution, m
 
 ## Workflow implementation integration
 
+- OpenRouter credentials use a tenant-bound AES-256-GCM envelope, authenticated with the tenant ID, provider, and wrapping-key version. Studio submits them only through a dedicated authenticated route; projections and receipts retain only enabled state and verification time. Worker dispatch resolves the active tenant record at request time and requires an exact server-configured model allow-list.
+
 - Graph drafts use the existing Studio revision and evidence tables. The compiled definition excludes canvas labels and coordinates from its digest. The live publication procedure requires a passing check for the current draft revision and the exact compiled digest.
 - Tenant membership profiles are stored separately from membership status and checked by SQL owner procedures. The browser never supplies an authoritative role.
 - Workflow runs, effect intents, summaries, installations, grants, and circuit state use tenant-keyed SQL records with version checks. Durable Functions keeps only deterministic traversal and wait timers in orchestration; activities perform I/O.

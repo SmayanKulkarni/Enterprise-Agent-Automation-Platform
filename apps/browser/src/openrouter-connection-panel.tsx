@@ -1,0 +1,11 @@
+import { useEffect, useState } from 'react';
+import type { PlatformApi, Projection } from './platform-api.js';
+
+export function OpenRouterConnectionPanel({ api, tenantId, admin }: { api: PlatformApi; tenantId: string; admin: boolean }) {
+  const [status, setStatus] = useState<Projection>(); const [key, setKey] = useState(''); const [message, setMessage] = useState('');
+  const refresh = async () => setStatus(await api.projection(tenantId, 'openrouter-connections'));
+  useEffect(() => { setKey(''); setMessage(''); void refresh().catch(() => setMessage('Connection status could not be loaded.')); }, [api, tenantId]);
+  const record = status?.records[0]; const version = Number(record?.['version'] ?? 0); const enabled = record?.['enabled'] === true;
+  const act = async (action: 'connect' | 'rotate' | 'verify' | 'disconnect') => { try { await api.openRouterConnection(tenantId, action, version, action === 'connect' || action === 'rotate' ? key : undefined); setKey(''); setMessage(action === 'verify' ? 'Connection verified.' : action === 'disconnect' ? 'Connection disconnected.' : 'Connection saved and verified.'); await refresh(); } catch { setKey(''); setMessage('Connection request was denied, stale, or could not be verified.'); } };
+  return <section className="connector-panel" aria-label="OpenRouter connection"><div className="pane-heading"><div><p>Provider connection</p><h2>OpenRouter</h2><span>{enabled ? 'Ready' : 'Not connected'}</span></div></div>{message && <p role="status">{message}</p>}{admin && <><label>OpenRouter API key<input type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" /></label>{enabled ? <div><button disabled={!key} onClick={() => void act('rotate')}>Rotate key</button><button onClick={() => void act('verify')}>Verify</button><button onClick={() => void act('disconnect')}>Disconnect</button></div> : <button disabled={!key} onClick={() => void act('connect')}>Connect and verify</button>}</>}{!admin && <p>An administrator can manage this connection.</p>}</section>;
+}

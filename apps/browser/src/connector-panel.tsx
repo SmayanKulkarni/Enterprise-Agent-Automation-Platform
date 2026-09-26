@@ -3,6 +3,7 @@ import { digest } from '../../../packages/contracts/src/index.js';
 import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
 import { mappingFields } from './workflow-model.js';
 import type { PlatformApi, Projection } from './platform-api.js';
+import { OpenRouterConnectionPanel } from './openrouter-connection-panel.js';
 
 interface ConnectorPanelProps {
   api: PlatformApi;
@@ -129,7 +130,7 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
     }
   };
 
-  if (node?.kind !== 'mcp') return null;
+  if (node?.kind !== 'mcp') return <OpenRouterConnectionPanel api={api} tenantId={tenantId} admin={admin} />;
 
   return <section className="connector-panel" aria-label="Connector installations">
     <div className="pane-heading">

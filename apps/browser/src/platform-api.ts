@@ -90,6 +90,11 @@ export class PlatformApi {
     return commandReceipt(responsePayload);
   }
 
+  async openRouterConnection(tenantId: string, action: 'connect' | 'rotate' | 'verify' | 'disconnect', expectedVersion: number, key?: string): Promise<CommandReceipt> {
+    const response = await fetch(`${this.apiOrigin}/api/v1/tenants/${encodeURIComponent(tenantId)}/openrouter-connection`, { method: 'POST', headers: { accept: mediaType, 'content-type': 'application/json', 'x-platform-tenant': tenantId, 'idempotency-key': crypto.randomUUID(), ...(await clerkAuthorizationHeader(this.getToken)) }, body: JSON.stringify({ action, expectedVersion, ...(key === undefined ? {} : { key }) }) });
+    const payload = record((await response.json()))['payload']; if (!response.ok) throw new PlatformApiError(response.status, errorCategory(payload)); return commandReceipt(payload);
+  }
+
   private async get(path: string, tenantId: string | undefined, signal: AbortSignal | undefined): Promise<unknown> {
     const headers: Record<string, string> = { accept: mediaType, ...(await clerkAuthorizationHeader(this.getToken)) };
     if (tenantId !== undefined) headers['x-platform-tenant'] = tenantId;

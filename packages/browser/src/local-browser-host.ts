@@ -5,7 +5,9 @@ import { AzureSqlStudioStore } from '../../lifecycle/src/studio-sql.js';
 import { AzureSqlWorkflowStore } from '../../workflow/src/sql.js';
 import { WorkflowService, type Scheduler } from '../../workflow/src/service.js';
 import { UpstashVectorMemoryPort } from '../../workflow/src/ports.js';
+import { OpenRouterConnectionCrypto } from '../../workflow/src/openrouter-connection.js';
 import { workflowCommandHandlers } from './workflow-commands.js';
+import { digest } from '../../contracts/src/index.js';
 
 const required = (environment: Readonly<Record<string, string | undefined>>, name: string): string => {
   const value = environment[name]?.trim();
@@ -28,17 +30,18 @@ export function localBrowserTransport(environment: Readonly<Record<string, strin
   const projectionStore = connectionString ? new AzureSqlProjectionStore(connectionString) : undefined;
   const projections = projectionStore === undefined ? fixtureProjection : (input: BrowserProjection) => projectionStore.read(input);
   const workflowStore = connectionString ? new AzureSqlWorkflowStore(connectionString) : undefined;
-  const providers = [environment['AZURE_OPENAI_ENDPOINT'] && environment['AZURE_OPENAI_API_KEY'] ? 'azure-openai' : undefined, environment['OPENROUTER_API_KEY'] ? 'openrouter' : undefined].filter((provider): provider is string => provider !== undefined);
+  const providers = [environment['AZURE_OPENAI_ENDPOINT'] && environment['AZURE_OPENAI_API_KEY'] ? 'azure-openai' : undefined, environment['WORKFLOW_OPENROUTER_WRAPPING_KEY'] && environment['WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION'] ? 'openrouter' : undefined].filter((provider): provider is string => provider !== undefined);
   const allowedMcpHosts = new Set((environment['WORKFLOW_MCP_ALLOWED_HOSTS'] ?? '').split(',').map((host) => host.trim()).filter(Boolean));
   const connectorReady = (installation: { id: string; route: string; endpoint?: string; tokenHash?: string }): boolean => {
     if (installation.route === 'private') return Boolean(installation.tokenHash);
     try { return Boolean(installation.endpoint && allowedMcpHosts.has(new URL(installation.endpoint).hostname) && environment[`WORKFLOW_MCP_CREDENTIAL_${installation.id.replaceAll('-', '').toUpperCase()}`]); } catch { return false; }
   };
   const memory = new UpstashVectorMemoryPort(environment);
-  const workflow = connectionString && workflowStore ? new WorkflowService(new AzureSqlStudioStore(connectionString), workflowStore, scheduler, (environment['WORKFLOW_OPENROUTER_TENANTS'] ?? '').split(','), providers, connectorReady, (tenantId) => memory.enabled(tenantId) ? memory.readiness : 'disabled', memory) : undefined;
+  const crypto = providers.includes('openrouter') ? OpenRouterConnectionCrypto.fromEnvironment(environment) : undefined;
+  const workflow = connectionString && workflowStore ? new WorkflowService(new AzureSqlStudioStore(connectionString), workflowStore, scheduler, [], providers, connectorReady, (tenantId) => memory.enabled(tenantId) ? memory.readiness : 'disabled', memory, crypto ? { crypto, verify: async (key) => (await fetch('https://openrouter.ai/api/v1/key', { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000) })).ok } : undefined) : undefined;
   const commands = workflow && workflowStore ? workflowCommandHandlers(new AzureSqlStudioStore(connectionString!), workflowStore, workflow) : undefined;
   const read = workflow ? (input: BrowserProjection) => input.collection.startsWith('workflow-') || input.collection === 'connector-installations' ? workflow.projection(input.context, input.collection, input.id) : projections(input) : projections;
-  return new BrowserV1Transport({ allowedOrigins: authorizedParties, clerk, identity, projections: read, ...(commands ? { commands } : {}) });
+  return new BrowserV1Transport({ allowedOrigins: authorizedParties, clerk, identity, projections: read, ...(commands ? { commands } : {}), ...(workflow ? { connections: async (input) => { const result = await workflow.openRouterConnection(input.context, input.action, input.expectedVersion, input.idempotencyKey, await digest({ action: input.action, key: input.key ? crypto!.digest(String(input.context.tenantId), input.key) : undefined }), input.key); return { commandId: input.idempotencyKey, objectId: '00000000-0000-5000-8000-000000000002', revision: result.version, state: result.state, digest: 'redacted', evidenceIds: [] }; } } : {}) });
 }
 
 function fixtureIdentity(issuer: string, subject: string, tenantIds: readonly string[]): IdentityStore {
