@@ -44,6 +44,9 @@ Implement the compiler and published definition, sequential durable execution, m
 
 ## Workflow implementation integration
 
+- OpenRouter model identifiers are exact configured slugs. The browser receives only the allowed slug and structured-output capability, while the tenant key remains server-only. Check and publish both reread tenant connection state and the configured allow-list; a fallback must be another certified exact model with structured-output support.
+- Below 820px the live block library remains in document flow above the canvas and inspector. The canvas keeps its existing scene and zoom model, while native buttons retain keyboard access.
+
 - OpenRouter credentials use a tenant-bound AES-256-GCM envelope, authenticated with the tenant ID, provider, and wrapping-key version. Studio submits them only through a dedicated authenticated route; projections and receipts retain only enabled state and verification time. Worker dispatch resolves the active tenant record at request time and requires an exact server-configured model allow-list.
 
 - Graph drafts use the existing Studio revision and evidence tables. The compiled definition excludes canvas labels and coordinates from its digest. The live publication procedure requires a passing check for the current draft revision and the exact compiled digest.

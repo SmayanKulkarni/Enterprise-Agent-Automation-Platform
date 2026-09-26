@@ -18,6 +18,7 @@ export interface WorkflowRun { id: string; tenantId: string; ownerId: string; st
 export interface Scheduler { start(runId: string, tenantId: string, definitionId: string): Promise<void>; raise(runId: string, name: string, value: unknown): Promise<void>; promoteMemory?(runId: string, tenantId: string): Promise<void>; correctMemory?(itemId: string, tenantId: string, text: string): Promise<void>; removeMemory?(itemId: string, tenantId: string): Promise<void>; }
 export type WebhookDeliveryOutcome = 'accepted' | 'invalid-shape' | 'signature' | 'freshness' | 'replay' | 'credential-state' | 'not-found';
 export interface WebhookDelivery { outcome: WebhookDeliveryOutcome; runId?: string; }
+export interface OpenRouterModel { id: string; structuredOutput: boolean; }
 type MemoryReadiness = 'disabled' | 'not-configured' | 'ready' | 'unavailable';
 
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
@@ -103,10 +104,23 @@ const memoryFailure = (value: unknown): string | undefined => {
 };
 
 export class WorkflowService {
-  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation) => boolean = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }) {}
+  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation) => boolean = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }, private readonly openRouterModels: readonly OpenRouterModel[] = []) {}
 
-  private providerIssues(context: ExecutionContext, draft: GraphDraft): GraphIssue[] {
-    return draft.nodes.flatMap((node, index) => node.kind !== 'agent' ? [] : !this.availableProviders.includes(String(node.config['provider'])) ? [{ path: `/nodes/${index}/config`, code: 'PROVIDER_NOT_READY', message: 'provider not ready' }] : []);
+  private async providerIssues(context: ExecutionContext, draft: GraphDraft): Promise<GraphIssue[]> {
+    const connection = draft.nodes.some((node) => node.kind === 'agent' && node.config['provider'] === 'openrouter') ? await this.store.read<OpenRouterConnection>(context, 'openrouter-connection', '00000000-0000-5000-8000-000000000002') : undefined;
+    return draft.nodes.flatMap((node, index) => {
+      if (node.kind !== 'agent') return [];
+      const path = `/nodes/${index}/config`;
+      if (!this.availableProviders.includes(String(node.config['provider']))) return [{ path, code: 'PROVIDER_NOT_READY', message: 'provider not ready' }];
+      if (node.config['provider'] !== 'openrouter') return [];
+      if (!this.openRouter && this.openRouterModels.length === 0) return [];
+      const selected = this.openRouterModels.find((item) => item.id === node.config['model']);
+      const fallback = node.config['fallback'] === undefined ? undefined : this.openRouterModels.find((item) => item.id === node.config['fallback']);
+      if (!this.openRouter || connection?.state !== 'ready' || !connection.data.enabled || !connection.data.verifiedAt) return [{ path, code: 'OPENROUTER_CONNECTION_NOT_READY', message: 'OpenRouter connection is not ready' }];
+      if (!selected || fallback === undefined && node.config['fallback'] !== undefined) return [{ path, code: 'OPENROUTER_MODEL_NOT_ALLOWED', message: 'select a permitted exact OpenRouter model' }];
+      if (!selected.structuredOutput || fallback && !fallback.structuredOutput) return [{ path, code: 'OPENROUTER_STRUCTURED_OUTPUT_UNSUPPORTED', message: 'selected model does not support structured output' }];
+      return [];
+    });
   }
 
   async openRouterConnection(context: ExecutionContext, action: 'connect' | 'rotate' | 'verify' | 'disconnect', expectedVersion: number, key: string, requestDigest: string, candidate?: string): Promise<{ version: number; state: string }> {
@@ -146,7 +160,7 @@ export class WorkflowService {
     await this.store.assertProfile(context, 'editor');
     const stored = await this.draft(context, draftId); const pins = await this.pins(context, draftId);
     if (expectedVersion !== undefined && stored.revision !== expectedVersion) fail('STALE');
-    const issues = [...validateGraph(graph(stored), pins), ...this.providerIssues(context, graph(stored))];
+    const issues = [...validateGraph(graph(stored), pins), ...await this.providerIssues(context, graph(stored))];
     const candidate = issues.length ? undefined : await compileGraph(definitionId(draftId, stored.revision), stored.revision, graph(stored), pins);
     const evidenceId = randomUUID();
     await this.studio.appendRun(context, draftId, { id: evidenceId, revision: stored.revision, subjectDigest: stored.digest, kind: 'checks', status: issues.length ? 'failed' : 'passed', report: { classification: 'live', issues, ...(candidate ? { candidateDigest: candidate.digest } : {}) } });
@@ -157,7 +171,7 @@ export class WorkflowService {
     await this.store.assertProfile(context, 'admin');
     const stored = await this.draft(context, draftId); const pins = await this.pins(context, draftId);
     if (expectedVersion !== undefined && stored.revision !== expectedVersion) fail('STALE');
-    if (this.providerIssues(context, graph(stored)).length) fail('FEATURE_NOT_READY');
+    if ((await this.providerIssues(context, graph(stored))).length > 0) fail('FEATURE_NOT_READY');
     const definition = await compileGraph(definitionId(draftId, stored.revision), stored.revision, graph(stored), pins);
     if (reviewDigest !== definition.digest) fail('STALE');
     await this.store.publish(context, definition, draftId, stored.revision, stored.digest, reviewDigest);
@@ -336,6 +350,7 @@ export class WorkflowService {
     else if (collection === 'workflow-grants') records = (await this.store.list<CapabilityGrant>(context, 'grant')).map((item) => ({ id: item.id, version: item.version, state: item.state, ...item.data }));
     else if (collection === 'workflow-webhook-credentials') records = (await this.store.list<WebhookCredential>(context, 'webhook-credential')).map((item) => ({ id: item.id, version: item.version, state: item.state, definitionId: item.data.definitionId, enabled: item.data.enabled, rotatedAt: item.data.rotatedAt, ...(item.data.previousExpiresAt ? { previousExpiresAt: item.data.previousExpiresAt } : {}) }));
     else if (collection === 'openrouter-connections') records = (await this.store.list<OpenRouterConnection>(context, 'openrouter-connection')).map((item) => ({ id: item.id, version: item.version, state: item.state, provider: item.data.provider, enabled: item.data.enabled, ...(item.data.verifiedAt ? { verifiedAt: item.data.verifiedAt } : {}) }));
+    else if (collection === 'openrouter-models') records = [{ id: 'openrouter', provider: 'openrouter', models: this.openRouterModels, configured: this.openRouter !== undefined && this.openRouterModels.length > 0 }];
     else if (collection === 'workflow-memory-imports') records = (await this.store.list<MemoryImport>(context, 'memory-import')).map((item) => ({ id: item.id, version: item.version, ...item.data }));
     else if (collection === 'workflow-memory-items') records = (await this.store.list<MemoryItem>(context, 'memory-item')).map((item) => ({ id: item.id, version: item.version, state: item.state, stableDefinitionId: item.data.stableDefinitionId, definitionId: item.data.definitionId, producingRevision: item.data.producingRevision, type: item.data.type, sourceId: item.data.sourceId, sourceDigest: item.data.sourceDigest, ownerScoped: item.data.ownerId !== undefined, ...(item.data.predecessorId ? { predecessorId: item.data.predecessorId } : {}), ...(item.data.promotedAt ? { promotedAt: item.data.promotedAt } : {}), ...(item.data.expiresAt ? { expiresAt: item.data.expiresAt } : {}), hold: item.data.hold === true, ...(memoryFailure(item.data.failure) ? { failure: memoryFailure(item.data.failure) } : {}), vectorState: item.data.vectorState }));
     else if (collection === 'workflow-memory-readiness') { const state = this.memoryReadiness(tenantId); records = [{ id: '00000000-0000-5000-8000-000000000001', state, enabled: state === 'ready', provider: 'upstash-vector' }]; }

@@ -31,6 +31,10 @@ test('graph compiler rejects joins, cycles, unsupported nodes and unreachable pa
   expect(validateGraph(unbounded).map((issue) => issue.code)).toContain('INVALID_AGENT');
   const branch = graph(); branch.edges[1]!.branch = 'true';
   expect(validateGraph(branch).map((issue) => issue.code)).toContain('INVALID_SUCCESSOR');
+  const alias = graph(); alias.nodes[1]!.config['model'] = 'openai/gpt 4.1';
+  expect(validateGraph(alias).map((issue) => issue.code)).toContain('INVALID_AGENT');
+  const duplicateFallback = graph(); duplicateFallback.nodes[1]!.config['fallback'] = 'gpt-4.1';
+  expect(validateGraph(duplicateFallback).map((issue) => issue.code)).toContain('INVALID_AGENT');
 });
 
 test('accepts optional memory proposals and rejects a required or non-array proposal field', () => {
