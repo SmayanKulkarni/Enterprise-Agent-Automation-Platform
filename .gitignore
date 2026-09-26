@@ -13,6 +13,7 @@ graphify-out/
 outputs/
 SYSTEM_DESIGN_REPORT.*
 docs/*
+!docs/STUDIO_UX_PLAN.md
 !docs/diagram-workflow-v1-decisions.md
 !docs/adr/
 docs/adr/*
