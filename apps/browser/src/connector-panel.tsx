@@ -8,7 +8,7 @@ interface ConnectorPanelProps {
   api: PlatformApi;
   tenantId: string;
   draftId: string | undefined;
-  node: WorkflowNode;
+  node: WorkflowNode | undefined;
   nodes: readonly WorkflowNode[];
   edges: readonly WorkflowEdge[];
   admin: boolean;
@@ -49,7 +49,7 @@ function constant(type: FieldType, value: string): unknown {
 }
 
 export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, admin, onPin }: ConnectorPanelProps) {
-  const config = node.config ?? {};
+  const config = node?.config ?? {};
   const [installations, setInstallations] = useState<Projection>();
   const [installationId, setInstallationId] = useState(String(config['installationId'] ?? ''));
   const [capabilityName, setCapabilityName] = useState(String(config['capability'] ?? ''));
@@ -69,7 +69,7 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
   useEffect(() => {
     setInstallationId(String(config['installationId'] ?? ''));
     setCapabilityName(String(config['capability'] ?? ''));
-  }, [node.id, node.config]);
+  }, [node?.id, node?.config]);
 
   const choices = certifiedInstallations(installations);
   const installation = choices.find((item) => item['id'] === installationId);
@@ -88,7 +88,7 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
   };
 
   const grant = async () => {
-    if (!draftId || !capability || !manifest?.digest) return;
+    if (!draftId || !node || !capability || !manifest?.digest) return;
     try {
       const result = await api.command({ tenantId, owner: 'workflow', name: 'grant', expectedVersion: 0, arguments: { id: draftId, nodeId: node.id, installationId, capability: capability.name } });
       onPin({ ...config, installationId, capability: capability.name, manifestDigest: manifest.digest, grantId: result.objectId });
@@ -129,7 +129,7 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
     }
   };
 
-  if (node.kind !== 'mcp') return null;
+  if (node?.kind !== 'mcp') return null;
 
   return <section className="connector-panel" aria-label="Connector installations">
     <div className="pane-heading">

@@ -141,6 +141,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .studio-live-status ol { margin: 8px 0; padding-left: 18px; }
 .workflow-node.invalid { border-color: #b54a3b; box-shadow: 0 0 0 3px rgb(181 74 59 / 16%); }
 .node-delete { position: absolute; top: 5px; right: 5px; border: 0; background: transparent; color: #8b4239; cursor: pointer; }
+.empty-canvas { position: absolute; inset: 0; z-index: 1; display: grid; place-content: center; justify-items: center; gap: 12px; text-align: center; }
+.empty-canvas span, .inspector-help, .library-group small { color: var(--muted); font-size: 12px; }
+.library-group button > span { display: grid; gap: 3px; text-align: left; }
+.library-group button > em { margin-left: auto; font-style: normal; }
 .connector-panel { margin: 16px auto; width: min(100% - 40px, 1360px); padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: white; }
 .connector-panel .pane-heading { margin-bottom: 14px; }
 .connector-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
@@ -155,3 +159,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .memory-import-panel p { overflow-wrap: anywhere; }
 .memory-import-panel div { display: flex; flex-wrap: wrap; gap: 8px; }
 .memory-import-panel input { min-width: min(360px, 100%); }
+.workflow-canvas { overscroll-behavior: contain; touch-action: pan-x pan-y; }
+.workflow-scroll-area { position: relative; min-width: 100%; min-height: 100%; }
+.workflow-canvas:focus-visible { outline: 2px solid #5e7d16; outline-offset: -2px; }
+.save-failed i { background: #b54a3b; }
+.draft-details { position: relative; color: #687068; font-size: 11px; }
+.draft-details summary { cursor: pointer; }
+.draft-details code { position: absolute; right: 0; top: 20px; z-index: 6; width: 250px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: white; overflow-wrap: anywhere; }

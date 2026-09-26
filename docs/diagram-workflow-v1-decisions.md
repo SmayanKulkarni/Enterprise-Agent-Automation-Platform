@@ -71,6 +71,10 @@ The implementation keeps the tenant allowlist disabled by default. Memory activi
 
 ## Live authoring controls
 
+- Empty workflow drafts remain structurally saveable. Studio clears selection, connector state, and active graph checks when a removed node owned them; server checks still require exactly one Trigger and an End before publication.
+
+- Canvas zoom uses one bounded viewport transform, preserves the pointer scene coordinate, and keeps scaled geometry scrollable. Saved state is confirmed only by the matching tenant draft projection; stale revisions retain local edits until the editor deliberately reloads.
+
 - The live library exposes only executable V1 node kinds. Fixture-only examples retain their broader node palette.
 - Trigger contracts use typed fields and manual input uses native fields or line-based structured controls; neither path requires JSON entry. The existing server check and start command remain authoritative.
 - Conditions select a preceding Trigger or Agent schema field and retain the existing strict equality and `true`/`false` edge values. Approval reviews are persisted server-side from the pinned Definition and resolved effect arguments; the browser receives labels and types, never raw argument values.
