@@ -96,7 +96,7 @@ export class PlatformApi {
   }
 
   private async get(path: string, tenantId: string | undefined, signal: AbortSignal | undefined): Promise<unknown> {
-    const headers: Record<string, string> = { accept: mediaType, ...(await clerkAuthorizationHeader(this.getToken)) };
+    const headers: Record<string, string> = { accept: mediaType, 'x-correlation-id': crypto.randomUUID(), ...(await clerkAuthorizationHeader(this.getToken)) };
     if (tenantId !== undefined) headers['x-platform-tenant'] = tenantId;
     const response = await fetch(`${this.apiOrigin}${path}`, { headers, ...(signal === undefined ? {} : { signal }) });
     const body: unknown = await response.json();

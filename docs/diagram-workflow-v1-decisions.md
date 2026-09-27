@@ -78,6 +78,8 @@ The implementation keeps the tenant allowlist disabled by default. Memory activi
 
 - Empty workflow drafts remain structurally saveable. Studio clears selection, connector state, and active graph checks when a removed node owned them; server checks still require exactly one Trigger and an End before publication.
 
+- Studio commits the tenant's saved graph from `workflow-drafts` before independent Definitions, Run History, OpenRouter connection, and model reads. Panels reuse those initial projections and retain their explicit command-triggered refreshes; an aborted or superseded request generation cannot update the active tenant view.
+
 - Canvas zoom uses one bounded viewport transform, preserves the pointer scene coordinate, and keeps scaled geometry scrollable. Saved state is confirmed only by the matching tenant draft projection; stale revisions retain local edits until the editor deliberately reloads.
 
 - The live library exposes only executable V1 node kinds. Fixture-only examples retain their broader node palette.

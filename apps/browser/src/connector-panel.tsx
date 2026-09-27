@@ -13,6 +13,8 @@ interface ConnectorPanelProps {
   nodes: readonly WorkflowNode[];
   edges: readonly WorkflowEdge[];
   admin: boolean;
+  connection: Projection | undefined;
+  connectionState: 'loading' | 'ready' | 'failed';
   onPin: (config: Record<string, unknown>) => void;
 }
 
@@ -49,7 +51,7 @@ function constant(type: FieldType, value: string): unknown {
   return value;
 }
 
-export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, admin, onPin }: ConnectorPanelProps) {
+export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, admin, connection, connectionState, onPin }: ConnectorPanelProps) {
   const config = node?.config ?? {};
   const [installations, setInstallations] = useState<Projection>();
   const [installationId, setInstallationId] = useState(String(config['installationId'] ?? ''));
@@ -130,7 +132,7 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
     }
   };
 
-  if (node?.kind !== 'mcp') return <OpenRouterConnectionPanel api={api} tenantId={tenantId} admin={admin} />;
+  if (node?.kind !== 'mcp') return <OpenRouterConnectionPanel api={api} tenantId={tenantId} admin={admin} initialStatus={connection} initialState={connectionState} />;
 
   return <section className="connector-panel" aria-label="Connector installations">
     <div className="pane-heading">
