@@ -1,5 +1,6 @@
 import { canonicalJson, digest, tenantId, type TenantId } from '../../contracts/src/index.js';
 import sql from 'mssql';
+import { sqlPool } from './sql-pool.js';
 
 export type IdentityErrorCode = 'DENIED' | 'CONFLICT' | 'INVALID' | 'NOT_FOUND' | 'STALE' | 'INDETERMINATE';
 export class IdentityError extends Error {
@@ -138,7 +139,6 @@ export class AzureSqlIdentityStore implements IdentityReadStore {
     if (proof.audience !== audience || proof.tokenUse !== tokenUse[proof.mode] || !proof.issuer || !proof.subject || Date.parse(proof.expiresAt) <= Date.parse(now) || (proof.mode === 'interactive' && proof.sessionId === undefined)) deny();
   }
   private async call(procedure: string, bind: (request: sql.Request) => sql.Request): Promise<sql.IProcedureResult<unknown>> {
-    const pool = await new sql.ConnectionPool(this.connectionString).connect();
-    try { return await bind(pool.request()).execute(procedure); } finally { await pool.close(); }
+    return bind((await sqlPool(this.connectionString)).request()).execute(procedure);
   }
 }

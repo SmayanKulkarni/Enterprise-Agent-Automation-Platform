@@ -20,7 +20,7 @@ export type CommandName<Owner extends CommandOwner = CommandOwner> = typeof COMM
 export type ActionRisk = 'R1' | 'R2' | 'R3';
 export interface ActionHint { owner: CommandOwner; name: CommandName; objectId: string; expectedVersion: number; risk: ActionRisk; approvalRequired: boolean; reason?: string; }
 export interface CommandReceipt { commandId: string; objectId: string; owner: CommandOwner; name: CommandName; state: 'committed' | 'unknown-outcome'; version: number; watermark: number; affectedCollections: readonly BrowserCollection[]; evidenceIds: readonly string[]; digest: string; }
-export interface BrowserProjection { tenantId: string; collection: BrowserCollection; records: readonly Record<string, unknown>[]; completeness: 'full' | 'partial' | 'not-ready'; classification: 'ordinary' | 'restricted-operational' | 'fixture'; freshness: 'current' | 'stale' | 'unknown'; redaction: 'none' | 'applied'; watermark?: number; publishedAt?: string; }
+export interface BrowserProjection { tenantId: string; collection: BrowserCollection; records: readonly Record<string, unknown>[]; completeness: 'full' | 'partial' | 'not-ready'; classification: 'ordinary' | 'restricted-operational' | 'fixture'; freshness: 'current' | 'stale' | 'unknown'; redaction: 'none' | 'applied'; watermark?: number; publishedAt?: string; continuation?: { cursor: string }; }
 export interface BrowserSession { tenantId: string; actionHints: readonly ActionHint[]; }
 export interface BrowserTenant { id: string; profiles: readonly string[]; }
 
@@ -105,14 +105,16 @@ export function decodeTenants(value: unknown): readonly BrowserTenant[] {
 }
 
 export function decodeProjection(value: unknown, expectedTenantId: string, expectedCollection?: BrowserCollection): BrowserProjection {
-  const parsed = record(value, ['tenantId', 'collection', 'records', 'completeness', 'classification', 'freshness', 'redaction', 'watermark', 'publishedAt']);
+  const parsed = record(value, ['tenantId', 'collection', 'records', 'completeness', 'classification', 'freshness', 'redaction', 'watermark', 'publishedAt', 'continuation']);
   const tenantId = id(parsed['tenantId']); if (tenantId !== id(expectedTenantId)) fail();
   const collection = oneOf(parsed['collection'], BROWSER_COLLECTIONS); if (expectedCollection !== undefined && collection !== expectedCollection) fail();
   const records = parsed['records']; if (!Array.isArray(records)) fail();
   for (const item of records as unknown[]) { const itemRecord = item !== null && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : fail(); id(itemRecord['id']); if (itemRecord['tenantId'] !== undefined && id(itemRecord['tenantId']) !== tenantId || !safe(itemRecord)) fail(); }
   if (parsed['watermark'] !== undefined) nonNegativeInteger(parsed['watermark']);
   if (parsed['publishedAt'] !== undefined && (typeof parsed['publishedAt'] !== 'string' || Number.isNaN(Date.parse(parsed['publishedAt'])))) fail();
-  return Object.freeze({ tenantId, collection, records: Object.freeze((records as Record<string, unknown>[]).map((item) => Object.freeze({ ...item }))), completeness: oneOf(parsed['completeness'], ['full', 'partial', 'not-ready']), classification: oneOf(parsed['classification'], ['ordinary', 'restricted-operational', 'fixture']), freshness: oneOf(parsed['freshness'], ['current', 'stale', 'unknown']), redaction: oneOf(parsed['redaction'], ['none', 'applied']), ...(parsed['watermark'] === undefined ? {} : { watermark: nonNegativeInteger(parsed['watermark']) }), ...(parsed['publishedAt'] === undefined ? {} : { publishedAt: parsed['publishedAt'] as string }) });
+  const continuation = parsed['continuation'];
+  if (continuation !== undefined && (continuation === null || typeof continuation !== 'object' || Array.isArray(continuation) || Object.keys(continuation).length !== 1 || typeof (continuation as Record<string, unknown>)['cursor'] !== 'string' || !/^[A-Za-z0-9_-]+$/u.test((continuation as Record<string, unknown>)['cursor'] as string))) fail();
+  return Object.freeze({ tenantId, collection, records: Object.freeze((records as Record<string, unknown>[]).map((item) => Object.freeze({ ...item }))), completeness: oneOf(parsed['completeness'], ['full', 'partial', 'not-ready']), classification: oneOf(parsed['classification'], ['ordinary', 'restricted-operational', 'fixture']), freshness: oneOf(parsed['freshness'], ['current', 'stale', 'unknown']), redaction: oneOf(parsed['redaction'], ['none', 'applied']), ...(parsed['watermark'] === undefined ? {} : { watermark: nonNegativeInteger(parsed['watermark']) }), ...(parsed['publishedAt'] === undefined ? {} : { publishedAt: parsed['publishedAt'] as string }), ...(continuation === undefined ? {} : { continuation: { cursor: (continuation as Record<string, unknown>)['cursor'] as string } }) });
 }
 
 export function decodeReceipt(value: unknown): CommandReceipt {

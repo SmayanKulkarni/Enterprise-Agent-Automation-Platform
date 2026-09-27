@@ -1,5 +1,6 @@
 import sql from 'mssql';
 import { IdentityError, type ExecutionContext } from '../../identity/src/index.js';
+import { sqlPool } from '../../identity/src/sql-pool.js';
 import type { BrowserProjection } from './index.js';
 
 interface SnapshotRow {
@@ -43,10 +44,8 @@ export class AzureSqlProjectionStore {
 
   async read(input: BrowserProjection): Promise<Record<string, unknown>> {
     const context: ExecutionContext = input.context;
-    let pool: sql.ConnectionPool | undefined;
     try {
-      pool = await new sql.ConnectionPool(this.connectionString).connect();
-      const result = await pool.request()
+      const result = await (await sqlPool(this.connectionString)).request()
         .input('tenant_id', sql.UniqueIdentifier, String(context.tenantId))
         .input('user_id', sql.UniqueIdentifier, context.userId)
         .input('tenant_epoch', sql.BigInt, context.tenantEpoch)
@@ -60,6 +59,6 @@ export class AzureSqlProjectionStore {
       if (error instanceof IdentityError) throw error;
       if (error !== null && typeof error === 'object' && 'number' in error && error.number === 50001) throw new IdentityError('DENIED');
       throw new ProjectionUnavailableError();
-    } finally { await pool?.close(); }
+    }
   }
 }

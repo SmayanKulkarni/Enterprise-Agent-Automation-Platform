@@ -44,6 +44,11 @@ class MemoryWorkflow implements WorkflowStore {
   private key(tenantId: string, kind: RecordKind, id: string) { return `${tenantId}:${kind}:${id}`; }
   async read<T>(context: ExecutionContext, kind: RecordKind, id: string) { return this.records.get(this.key(String(context.tenantId), kind, id)) as WorkflowRecord<T> | undefined; }
   async list<T>(context: ExecutionContext, kind: RecordKind) { return [...this.records.entries()].filter(([key]) => key.startsWith(`${context.tenantId}:${kind}:`)).map(([, value]) => value as WorkflowRecord<T>); }
+  async runHistory(context: ExecutionContext, pageSize: number, _cursor?: { createdAt: string; id: string }, id?: string) {
+    const runs = (await this.list<WorkflowRun>(context, 'run')).filter((run) => id === undefined || run.id === id).slice(0, pageSize);
+    const runIds = new Set(runs.map((run) => run.id));
+    return { runs: runs.map((run) => ({ ...run, createdAt: '2026-01-01T00:00:00.0000000' })), effects: (await this.list(context, 'effect')).filter((effect) => runIds.has(String((effect.data as { runId?: string }).runId))), retrievals: (await this.list(context, 'memory-retrieval')).filter((retrieval) => runIds.has(String((retrieval.data as { runId?: string }).runId))), hasMore: false };
+  }
   async write(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator', kind: RecordKind, id: string, expectedVersion: number, state: string, data: unknown, key: string, requestDigest: string, receipt: Record<string, unknown>) {
     await this.assertProfile(context, profile); const receiptKey = `${context.tenantId}:${key}`; const existing = this.receipts.get(receiptKey);
     if (existing) { if (existing.digest !== requestDigest) fail('CONFLICT'); return { receipt: existing.value, replayed: true }; }

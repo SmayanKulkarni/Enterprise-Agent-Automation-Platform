@@ -5,7 +5,7 @@ import type { StudioStore, StudioStoredDraft } from '../../lifecycle/src/studio-
 import type { StudioDraft } from '../../lifecycle/src/studio.js';
 import { compileGraph, validateGraph, validateSchema, validateValue, type CapabilityPin, type GraphDraft, type GraphIssue, type JsonSchema, type WorkflowDefinition } from './graph.js';
 import { memoryFingerprint, memoryItemId, redacted, type HostedMemoryPort, type MemoryImport, type MemoryItem } from './memory.js';
-import type { WorkflowRecord, WorkflowStore } from './sql.js';
+import type { RunHistoryCursor, WorkflowRecord, WorkflowStore } from './sql.js';
 import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrouter-connection.js';
 
 export interface CapabilityManifest { digest: string; version: string; certified: boolean; capabilities: readonly { name: string; risk: 'R1' | 'R2' | 'R3'; inputSchema: JsonSchema; outputSchema: JsonSchema }[]; }
@@ -24,6 +24,19 @@ type MemoryReadiness = 'disabled' | 'not-configured' | 'ready' | 'unavailable';
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const id = (value: unknown): string => typeof value === 'string' && uuid.test(value) ? value : fail('INVALID');
+const runHistoryCursor = (tenantId: string, cursor: RunHistoryCursor): string => Buffer.from(`${tenantId}.${JSON.stringify(cursor)}`).toString('base64url');
+const decodeRunHistoryCursor = (value: string, tenantId: string): RunHistoryCursor => {
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8');
+    const separator = decoded.indexOf('.');
+    if (separator < 1 || decoded.slice(0, separator) !== tenantId) return fail('DENIED');
+    const parsed: unknown = JSON.parse(decoded.slice(separator + 1));
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return fail('INVALID');
+    const cursor = parsed as Record<string, unknown>;
+    if (typeof cursor['createdAt'] !== 'string' || cursor['createdAt'].length > 33 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?$/u.test(cursor['createdAt']) || !uuid.test(String(cursor['id']))) return fail('INVALID');
+    return { createdAt: cursor['createdAt'], id: String(cursor['id']) };
+  } catch (error) { if (error instanceof Error && 'code' in error) throw error; return fail('INVALID'); }
+};
 const webhookMessage = (tenantId: string, definitionId: string, timestamp: string, eventId: string, body: Uint8Array): Buffer => Buffer.concat([Buffer.from(`${tenantId}:${definitionId}:${timestamp}:${eventId}:`), Buffer.from(body)]);
 const credentialSecrets = (credential: WorkflowRecord<WebhookCredential> | undefined, fallback: string | undefined, now: number): readonly string[] => {
   if (!credential) return fallback ? [fallback] : [];
@@ -336,15 +349,26 @@ export class WorkflowService {
     return result.replayed ? undefined : token;
   }
 
-  async projection(context: ExecutionContext, collection: string, recordId?: string): Promise<Record<string, unknown>> {
+  async projection(context: ExecutionContext, collection: string, recordId?: string, query?: { pageSize?: number; cursor?: string }): Promise<Record<string, unknown>> {
     const tenantId = String(context.tenantId);
     let records: Record<string, unknown>[] = [];
     if (collection === 'workflow-drafts') records = (await this.drafts(context)).map((item) => ({ id: item.id, revision: item.revision, digest: item.digest, state: item.state, graph: item.draft }));
     else if (collection === 'workflow-definitions') records = (await this.store.definitions(context, recordId)).map((item) => ({ id: item.id, draftId: item.draftId, revision: item.draftRevision, digest: item.digest, nodes: item.definition.nodes.map((node) => ({ id: node.id, kind: node.kind, next: node.next })), capabilityPins: item.definition.capabilityPins.map((pin) => ({ capability: pin.capability, risk: pin.risk, manifestDigest: pin.manifestDigest })) }));
     else if (collection === 'workflow-runs') {
-      const effects = await this.store.list<{ runId: string; nodeId: string; requestDigest: string; argumentsDigest: string }>(context, 'effect');
-      const retrievals = await this.store.list<{ runId: string; nodeId: string; status: string; itemIds: readonly string[]; importIds: readonly string[]; failure?: string }>(context, 'memory-retrieval');
-      records = (await this.store.list<WorkflowRun>(context, 'run')).slice(0, 50).map((item) => ({ id: item.id, version: item.version, status: item.data.status, definitionId: item.data.definitionId, stableDefinitionId: item.data.stableDefinitionId, definitionRevision: item.data.definitionRevision, definitionDigest: item.data.definitionDigest, inputDigest: item.data.inputDigest, inputSummary: Object.entries(item.data.input).map(([field, value]) => ({ field, type: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value })), history: item.data.history, effects: effects.filter((effect) => effect.data.runId === item.id).map((effect) => ({ id: effect.id, nodeId: effect.data.nodeId, state: effect.state, requestDigest: effect.data.requestDigest, argumentsDigest: effect.data.argumentsDigest })), retrievals: retrievals.filter((entry) => entry.data.runId === item.id).map((entry) => ({ id: entry.id, nodeId: entry.data.nodeId, status: entry.data.status, itemIds: entry.data.itemIds, importIds: entry.data.importIds, ...(memoryFailure(entry.data.failure) ? { failure: memoryFailure(entry.data.failure) } : {}) })), ...(item.data.waiting ? { waiting: item.data.waiting } : {}), ...(item.data.summaryStatus ? { summaryStatus: item.data.summaryStatus } : {}) }));
+      const pageSize = query?.pageSize ?? 50;
+      if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) fail('INVALID');
+      const cursor = query?.cursor === undefined ? undefined : decodeRunHistoryCursor(query.cursor, tenantId);
+      const page = await this.store.runHistory(context, pageSize, cursor, recordId);
+      const effects = new Map<string, WorkflowRecord<{ runId: string; nodeId: string; requestDigest: string; argumentsDigest: string }>[]>()
+      for (const effect of page.effects as readonly WorkflowRecord<{ runId: string; nodeId: string; requestDigest: string; argumentsDigest: string }>[]) effects.set(effect.data.runId, [...effects.get(effect.data.runId) ?? [], effect]);
+      const retrievals = new Map<string, WorkflowRecord<{ runId: string; nodeId: string; status: string; itemIds: readonly string[]; importIds: readonly string[]; failure?: string }>[]>()
+      for (const retrieval of page.retrievals as readonly WorkflowRecord<{ runId: string; nodeId: string; status: string; itemIds: readonly string[]; importIds: readonly string[]; failure?: string }>[]) retrievals.set(retrieval.data.runId, [...retrievals.get(retrieval.data.runId) ?? [], retrieval]);
+      records = page.runs.map((item) => {
+        const run = item.data as unknown as WorkflowRun;
+        return { id: item.id, version: item.version, status: run.status, definitionId: run.definitionId, stableDefinitionId: run.stableDefinitionId, definitionRevision: run.definitionRevision, definitionDigest: run.definitionDigest, inputDigest: run.inputDigest, inputSummary: Object.entries(run.input).map(([field, value]) => ({ field, type: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value })), history: run.history, effects: (effects.get(item.id) ?? []).map((effect) => ({ id: effect.id, nodeId: effect.data.nodeId, state: effect.state, requestDigest: effect.data.requestDigest, argumentsDigest: effect.data.argumentsDigest })), retrievals: (retrievals.get(item.id) ?? []).map((entry) => ({ id: entry.id, nodeId: entry.data.nodeId, status: entry.data.status, itemIds: entry.data.itemIds, importIds: entry.data.importIds, ...(memoryFailure(entry.data.failure) ? { failure: memoryFailure(entry.data.failure) } : {}) })), ...(run.waiting ? { waiting: run.waiting } : {}), ...(run.summaryStatus ? { summaryStatus: run.summaryStatus } : {}) };
+      });
+      const last = page.runs.at(-1);
+      if (page.hasMore && last !== undefined) return { tenantId, collection, records, completeness: 'partial', classification: 'restricted-operational', freshness: 'current', redaction: 'applied', continuation: { cursor: runHistoryCursor(tenantId, { createdAt: last.createdAt, id: last.id }) } };
     }
     else if (collection === 'connector-installations') records = (await this.store.list<Installation>(context, 'installation')).map((item) => ({ id: item.id, version: item.version, state: item.state, route: item.data.route, health: item.data.health, manifest: item.data.manifest }));
     else if (collection === 'workflow-grants') records = (await this.store.list<CapabilityGrant>(context, 'grant')).map((item) => ({ id: item.id, version: item.version, state: item.state, ...item.data }));

@@ -50,9 +50,10 @@ export class PlatformApi {
     try { return decodeTenants(await this.get('/api/v1/tenants', undefined, signal)); } catch (error) { if (error instanceof PlatformApiError) throw error; throw new PlatformApiError(500); }
   }
 
-  async projection(tenantId: string, collection: string, id?: string, signal?: AbortSignal): Promise<Projection> {
+  async projection(tenantId: string, collection: string, id?: string, signal?: AbortSignal, query?: { pageSize?: number; cursor?: string }): Promise<Projection> {
     const detail = id === undefined ? '' : `/${encodeURIComponent(id)}`;
-    try { return decodeProjection(await this.get(`/api/v1/tenants/${encodeURIComponent(tenantId)}/${collection}${detail}`, tenantId, signal), tenantId, collection as BrowserProjection['collection']); } catch (error) { if (error instanceof PlatformApiError) throw error; throw new PlatformApiError(500); }
+    const search = new URLSearchParams(); if (query?.pageSize !== undefined) search.set('pageSize', String(query.pageSize)); if (query?.cursor !== undefined) search.set('cursor', query.cursor);
+    try { return decodeProjection(await this.get(`/api/v1/tenants/${encodeURIComponent(tenantId)}/${collection}${detail}${search.size ? `?${search}` : ''}`, tenantId, signal), tenantId, collection as BrowserProjection['collection']); } catch (error) { if (error instanceof PlatformApiError) throw error; throw new PlatformApiError(500); }
   }
 
   async command(command: PlatformCommand, signal?: AbortSignal): Promise<CommandReceipt> {

@@ -44,6 +44,9 @@ Implement the compiler and published definition, sequential durable execution, m
 
 ## Workflow implementation integration
 
+- Authenticated Azure SQL adapters share one connection-pool promise per connection string. Rejected or errored pools are evicted, while every request still invokes its tenant- and epoch-fenced procedure. This follows the [node-mssql pool guidance](https://github.com/tediousjs/node-mssql#connections) to retain a pool for the process and close it only at shutdown.
+- Run History is a forward-only, tenant-fenced keyset page over `(created_at, id)`. Migration 009 reuses the existing run-history index, returns children only for selected Run IDs, and keeps the cursor as navigation state. The deployed query plan remains an operational check because this workspace has no configured Azure SQL connection.
+
 - OpenRouter model identifiers are exact configured slugs. The browser receives only the allowed slug and structured-output capability, while the tenant key remains server-only. Check and publish both reread tenant connection state and the configured allow-list; a fallback must be another certified exact model with structured-output support.
 - Below 820px the live block library remains in document flow above the canvas and inspector. The canvas keeps its existing scene and zoom model, while native buttons retain keyboard access.
 

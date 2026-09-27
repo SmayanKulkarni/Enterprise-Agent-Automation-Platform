@@ -1,16 +1,21 @@
 import sql from 'mssql';
 import { canonicalJson } from '../../contracts/src/index.js';
 import type { ExecutionContext } from '../../identity/src/index.js';
+import { sqlPool } from '../../identity/src/sql-pool.js';
 import type { WorkflowDefinition } from './graph.js';
 
 export type RecordKind = 'installation' | 'run' | 'effect' | 'summary' | 'grant' | 'circuit' | 'webhook-credential' | 'webhook-dispatch' | 'memory-import' | 'memory-item' | 'memory-lifecycle' | 'memory-retrieval' | 'openrouter-connection';
 export interface WorkflowRecord<T = Record<string, unknown>> { id: string; kind: RecordKind; version: number; state: string; data: T; }
+export interface RunHistoryCursor { createdAt: string; id: string; }
+export interface RunHistoryRecord<T = Record<string, unknown>> extends WorkflowRecord<T> { createdAt: string; }
+export interface RunHistoryPage { runs: readonly RunHistoryRecord<unknown>[]; effects: readonly WorkflowRecord<unknown>[]; retrievals: readonly WorkflowRecord<unknown>[]; hasMore: boolean; }
 export interface PublishedDefinition { id: string; draftId: string; draftRevision: number; digest: string; definition: WorkflowDefinition; }
 export interface PendingWebhookDispatch { tenantId: string; runId: string; }
 export interface WorkflowStore {
   assertProfile(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator'): Promise<void>;
   read<T>(context: ExecutionContext, kind: RecordKind, id: string): Promise<WorkflowRecord<T> | undefined>;
   list<T>(context: ExecutionContext, kind: RecordKind): Promise<readonly WorkflowRecord<T>[]>;
+  runHistory(context: ExecutionContext, pageSize: number, cursor?: RunHistoryCursor, id?: string): Promise<RunHistoryPage>;
   write(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator', kind: RecordKind, id: string, expectedVersion: number, state: string, data: unknown, key: string, requestDigest: string, receipt: Record<string, unknown>): Promise<{ receipt: Record<string, unknown>; replayed: boolean }>;
   workerRead<T>(tenantId: string, kind: RecordKind, id: string): Promise<WorkflowRecord<T> | undefined>;
   workerList<T>(tenantId: string, kind: RecordKind): Promise<readonly WorkflowRecord<T>[]>;
@@ -32,15 +37,16 @@ const mapError = (error: unknown): never => {
   throw error;
 };
 const rowRecord = <T>(row: Record<string, unknown>): WorkflowRecord<T> => ({ id: String(row['id']), kind: String(row['kind']) as RecordKind, version: Number(row['version']), state: String(row['state']), data: JSON.parse(String(row['data_json'])) as T });
-const pools = new Map<string, Promise<sql.ConnectionPool>>();
+const runHistoryRecord = (row: Record<string, unknown>): RunHistoryRecord => {
+  if (typeof row['cursor_created_at'] !== 'string') return fail('INVALID');
+  return { ...rowRecord(row), createdAt: row['cursor_created_at'] };
+};
 
 export class AzureSqlWorkflowStore implements WorkflowStore {
   constructor(private readonly connectionString: string) { if (!connectionString.trim()) fail('INVALID'); }
   private context(context: ExecutionContext): (request: sql.Request) => sql.Request { return (request) => request.input('tenant_id', sql.UniqueIdentifier, String(context.tenantId)).input('user_id', sql.UniqueIdentifier, context.userId).input('tenant_epoch', sql.BigInt, context.tenantEpoch).input('membership_epoch', sql.BigInt, context.membershipEpoch); }
   private async call(procedure: string, bind: (request: sql.Request) => sql.Request): Promise<sql.IProcedureResult<unknown>> {
-    let pool = pools.get(this.connectionString);
-    if (!pool) { pool = new sql.ConnectionPool(this.connectionString).connect(); pools.set(this.connectionString, pool); }
-    try { return await bind((await pool).request()).execute(procedure); } catch (error) { return mapError(error); }
+    try { return await bind((await sqlPool(this.connectionString)).request()).execute(procedure); } catch (error) { return mapError(error); }
   }
   async assertProfile(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator'): Promise<void> {
     await this.call('workflow.check_profile', (request) => this.context(context)(request).input('profile', sql.NVarChar(32), profile));
@@ -52,6 +58,16 @@ export class AzureSqlWorkflowStore implements WorkflowStore {
   async list<T>(context: ExecutionContext, kind: RecordKind): Promise<readonly WorkflowRecord<T>[]> {
     const result = await this.call('workflow.read_record', (request) => this.context(context)(request).input('kind', sql.NVarChar(24), kind).input('id', sql.UniqueIdentifier, null));
     return (result.recordset as Record<string, unknown>[]).map(rowRecord<T>);
+  }
+  async runHistory(context: ExecutionContext, pageSize: number, cursor?: RunHistoryCursor, id?: string): Promise<RunHistoryPage> {
+    const result = await this.call('workflow.read_run_history', (request) => this.context(context)(request)
+      .input('page_size', sql.Int, pageSize)
+      .input('before_created_at', sql.NVarChar(33), cursor?.createdAt ?? null)
+      .input('before_id', sql.UniqueIdentifier, cursor?.id ?? null)
+      .input('run_id', sql.UniqueIdentifier, id ?? null));
+    const recordsets = result.recordsets as readonly Record<string, unknown>[][];
+    const page = recordsets[0] ?? []; const effects = recordsets[1] ?? []; const retrievals = recordsets[2] ?? []; const continuation = recordsets[3]?.[0];
+    return { runs: page.map(runHistoryRecord), effects: effects.map(rowRecord), retrievals: retrievals.map(rowRecord), hasMore: continuation?.['has_more'] === true || continuation?.['has_more'] === 1 };
   }
   async write(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator', kind: RecordKind, id: string, expectedVersion: number, state: string, data: unknown, key: string, requestDigest: string, receipt: Record<string, unknown>): Promise<{ receipt: Record<string, unknown>; replayed: boolean }> {
     const result = await this.call('workflow.write_record', (request) => this.context(context)(request).input('profile', sql.NVarChar(32), profile).input('kind', sql.NVarChar(24), kind).input('id', sql.UniqueIdentifier, id).input('expected_version', sql.BigInt, expectedVersion).input('state', sql.NVarChar(32), state).input('data_json', sql.NVarChar(sql.MAX), canonicalJson(data)).input('idempotency_key', sql.UniqueIdentifier, key).input('request_digest', sql.Char(64), requestDigest).input('receipt_json', sql.NVarChar(sql.MAX), canonicalJson(receipt)));

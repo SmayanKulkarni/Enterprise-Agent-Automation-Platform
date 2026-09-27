@@ -1,6 +1,7 @@
 import sql from 'mssql';
 import { canonicalJson, digest } from '../../contracts/src/index.js';
 import type { ExecutionContext } from '../../identity/src/index.js';
+import { sqlPool } from '../../identity/src/sql-pool.js';
 import type { StudioDraft } from './studio.js';
 import type { GraphDraft } from '../../workflow/src/graph.js';
 
@@ -62,7 +63,6 @@ export class AzureSqlStudioStore implements StudioStore {
   private context(context: ExecutionContext): (request: sql.Request) => sql.Request { return (request) => request.input('tenant_id', sql.UniqueIdentifier, String(context.tenantId)).input('user_id', sql.UniqueIdentifier, context.userId).input('tenant_epoch', sql.BigInt, context.tenantEpoch).input('membership_epoch', sql.BigInt, context.membershipEpoch); }
   private async draftCall(procedure: string, context: ExecutionContext, bind: (request: sql.Request) => sql.Request): Promise<StudioStoredDraft<StudioDraft | GraphDraft>> { const result = await this.call(procedure, (request) => bind(this.context(context)(request))); const row = result.recordset[0] as Record<string, unknown> | undefined; return row === undefined ? fail('NOT_FOUND') : studioRecord(row); }
   private async call(procedure: string, bind: (request: sql.Request) => sql.Request): Promise<sql.IProcedureResult<unknown>> {
-    const pool = await new sql.ConnectionPool(this.connectionString).connect();
-    try { return await bind(pool.request()).execute(procedure); } catch (error) { const number = error !== null && typeof error === 'object' && 'number' in error && typeof error.number === 'number' ? error.number : undefined; if (number === 50001) fail('DENIED'); if (number === 50002) fail('INVALID'); if (number === 50003) fail('STALE'); if (number === 50004) fail('CONFLICT'); throw error; } finally { await pool.close(); }
+    try { return await bind((await sqlPool(this.connectionString)).request()).execute(procedure); } catch (error) { const number = error !== null && typeof error === 'object' && 'number' in error && typeof error.number === 'number' ? error.number : undefined; if (number === 50001) fail('DENIED'); if (number === 50002) fail('INVALID'); if (number === 50003) fail('STALE'); if (number === 50004) fail('CONFLICT'); throw error; }
   }
 }

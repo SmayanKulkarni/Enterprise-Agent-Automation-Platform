@@ -66,7 +66,7 @@ export function WorkflowMemoryPanel({ api, tenantId, definitionId, admin, initia
         <button disabled={!replacement[String(item['id'])]} onClick={() => void correct(item)}>Correct</button>
       </div>}
     </article>)}
-    <strong>Retrieval history</strong>
+    <strong>Retrieval history from the loaded Run History page</strong>
     {initialRunsState === 'failed' && runs === undefined ? <p role="alert">Run History is unavailable.</p> : runs === undefined ? <p>Loading retrieval receipts.</p> : retrievals.length === 0 ? <p>No memory retrieval receipts for this definition.</p> : retrievals.map((item) => <p key={String(item['id'])}>Run {String(item.runId)} · Memory node {String(item['nodeId'])} · {String(item['status'])} · items {Array.isArray(item['itemIds']) && item['itemIds'].length ? item['itemIds'].map(String).join(', ') : 'none'} · imports {Array.isArray(item['importIds']) && item['importIds'].length ? item['importIds'].map(String).join(', ') : 'none'}{item['failure'] ? ` · failure ${String(item['failure'])}` : ''}</p>)}
     {message && <span role="status">{message}</span>}
   </section>;
