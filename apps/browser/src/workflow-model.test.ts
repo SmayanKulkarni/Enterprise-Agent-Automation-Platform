@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { conditionFields, conditionSources, connect, disconnect, expiryInstant, initialEdges, initialNodes, localDateTime, mappingFields, memoryProposalsEnabled, parseTriggerInput, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
+import { conditionFields, conditionSources, connect, disconnect, expiryInstant, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, parseTriggerInput, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
 
 describe('workflow graph', () => {
   test('only creates valid, non-duplicate connections', () => {
@@ -56,5 +56,12 @@ describe('workflow graph', () => {
     const edges = [...starterEdges, { id: 'agent-mcp', from: 'agent', to: 'mcp' }];
     expect(mappingFields(nodes, edges, 'mcp', 'string')).toEqual([['$node.agent.result', 'Classify request · result']]);
     expect(mappingFields(nodes, edges, 'mcp', 'number')).toEqual([]);
+  });
+
+  test('resolves a check issue path to its node by id or index', () => {
+    expect(issueNode(starterNodes, '/nodes/agent/config/model')?.id).toBe('agent');
+    expect(issueNode(starterNodes, '/nodes/1/config/model')?.id).toBe('agent');
+    expect(issueNode(starterNodes, '/nodes/missing')).toBeUndefined();
+    expect(issueNode(starterNodes, '/edges/0')).toBeUndefined();
   });
 });

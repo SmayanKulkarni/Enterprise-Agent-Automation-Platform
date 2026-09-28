@@ -44,6 +44,10 @@ Implement the compiler and published definition, sequential durable execution, m
 
 ## Workflow implementation integration
 
+- Workflow Run reconciliation belongs to the Workflow module. An administrator's disposition changes only the unresolved effect and records a terminal Run History transition; the SQL adapter commits both writes in one transaction. The browser command validates the request and returns the receipt.
+- The browser transport validates registered commands with a declared argument schema through the shared decoder before invoking a handler. Owner-specific domain checks remain with their modules; legacy handlers without a schema keep their existing contract, and commands without a live handler remain unavailable.
+- Operational Memory keeps its current proposal and retrieval rules where they are. A deeper module waits for a rule that is genuinely shared across callers.
+
 - Authenticated Azure SQL adapters share one connection-pool promise per connection string. Rejected or errored pools are evicted, while every request still invokes its tenant- and epoch-fenced procedure. This follows the [node-mssql pool guidance](https://github.com/tediousjs/node-mssql#connections) to retain a pool for the process and close it only at shutdown.
 - Run History is a forward-only, tenant-fenced keyset page over `(created_at, id)`. Migration 009 reuses the existing run-history index, returns children only for selected Run IDs, and keeps the cursor as navigation state. The deployed query plan remains an operational check because this workspace has no configured Azure SQL connection.
 
@@ -94,3 +98,13 @@ The implementation keeps the tenant allowlist disabled by default. Memory activi
 - Webhook admission inserts the Run and its pending Durable dispatch intent in one SQL transaction. Replays with the same admitted Definition and input digest are acknowledged; recovery starts only pending intents and preserves any existing orchestration instance.
 - Landing examples are explicitly non-live. Product guides use directional, keyboard-accessible drawers that return focus to their opener and route through the existing navigation action.
 - Approval inspection and Run History consume only the existing safe projection: review labels, types, digests, event order, deadlines, decisions, receipts, and reconciliation state. They never receive raw effect arguments.
+
+## Threadline UI refresh — public pages and Studio draft header (tickets 03/04)
+
+- Home and Sign-in carry no unsupported claims: capability stats, the proof strip, and the Sign-in aside were rewritten to name only integrations and facts present in this repo. The old email/password fixture form and testimonial are removed; Sign-in now renders either the real Clerk flow (only under `ClerkProvider`, mirroring the existing `ClerkAccount` split) or a single "Explore fixture workspace" action.
+- The Governance fixture preview has no dead control: the period, "Export report", "Open Grafana", "Filter", and "Manage" affordances are deleted rather than left inert. Its chart and portfolio each carry a real accessible equivalent (a `visually-hidden` table for the chart, a semantic `<table>` for the portfolio), and the trace view is a native `Dialog` instead of a hand-rolled backdrop.
+- Studio's saved-draft flow is explicit state, not inferred from `revision`: `draftsState` (`loading | ready | failed`) governs the Draft selector, Save availability, and canvas `aria-busy`, so a failed load can never be presented as an empty saved draft. `applyDraft`/`startNewDraft` are the only two ways nodes/edges/selection/save state change together, keeping the tenant-scoped `workflow-drafts` projection, the initial load, and Reload consistent.
+- A single `pending` union (`save | check | publish | start | reload`) replaced the boolean `running` flag so two commands can never show the same label; each command's disabled state and its one shared reason text come from a `reasons` object computed once per render, and Publish/Start are always rendered (disabled with a reason) instead of being hidden by `admin && candidate` / `publishedId`.
+- Any edit that would discard the canvas (switching drafts, switching tenant, reloading) routes through one `guard()` that opens a confirmation `Dialog`; nothing destructive fires without it.
+- Manual Start no longer uses a `window` `CustomEvent` — `Inspector` takes an `onStart` callback and a `startReason`, so the Trigger's manual-start button and the header's Start button share one `start(input)` function and one disabled/pending state.
+- A failed check produces a focusable error summary (`issueNode` in `workflow-model.ts` resolves a check-issue JSON path back to its node by id or index) that moves focus to itself and lets each issue jump to and select its node.

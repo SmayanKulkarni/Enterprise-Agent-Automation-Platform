@@ -1,10 +1,17 @@
-import { SignInButton, SignUpButton } from '@clerk/react';
-import { useState, type FormEvent } from 'react';
+import { SignInButton, SignUpButton, useAuth } from '@clerk/react';
 import type { Navigate } from './app-routes.js';
-import { Field } from './ui.js';
 
 export function SignIn({ authEnabled, navigate }: { authEnabled: boolean; navigate: Navigate }) {
-  const [error, setError] = useState(''); const [submitted, setSubmitted] = useState(false);
-  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const email = String(new FormData(event.currentTarget).get('email') ?? ''); if (!email.includes('@')) { setError('Enter a valid work email.'); return; } setError(''); setSubmitted(true); window.setTimeout(() => navigate('studio'), 650); };
-  return <section className="auth-page"><button className="auth-back" onClick={() => navigate('home')}>← Back to home</button><div className="auth-panel"><div className="auth-brand"><span className="brand-mark"><i /><i /><i /></span><strong>threadline</strong></div><h1>Welcome back.</h1><p>Sign in to continue to your workspace.</p>{!authEnabled && <form onSubmit={submit} noValidate><Field label="Work email"><input name="email" type="email" autoComplete="email" placeholder="you@company.com" aria-describedby={error ? 'email-error' : undefined} /></Field>{error && <span className="form-error" id="email-error">{error}</span>}<Field label="Password"><input name="password" type="password" autoComplete="current-password" placeholder="Enter your password" required /></Field><button className="button auth-submit" disabled={submitted}>{submitted ? 'Opening workspace…' : 'Continue'}</button></form>}<div className="auth-divider"><span>or</span></div>{authEnabled ? <SignInButton mode="modal" forceRedirectUrl="/studio"><button className="button-secondary auth-provider">Continue with Clerk</button></SignInButton> : <button className="button-secondary auth-provider" onClick={() => navigate('studio')}>Continue in demo mode</button>}<p className="auth-footnote">New to Threadline? {authEnabled ? <SignUpButton mode="modal"><button>Create an account</button></SignUpButton> : <button onClick={() => navigate('studio')}>Explore the demo</button>}</p></div><aside className="auth-aside"><blockquote>“We moved from scattered agent scripts to one operating picture in less than a week.”</blockquote><p><strong>Mara Okafor</strong><span>Head of Automation, Kestrel Works</span></p><div className="auth-grid-art"><i /><i /><i /><i /></div></aside></section>;
+  return <section className="auth-page"><button className="auth-back" onClick={() => navigate('home')}>← Back to home</button><div className="auth-panel"><div className="auth-brand"><span className="brand-mark"><i /><i /><i /></span><strong>threadline</strong></div>{authEnabled ? <ClerkSignIn navigate={navigate} /> : <FixtureSignIn navigate={navigate} />}</div></section>;
+}
+
+function ClerkSignIn({ navigate }: { navigate: Navigate }) {
+  const { isLoaded, isSignedIn } = useAuth();
+  if (!isLoaded) return <p aria-busy="true">Checking your session…</p>;
+  if (isSignedIn) return <><h1>You're signed in.</h1><button className="button" onClick={() => navigate('studio')}>Open Solution Studio</button></>;
+  return <><h1>Sign in to Threadline</h1><p>You'll return to Solution Studio.</p><SignInButton mode="modal" forceRedirectUrl="/studio"><button className="button">Sign in</button></SignInButton><SignUpButton mode="modal" forceRedirectUrl="/studio"><button className="button-secondary">Create an account</button></SignUpButton></>;
+}
+
+function FixtureSignIn({ navigate }: { navigate: Navigate }) {
+  return <><h1>Sign-in isn't configured here.</h1><p>This build has no authentication. You can explore a fixture workspace; nothing is saved.</p><button className="button" onClick={() => navigate('studio')}>Explore fixture workspace</button></>;
 }

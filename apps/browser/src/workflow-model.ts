@@ -98,6 +98,12 @@ export function mappingFields(nodes: readonly WorkflowNode[], edges: readonly Wo
 
 export function disconnect(edges: readonly WorkflowEdge[], edgeId: string): WorkflowEdge[] { return edges.filter((edge) => edge.id !== edgeId); }
 
+export function issueNode(nodes: readonly WorkflowNode[], path: string): WorkflowNode | undefined {
+  const segment = /^\/nodes\/([^/]+)/.exec(path)?.[1];
+  if (segment === undefined) return undefined;
+  return nodes.find((node) => node.id === segment) ?? (/^\d+$/.test(segment) ? nodes[Number(segment)] : undefined);
+}
+
 export function updateIntegerConfig(config: Record<string, unknown>, key: 'limit' | 'maxChars', value: string, minimum: number, maximum: number): { config?: Record<string, unknown>; error?: string } {
   const parsed = Number(value);
   if (value.trim() === '' || !Number.isFinite(parsed) || !Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) return { error: `Enter a whole number from ${minimum} to ${maximum}.` };
