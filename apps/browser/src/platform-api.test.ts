@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { PlatformApi, PlatformApiError } from './platform-api.js';
+import { PlatformApi, PlatformApiError, describeError } from './platform-api.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -58,5 +58,36 @@ describe('PlatformApi', () => {
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     await expect(new PlatformApi(() => Promise.resolve('short-lived')).command({ tenantId: '11111111-1111-4111-8111-111111111111', owner: 'vendor', name: 'publish', expectedVersion: 0, arguments: {} })).rejects.toMatchObject({ status: 400, category: 'invalid' });
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('describeError', () => {
+  test('prefers the server category over the HTTP status', () => {
+    expect(describeError(new PlatformApiError(500, 'denied'))).toBe('denied');
+    expect(describeError(new PlatformApiError(500, 'invalid'))).toBe('invalid');
+    expect(describeError(new PlatformApiError(500, 'conflict'))).toBe('conflict');
+    expect(describeError(new PlatformApiError(500, 'unknown-outcome'))).toBe('unknown');
+    expect(describeError(new PlatformApiError(200, 'retryable'))).toBe('unavailable');
+    expect(describeError(new PlatformApiError(200, 'timeout'))).toBe('unavailable');
+    expect(describeError(new PlatformApiError(200, 'terminal'))).toBe('unavailable');
+  });
+
+  test('falls back to HTTP status when no known category is present', () => {
+    expect(describeError(new PlatformApiError(401))).toBe('signed-out');
+    expect(describeError(new PlatformApiError(403))).toBe('denied');
+    expect(describeError(new PlatformApiError(404))).toBe('not-found');
+    expect(describeError(new PlatformApiError(409))).toBe('conflict');
+    expect(describeError(new PlatformApiError(412))).toBe('conflict');
+    expect(describeError(new PlatformApiError(400))).toBe('invalid');
+    expect(describeError(new PlatformApiError(422))).toBe('invalid');
+    expect(describeError(new PlatformApiError(429))).toBe('rate-limited');
+    expect(describeError(new PlatformApiError(502))).toBe('unavailable');
+  });
+
+  test('treats a non-JSON body and a dropped connection as unavailable, or unknown for a write', () => {
+    expect(describeError(new SyntaxError('Unexpected token'))).toBe('unavailable');
+    expect(describeError(new TypeError('Failed to fetch'))).toBe('unavailable');
+    expect(describeError(new SyntaxError('Unexpected token'), { write: true })).toBe('unknown');
+    expect(describeError(new TypeError('Failed to fetch'), { write: true })).toBe('unknown');
   });
 });

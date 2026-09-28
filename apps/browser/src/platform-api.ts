@@ -127,3 +127,21 @@ function errorCategory(payload: unknown): string | undefined {
   const error = payload !== null && typeof payload === 'object' && !Array.isArray(payload) ? (payload as Record<string, unknown>)['error'] : undefined;
   return error !== null && typeof error === 'object' && !Array.isArray(error) && typeof (error as Record<string, unknown>)['category'] === 'string' ? (error as Record<string, unknown>)['category'] as string : undefined;
 }
+
+export type ErrorKind = 'signed-out' | 'denied' | 'not-found' | 'conflict' | 'invalid' | 'rate-limited' | 'unknown' | 'unavailable';
+
+const byCategory: Record<string, ErrorKind> = { denied: 'denied', invalid: 'invalid', conflict: 'conflict', 'unknown-outcome': 'unknown', retryable: 'unavailable', timeout: 'unavailable', terminal: 'unavailable' };
+
+export function describeError(error: unknown, { write = false }: { write?: boolean } = {}): ErrorKind {
+  if (error instanceof PlatformApiError) {
+    const known = error.category === undefined ? undefined : byCategory[error.category];
+    if (known) return known;
+    if (error.status === 401) return 'signed-out';
+    if (error.status === 403) return 'denied';
+    if (error.status === 404) return 'not-found';
+    if (error.status === 409 || error.status === 412) return 'conflict';
+    if (error.status === 400 || error.status === 422) return 'invalid';
+    if (error.status === 429) return 'rate-limited';
+  }
+  return write ? 'unknown' : 'unavailable';
+}
