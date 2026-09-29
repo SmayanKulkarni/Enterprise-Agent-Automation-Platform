@@ -1,4 +1,4 @@
-export const BROWSER_COLLECTIONS = ['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'agent-teams', 'workflows', 'skills', 'test-runs', 'reviews', 'versions', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants', 'workflow-drafts', 'workflow-definitions', 'workflow-runs', 'workflow-grants', 'workflow-webhook-credentials', 'workflow-memory-imports', 'workflow-memory-items', 'workflow-memory-readiness', 'connector-installations', 'openrouter-connections', 'openrouter-models'] as const;
+export const BROWSER_COLLECTIONS = ['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'agent-teams', 'workflows', 'skills', 'test-runs', 'reviews', 'versions', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants', 'workflow-drafts', 'workflow-definitions', 'workflow-runs', 'workflow-grants', 'workflow-webhook-credentials', 'workflow-memory-imports', 'workflow-memory-items', 'workflow-memory-readiness', 'workflow-model-settings', 'connector-installations', 'openrouter-connections', 'openrouter-models'] as const;
 export type BrowserCollection = typeof BROWSER_COLLECTIONS[number];
 
 export const COMMANDS = {
@@ -13,7 +13,7 @@ export const COMMANDS = {
   deployment: ['deploy', 'restore', 'teardown'],
   portfolio: ['start-run', 'reset-run', 'publish-evidence', 'score-run'],
   vendor: ['start-assessment', 'decide-assessment', 'supersede-assessment', 'request-grant', 'approve-grant', 'provision-grant', 'revoke-grant', 'expire-grant', 'reconcile-grant'],
-  workflow: ['check', 'publish', 'start', 'approve', 'grant', 'certify', 'reconcile', 'enroll', 'rotate', 'revoke', 'provision-webhook-credential', 'rotate-webhook-credential', 'disable-webhook-credential', 'test-webhook', 'import-memory', 'revoke-memory-import', 'withdraw-memory', 'hold-memory', 'release-memory-hold', 'set-memory-expiry', 'delete-memory', 'correct-memory', 'invalidate-memory-source'],
+  workflow: ['check', 'publish', 'start', 'approve', 'grant', 'certify', 'reconcile', 'enroll', 'rotate', 'revoke', 'provision-webhook-credential', 'rotate-webhook-credential', 'disable-webhook-credential', 'test-webhook', 'import-memory', 'revoke-memory-import', 'withdraw-memory', 'hold-memory', 'release-memory-hold', 'set-memory-expiry', 'delete-memory', 'correct-memory', 'invalidate-memory-source', 'configure-model-settings'],
 } as const;
 export type CommandOwner = keyof typeof COMMANDS;
 export type CommandName<Owner extends CommandOwner = CommandOwner> = typeof COMMANDS[Owner][number];
@@ -37,7 +37,7 @@ const argumentKeys: Readonly<Record<string, readonly string[]>> = Object.freeze(
   'workflow.test-webhook': ['id', 'input'],
   'workflow.import-memory': ['id', 'sourceDefinitionId'], 'workflow.revoke-memory-import': ['id', 'reason'],
   'workflow.withdraw-memory': ['id', 'reason'], 'workflow.hold-memory': ['id', 'reason'], 'workflow.release-memory-hold': ['id', 'reason'], 'workflow.set-memory-expiry': ['id', 'expiresAt'], 'workflow.delete-memory': ['id', 'reason'],
-  'workflow.correct-memory': ['id', 'text'], 'workflow.invalidate-memory-source': ['sourceId'],
+  'workflow.correct-memory': ['id', 'text'], 'workflow.invalidate-memory-source': ['sourceId'], 'workflow.configure-model-settings': ['id', 'settings'],
 });
 export const hasCommandArgumentSchema = (owner: string, name: string): boolean => Object.hasOwn(argumentKeys, `${owner}.${name}`);
 

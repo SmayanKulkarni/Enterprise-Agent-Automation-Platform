@@ -765,6 +765,8 @@ Rules:
 - Scope defaults to the tenant and the stable workflow definition ID. Items record the producing revision.
 - Cross-workflow use needs an admin-published Memory Import that pins a source summary by run ID and digest. Revocation applies to future retrievals. Imports never cross tenants.
 - Only a Memory node retrieves memory. Agent nodes do not retrieve it implicitly.
+- Models are chosen explicitly, never by environment default. Each Agent step names its provider and exact model. A tenant administrator names the summary model (with an optional fallback) and the embedding model in Studio, saved as Model settings. OpenRouter choices come from the live OpenRouter catalog (chat and embeddings), and structured output is checked against it. There is no environment allowlist.
+- Embeddings default to the Upstash index's built-in model. A tenant can instead use OpenRouter or Azure OpenAI embeddings whose vectors match the index dimension; a test call verifies this on save. Each vector is tagged with its embedding profile and queries filter to the current profile, so vectors from different models never mix. There is no cross-provider embedding fallback.
 - Upstash Vector is server-only: one namespace per tenant, deterministic item IDs, server-derived metadata filters, bounded `topK`, and a final SQL eligibility recheck. Azure SQL keeps lifecycle and audit metadata, never memory text or embeddings.
 - Withdrawal, deletion, source invalidation, and correction change the SQL eligibility ledger before vector cleanup, so a stale vector match cannot be recalled.
 - Items expire after 90 days by default. Admins can shorten expiry, never extend it.
@@ -932,8 +934,12 @@ Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 | `PLATFORM_LOCAL_CLERK_SUBJECT`, `PLATFORM_LOCAL_TENANTS` | Local API | Fixture mode access |
 | `WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION` | API, Functions | Wrapping key version, for example `v1` |
 | `WORKFLOW_OPENROUTER_WRAPPING_KEY` | API, Functions | 32-byte base64url key |
-| `WORKFLOW_OPENROUTER_MODELS` | API, Functions | Exact permitted model slugs |
-| `WORKFLOW_OPENROUTER_STRUCTURED_OUTPUT_MODELS` | API, Functions | Subset that supports structured output |
+| `WORKFLOW_OPENROUTER_MAX_COST_PER_1K_TOKENS` | API, Functions | Cost rate used only when OpenRouter reports no per-request cost |
+| `WORKFLOW_MAX_COST_PER_1K_TOKENS` | Functions | Cost rate for Azure OpenAI calls |
+| `UPSTASH_VECTOR_REST_URL` | API, Functions | Upstash Vector REST endpoint |
+| `UPSTASH_VECTOR_REST_TOKEN` | API, Functions | Upstash Vector write token |
+| `UPSTASH_VECTOR_DIMENSION` | API, Functions | Index dimension, default `384`; external embeddings must match it |
+| `WORKFLOW_MEMORY_ENABLED_TENANTS` | API, Functions | Comma-separated tenant IDs allowed to use Operational Memory |
 | `WORKFLOW_WEBHOOK_SECRET_<DEFINITIONID>` | Functions | Fallback webhook secret before a managed credential exists |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Functions | Enables trace export |
 

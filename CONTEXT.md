@@ -14,7 +14,15 @@ _Avoid_: Plugin, arbitrary code, managed connector
 
 **Capability**:
 A named, schema-bound operation exposed by an installed Extension and authorized for a tenant.
-_Avoid_: Tool, function, action
+_Avoid_: Function, action
+
+**Agent tool**:
+A Capability attached to an Agent by a tool edge that the model may call, one call at a time, during that Agent's step; it is not a step in the flow.
+_Avoid_: Plugin, chain step, parallel call
+
+**Branch join**:
+Two or more flow connections entering one node, such as both Condition branches leading to the same End; only one path runs in a Workflow Run.
+_Avoid_: Parallel merge, fan-in
 
 **Connector installation**:
 A tenant-admin-owned binding of an Extension to its credentials, certified Capability Manifest, network route, and health state.
@@ -45,6 +53,14 @@ _Avoid_: Memory, logs
 **Operational memory**:
 Authorized, provenance-bearing information retained for retrieval by later runs of one Workflow Definition; it is distinct from a Run History.
 _Avoid_: Chat history, logs
+
+**Model settings**:
+The tenant administrator's explicit selection of the summary model, its optional fallback, and the embedding provider and model used for Operational Memory.
+_Avoid_: Environment default, model allowlist
+
+**Embedding profile**:
+The provider and model that produced a stored vector; retrieval considers only vectors from the tenant's current profile.
+_Avoid_: Fallback embedding, mixed index
 
 **Run summary**:
 A source-linked condensation of Run History.

@@ -1,3 +1,5 @@
+import { dominators, immediateDominator, isFlowEdge, reaches, strictlyDominates } from '../../../packages/workflow/src/flow.js';
+
 export type WorkflowNodeKind = 'trigger' | 'agent' | 'condition' | 'approval' | 'skill' | 'memory' | 'retriever' | 'mcp' | 'http' | 'webhook' | 'end';
 
 export interface WorkflowNode {
@@ -11,7 +13,10 @@ export interface WorkflowNode {
   config?: Record<string, unknown>;
 }
 
-export interface WorkflowEdge { id: string; from: string; to: string; branch?: 'true' | 'false'; }
+export interface WorkflowEdge { id: string; from: string; to: string; branch?: 'true' | 'false'; role?: 'tool'; }
+
+export const MAX_AGENT_TOOLS = 16;
+const DEFAULT_TOOL_ROUNDS = 3;
 
 export const templates: Record<WorkflowNodeKind, Pick<WorkflowNode, 'title' | 'detail' | 'instructions'>> = {
   trigger: { title: 'New request', detail: 'Starts a run', instructions: 'Accept an event and pass its validated fields to the workflow.' },
@@ -63,8 +68,24 @@ export function createNode(kind: WorkflowNodeKind, x: number, y: number, sequenc
 }
 
 type Branch = 'true' | 'false' | undefined;
+type Fields = readonly [string, 'string' | 'number' | 'boolean'][];
+export type OutputSchemas = (node: WorkflowNode) => unknown;
+
+const flowOf = (edges: readonly WorkflowEdge[]): WorkflowEdge[] => edges.filter(isFlowEdge);
 const linked = (edges: readonly WorkflowEdge[], id: string): boolean => edges.some((edge) => edge.from === id || edge.to === id);
-const reaches = (edges: readonly WorkflowEdge[], start: string, goal: string, seen = new Set<string>()): boolean => start === goal || !seen.has(start) && (seen.add(start), edges.some((edge) => edge.from === start && reaches(edges, edge.to, goal, seen)));
+const toolEdgesOf = (edges: readonly WorkflowEdge[], agentId: string): WorkflowEdge[] => edges.filter((edge) => edge.role === 'tool' && edge.from === agentId);
+const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+export const isToolNode = (edges: readonly WorkflowEdge[], id: string): boolean => edges.some((edge) => edge.role === 'tool' && edge.to === id);
+export const toolsOf = (nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], agentId: string): WorkflowNode[] => toolEdgesOf(edges, agentId).flatMap((edge) => nodes.filter((node) => node.id === edge.to));
+export const toolOwner = (nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], toolId: string): WorkflowNode | undefined => nodes.find((node) => edges.some((edge) => edge.role === 'tool' && edge.to === toolId && edge.from === node.id));
+
+function edgeId(edges: readonly WorkflowEdge[], from: string, to: string, branch: Branch, role?: 'tool'): string {
+  const base = `${from}-${to}${branch ? `-${branch}` : ''}${role ? '-tool' : ''}`;
+  let candidate = base;
+  for (let index = 2; edges.some((edge) => edge.id === candidate); index += 1) candidate = `${base}-${String(index)}`;
+  return candidate;
+}
 
 function linkError(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], from: string, to: string, branch: Branch): string | undefined {
   const source = nodes.find((node) => node.id === from);
@@ -73,31 +94,40 @@ function linkError(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[
   if (from === to) return "A step can't connect to itself.";
   if (source.kind === 'end') return 'End is the last step and has no output.';
   if (target.kind === 'trigger') return 'The Trigger starts the workflow and has no input.';
+  if (isToolNode(edges, from) || isToolNode(edges, to)) return 'This MCP is attached to an Agent as a tool. Remove that tool connection to use it as a step in the flow.';
   if (source.kind === 'condition' && !branch) return 'Use the True or False output of a Condition.';
   if (source.kind !== 'condition' && branch) return 'Only a Condition has True and False outputs.';
-  if (edges.some((edge) => edge.from === from && edge.to === to)) return 'Those steps are already connected.';
+  if (flowOf(edges).some((edge) => edge.from === from && edge.to === to && edge.branch === branch)) return 'Those steps are already connected.';
   if (source.kind === 'approval' && target.kind !== 'mcp') return 'Approval can only lead to an MCP tool.';
   if (reaches(edges, to, from)) return 'That connection would create a loop.';
   return undefined;
 }
 
 function splice(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], from: string, to: string, branch: Branch): WorkflowEdge[] | string {
-  const inbound = edges.find((edge) => edge.to === to);
-  const outbound = edges.find((edge) => edge.from === from && edge.branch === branch);
+  const flow = flowOf(edges);
+  const inbound = flow.filter((edge) => edge.to === to);
+  const outbound = flow.find((edge) => edge.from === from && edge.branch === branch);
   const kind = (id: string) => nodes.find((node) => node.id === id)?.kind;
-  const link = (a: string, b: string, edgeBranch?: 'true' | 'false'): WorkflowEdge => ({ id: `${a}-${b}`, from: a, to: b, ...(edgeBranch ? { branch: edgeBranch } : {}) });
-  if (!inbound && !outbound) return [...edges, link(from, to, branch)];
-  if (inbound && !outbound && !linked(edges, from) && kind(from) !== 'trigger' && kind(from) !== 'condition') {
-    const rest = edges.filter((edge) => edge !== inbound);
-    const first = linkError(nodes, rest, inbound.from, from, inbound.branch);
-    return first ?? [...rest, link(inbound.from, from, inbound.branch), link(from, to)];
+  const link = (list: readonly WorkflowEdge[], a: string, b: string, edgeBranch?: 'true' | 'false'): WorkflowEdge => ({ id: edgeId(list, a, b, edgeBranch), from: a, to: b, ...(edgeBranch ? { branch: edgeBranch } : {}) });
+  if (!outbound) {
+    const only = inbound.length === 1 ? inbound[0] : undefined;
+    if (only && !linked(edges, from) && kind(from) !== 'trigger' && kind(from) !== 'condition') {
+      const rest = edges.filter((edge) => edge !== only);
+      const first = linkError(nodes, rest, only.from, from, only.branch);
+      if (first) return first;
+      const head = link(rest, only.from, from, only.branch);
+      return [...rest, head, link([...rest, head], from, to)];
+    }
+    return [...edges, link(edges, from, to, branch)];
   }
-  if (outbound && !inbound && !linked(edges, to) && kind(to) !== 'end' && kind(to) !== 'condition') {
+  if (!linked(edges, to) && kind(to) !== 'end' && kind(to) !== 'condition') {
     const rest = edges.filter((edge) => edge !== outbound);
     const last = linkError(nodes, rest, to, outbound.to, undefined);
-    return last ?? [...rest, link(from, to, branch), link(to, outbound.to)];
+    if (last) return last;
+    const head = link(rest, from, to, branch);
+    return [...rest, head, link([...rest, head], to, outbound.to)];
   }
-  return inbound ? 'That step already has an input. Remove its connection, or connect an unlinked step to insert it.' : 'That output is already connected. Remove its connection, or connect an unlinked step to insert it.';
+  return branch ? 'That branch already leads to a step. Remove its connection, or connect an unlinked step to insert it.' : 'That output is already connected. Remove its connection, or connect an unlinked step to insert it.';
 }
 
 export function connectionError(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], from: string, to: string, branch?: 'true' | 'false'): string | undefined {
@@ -113,31 +143,83 @@ export function connect(nodes: readonly WorkflowNode[], edges: readonly Workflow
   return typeof result === 'string' ? [...edges] : result;
 }
 
-export function conditionSources(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], conditionId: string): readonly WorkflowNode[] {
-  const preceding = new Set<string>(); const visit = (id: string): void => { for (const edge of edges.filter((item) => item.to === id)) if (!preceding.has(edge.from)) { preceding.add(edge.from); visit(edge.from); } };
-  visit(conditionId);
-  return nodes.filter((node) => preceding.has(node.id) && (node.kind === 'trigger' || node.kind === 'agent'));
+export function toolError(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], agentId: string, toolId: string): string | undefined {
+  const agent = nodes.find((node) => node.id === agentId);
+  const tool = nodes.find((node) => node.id === toolId);
+  if (!agent || !tool) return 'Choose an Agent and an MCP.';
+  if (agent.kind !== 'agent') return 'Only an Agent can use tools. Attach the MCP to an Agent.';
+  if (tool.kind !== 'mcp') return 'Only an MCP can be attached as a tool.';
+  if (edges.some((edge) => edge.role === 'tool' && edge.from === agentId && edge.to === toolId)) return 'That MCP is already a tool of this Agent.';
+  if (isToolNode(edges, toolId)) return 'That MCP is already a tool of another Agent. Add another MCP step for this Agent.';
+  if (linked(flowOf(edges), toolId)) return 'That MCP is already a step in the flow. Remove its flow connections to use it as a tool.';
+  if (toolEdgesOf(edges, agentId).length >= MAX_AGENT_TOOLS) return `An Agent can have at most ${String(MAX_AGENT_TOOLS)} tools.`;
+  return undefined;
 }
 
-export function conditionFields(node: WorkflowNode): readonly [string, 'string' | 'number' | 'boolean'][] {
-  const schema = node.kind === 'trigger' ? node.config?.['inputSchema'] : node.config?.['responseSchema'];
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return [];
-  const properties = (schema as Record<string, unknown>)['properties'];
-  if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) return [];
-  return Object.entries(properties).flatMap(([name, value]) => value !== null && typeof value === 'object' && !Array.isArray(value) && ['string', 'number', 'boolean'].includes(String((value as Record<string, unknown>)['type'])) ? [[name, (value as Record<string, unknown>)['type'] as 'string' | 'number' | 'boolean']] : []);
+export function attachTool(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], agentId: string, toolId: string): { nodes: WorkflowNode[]; edges: WorkflowEdge[] } {
+  if (toolError(nodes, edges, agentId, toolId)) return { nodes: [...nodes], edges: [...edges] };
+  const bump = (config: Record<string, unknown>): Record<string, unknown> => {
+    const policy = record(config['policy']) ? config['policy'] : {};
+    const rounds = Number(policy['toolRounds']); const effects = Number(policy['effects']);
+    return { ...config, policy: { ...policy, toolRounds: rounds >= 1 ? rounds : DEFAULT_TOOL_ROUNDS, effects: effects >= 1 ? effects : DEFAULT_TOOL_ROUNDS } };
+  };
+  return {
+    nodes: nodes.map((node) => node.id === agentId ? { ...node, config: bump(node.config ?? {}) } : node.id === toolId ? { ...node, config: { ...node.config, arguments: {} } } : node),
+    edges: [...edges, { id: edgeId(edges, agentId, toolId, undefined, 'tool'), from: agentId, to: toolId, role: 'tool' }],
+  };
 }
 
-export function mappingFields(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], targetId: string, type: TriggerFieldType): readonly [string, string][] {
-  const preceding = new Set<string>();
-  const visit = (id: string): void => { for (const edge of edges.filter((item) => item.to === id)) if (!preceding.has(edge.from)) { preceding.add(edge.from); visit(edge.from); } };
-  visit(targetId);
-  return nodes.flatMap((node) => {
-    if (!preceding.has(node.id) || node.kind !== 'trigger' && node.kind !== 'agent') return [];
-    const schema = node.kind === 'trigger' ? node.config?.['inputSchema'] : node.config?.['responseSchema'];
-    if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return [];
-    const properties = (schema as Record<string, unknown>)['properties'];
-    if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) return [];
-    return Object.entries(properties).flatMap(([name, field]) => field !== null && typeof field === 'object' && !Array.isArray(field) && (field as Record<string, unknown>)['type'] === type ? [[node.kind === 'trigger' ? `$input.${name}` : `$node.${node.id}.${name}`, `${node.title} · ${name}`] as [string, string]] : []);
+function outputProperties(node: WorkflowNode, outputs: OutputSchemas | undefined): Record<string, unknown> {
+  const schema = node.kind === 'trigger' ? node.config?.['inputSchema'] : node.kind === 'agent' ? node.config?.['responseSchema'] : node.kind === 'mcp' ? outputs?.(node) : undefined;
+  return record(schema) && record(schema['properties']) ? schema['properties'] : {};
+}
+
+function precedingSources(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], targetId: string): WorkflowNode[] {
+  const trigger = nodes.find((node) => node.kind === 'trigger');
+  if (!trigger) return [];
+  const dominated = dominators(edges, trigger.id);
+  return nodes.filter((node) => (node.kind === 'trigger' || node.kind === 'agent' || node.kind === 'mcp') && !isToolNode(edges, node.id) && (node.id === trigger.id || strictlyDominates(dominated, node.id, targetId)));
+}
+
+export function conditionSources(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], conditionId: string, outputs?: OutputSchemas): readonly WorkflowNode[] {
+  return precedingSources(nodes, edges, conditionId).filter((node) => conditionFields(node, outputs).length > 0 || node.kind !== 'mcp');
+}
+
+export function conditionFields(node: WorkflowNode, outputs?: OutputSchemas): Fields {
+  return Object.entries(outputProperties(node, outputs)).flatMap(([name, value]) => record(value) && ['string', 'number', 'boolean'].includes(String(value['type'])) ? [[name, value['type'] as 'string' | 'number' | 'boolean'] as const] : []);
+}
+
+export function mappingFields(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], targetId: string, type: TriggerFieldType, outputs?: OutputSchemas): readonly [string, string][] {
+  return precedingSources(nodes, edges, targetId).flatMap((node) => Object.entries(outputProperties(node, outputs)).flatMap(([name, field]) => record(field) && field['type'] === type ? [[node.kind === 'trigger' ? `$input.${name}` : `$node.${node.id}.${name}`, `${node.title} · ${name}`] as [string, string]] : []));
+}
+
+export function capabilityOutputSchema(installations: readonly Record<string, unknown>[], node: WorkflowNode): unknown {
+  const installationId = node.config?.['installationId']; const wanted = typeof installationId === 'string' ? installationId.toLowerCase() : '';
+  const manifest = installations.find((item) => String(item['id']).toLowerCase() === wanted)?.['manifest'];
+  const capabilities = record(manifest) && Array.isArray(manifest['capabilities']) ? manifest['capabilities'] : [];
+  const match: unknown = capabilities.find((item: unknown) => record(item) && item['name'] === node.config?.['capability']);
+  return record(match) ? match['outputSchema'] : undefined;
+}
+
+export function syncChainGrants(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[]): WorkflowNode[] {
+  const trigger = nodes.find((node) => node.kind === 'trigger');
+  if (!trigger) return [...nodes];
+  const dominated = dominators(edges, trigger.id);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const grants = new Map<string, Set<string>>();
+  for (const node of nodes) {
+    const capability = node.config?.['capability'];
+    if (node.kind !== 'mcp' || isToolNode(edges, node.id) || typeof capability !== 'string' || capability === '' || !dominated.has(node.id)) continue;
+    let ancestor = immediateDominator(dominated, node.id);
+    while (ancestor !== undefined && byId.get(ancestor)?.kind !== 'agent') ancestor = immediateDominator(dominated, ancestor);
+    if (ancestor !== undefined) grants.set(ancestor, new Set([...(grants.get(ancestor) ?? []), capability]));
+  }
+  return nodes.map((node) => {
+    const needed = grants.get(node.id);
+    if (!needed) return node;
+    const current = Array.isArray(node.config?.['allowedCapabilities']) ? (node.config['allowedCapabilities'] as unknown[]).filter((item): item is string => typeof item === 'string') : [];
+    const missing = [...needed].filter((item) => !current.includes(item));
+    return missing.length === 0 ? node : { ...node, config: { ...node.config, allowedCapabilities: [...current, ...missing] } };
   });
 }
 

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { EmbeddingSettings } from './model-settings.js';
 import { canonicalJson, digest } from '../../contracts/src/index.js';
 import type { WorkflowRun } from './service.js';
 
@@ -8,9 +9,9 @@ export interface MemoryScope { tenantId: string; stableDefinitionId: string; def
 export interface MemoryProposal { type: 'task-fact' | 'stated-preference'; text: string; sourceId: string; sourceDigest: string; excerpt: string; subject?: string; predecessorId?: string; }
 export interface MemoryItem { stableDefinitionId: string; definitionId: string; producingRevision: number; type: MemoryItemType; sourceId: string; sourceDigest: string; sourceKind: 'input' | 'event' | 'summary'; fingerprint: string; ownerId?: string; predecessorId?: string; promotedAt?: string; expiresAt?: string; hold?: boolean; failure?: string; vectorState: 'pending' | 'ready' | 'remove-pending' | 'removed'; }
 export interface MemoryImport { targetDefinitionId: string; targetRevision: number; sourceDefinitionId: string; state: 'active' | 'revoked'; actorId: string; requestId: string; reason?: string; revokedAt?: string; }
-export interface HostedMemoryItem { id: string; text: string; vector: readonly number[]; metadata: { stableDefinitionId: string; definitionId: string; producingRevision: number; type: MemoryItemType; sourceId: string; sourceDigest: string; ownerId?: string; state: 'pending' | 'promoted'; promotedAt?: string; expiresAt: string; }; }
+export interface HostedMemoryItem { id: string; text: string; metadata: { stableDefinitionId: string; definitionId: string; producingRevision: number; type: MemoryItemType; sourceId: string; sourceDigest: string; ownerId?: string; state: 'pending' | 'promoted'; promotedAt?: string; expiresAt: string; }; }
 export interface HostedMemoryMatch { id: string; score: number; text: string; metadata: HostedMemoryItem['metadata']; }
-export interface HostedMemoryPort { readonly readiness: 'disabled' | 'not-configured' | 'ready' | 'unavailable'; enabled(tenantId: string): boolean; embed(text: string): Promise<readonly number[]>; upsert(namespace: string, item: HostedMemoryItem): Promise<void>; read(namespace: string, itemId: string): Promise<HostedMemoryItem | undefined>; query(namespace: string, vector: readonly number[], topK: number, filter: Record<string, string>): Promise<readonly HostedMemoryMatch[]>; remove(namespace: string, itemId: string): Promise<void>; }
+export interface HostedMemoryPort { readonly readiness: 'disabled' | 'not-configured' | 'ready' | 'unavailable'; enabled(tenantId: string): boolean; upsert(namespace: string, item: HostedMemoryItem): Promise<void>; read(namespace: string, itemId: string): Promise<HostedMemoryItem | undefined>; query(namespace: string, text: string, topK: number, filter: Record<string, string>): Promise<readonly HostedMemoryMatch[]>; remove(namespace: string, itemId: string): Promise<void>; verifyEmbedding?(tenantId: string, settings: EmbeddingSettings): Promise<void>; }
 
 const uuid = (value: string): string => {
   const bytes = createHash('sha256').update(value).digest();
@@ -21,6 +22,7 @@ const secret = /(?:api[_ -]?key|authorization|bearer|cookie|credential|password|
 const clean = (value: string): string => value.replace(/\s+/gu, ' ').trim();
 
 export const namespace = (tenantId: string): string => `tenant-${tenantId}`;
+export const tenantOfNamespace = (space: string): string => space.slice('tenant-'.length);
 export const memoryItemId = (fingerprint: string): string => uuid(`memory:${fingerprint}`);
 export const memoryFingerprint = async (scope: Pick<MemoryScope, 'tenantId' | 'stableDefinitionId'>, proposal: Pick<MemoryProposal, 'type' | 'sourceId' | 'sourceDigest' | 'subject' | 'text'>): Promise<string> => digest({ scope: { tenantId: scope.tenantId, stableDefinitionId: scope.stableDefinitionId }, type: proposal.type, sourceId: proposal.sourceId, sourceDigest: proposal.sourceDigest, ...(proposal.subject ? { subject: clean(proposal.subject) } : {}), text: clean(proposal.text) });
 export const resolveMemoryScope = (run: WorkflowRun): MemoryScope => ({ tenantId: run.tenantId, stableDefinitionId: run.stableDefinitionId, definitionId: run.definitionId, revision: run.definitionRevision });
@@ -49,9 +51,8 @@ export class InMemoryHostedMemoryPort implements HostedMemoryPort {
   readonly items = new Map<string, HostedMemoryItem>();
   constructor(private readonly tenants: readonly string[] = []) {}
   enabled(tenantId: string): boolean { return this.tenants.length === 0 || this.tenants.includes(tenantId); }
-  async embed(text: string): Promise<readonly number[]> { return [createHash('sha256').update(text).digest().readUInt32BE(0) / 0xffffffff]; }
   async upsert(space: string, item: HostedMemoryItem): Promise<void> { this.items.set(`${space}:${item.id}`, structuredClone(item)); }
   async read(space: string, itemId: string): Promise<HostedMemoryItem | undefined> { const item = this.items.get(`${space}:${itemId}`); return item && structuredClone(item); }
-  async query(space: string, _vector: readonly number[], topK: number, filter: Record<string, string>): Promise<readonly HostedMemoryMatch[]> { return [...this.items.entries()].filter(([key, item]) => key.startsWith(`${space}:`) && Object.entries(filter).every(([name, value]) => String(item.metadata[name as keyof HostedMemoryItem['metadata']]) === value)).map(([, item]) => ({ id: item.id, score: 1, text: item.text, metadata: item.metadata })).sort((left, right) => left.id.localeCompare(right.id)).slice(0, topK); }
+  async query(space: string, _text: string, topK: number, filter: Record<string, string>): Promise<readonly HostedMemoryMatch[]> { return [...this.items.entries()].filter(([key, item]) => key.startsWith(`${space}:`) && Object.entries(filter).every(([name, value]) => String(item.metadata[name as keyof HostedMemoryItem['metadata']]) === value)).map(([, item]) => ({ id: item.id, score: 1, text: item.text, metadata: item.metadata })).sort((left, right) => left.id.localeCompare(right.id)).slice(0, topK); }
   async remove(space: string, itemId: string): Promise<void> { this.items.delete(`${space}:${itemId}`); }
 }

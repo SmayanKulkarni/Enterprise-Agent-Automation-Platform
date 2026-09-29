@@ -7,40 +7,45 @@ const required = (key) => {
 };
 const url = required('UPSTASH_VECTOR_REST_URL').replace(/\/$/u, '');
 const token = required('UPSTASH_VECTOR_REST_TOKEN');
-const dimension = Number(required('AZURE_OPENAI_EMBEDDING_DIMENSION'));
 const forecast = Number(process.env['WORKFLOW_MEMORY_FORECAST_DAILY_OPERATIONS'] ?? '0');
-if (!Number.isSafeInteger(dimension) || dimension < 1 || dimension > 1536 || !Number.isFinite(forecast) || forecast < 0 || forecast > 8000) throw new Error('Invalid certification configuration.');
-const call = async (path, body) => {
-  const response = await fetch(`${url}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
+if (!Number.isFinite(forecast) || forecast < 0 || forecast > 8000) throw new Error('Invalid certification configuration.');
+const call = async (command, space, body) => {
+  const response = await fetch(`${url}/${command}/${space}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`Upstash returned ${response.status}.`);
-  return response.json();
+  return (await response.json()).result;
 };
-const vector = (index) => Array.from({ length: dimension }, (_, position) => position === index % dimension ? 1 : 0);
 const left = `certification-${randomUUID()}`;
 const right = `certification-${randomUUID()}`;
-const ids = Array.from({ length: 8 }, () => randomUUID());
-const write = (space, id, index) => call('/upsert', { namespace: space, vectors: [{ id, vector: vector(index), metadata: { state: 'promoted', source: 'certification' } }] });
-const remove = (space, id) => call('/delete', { namespace: space, ids: [id] });
-const query = async (space, index) => {
+const leftIds = Array.from({ length: 8 }, () => randomUUID());
+const rightIds = Array.from({ length: 8 }, () => randomUUID());
+const write = (space, id, index) => call('upsert-data', space, { id, data: `certification memory item ${index}`, metadata: { state: 'promoted', source: 'certification' } });
+const remove = (space, ids) => call('delete', space, { ids }).catch(() => undefined);
+const query = async (index) => {
   const start = performance.now();
-  const result = await call('/query', { namespace: space, vector: vector(index), topK: 1, includeMetadata: true, filter: "state = 'promoted'" });
+  const result = await call('query-data', left, { data: `certification memory item ${index}`, topK: 3, includeMetadata: true, filter: "state = 'promoted'" });
   return { milliseconds: performance.now() - start, result };
 };
 
 void (async () => {
   try {
-    await Promise.all(ids.map((id, index) => write(left, id, index)));
-    await Promise.all(ids.map((id, index) => write(right, id, index)));
-    await write(left, ids[0], 0);
-    const probes = await Promise.all(Array.from({ length: 10 }, (_, index) => query(left, index)));
+    await Promise.all([...leftIds.map((id, index) => write(left, id, index)), ...rightIds.map((id, index) => write(right, id, index))]);
+    await write(left, leftIds[0], 0);
+    const count = async () => (await call('fetch', left, { ids: leftIds })).filter(Boolean).length;
+    if (await count() !== leftIds.length) throw new Error('Idempotent upsert failed.');
+    let probes = [];
+    for (let attempt = 0; attempt < 10 && !probes.length; attempt += 1) {
+      probes = await Promise.all(Array.from({ length: 10 }, (_, index) => query(index)));
+      if (probes.every((probe) => probe.result.length === 0)) { probes = []; await new Promise((resolve) => setTimeout(resolve, 1000)); }
+    }
+    if (!probes.length) throw new Error('Indexed items never became queryable.');
     const p95 = probes.map((probe) => probe.milliseconds).sort((a, b) => a - b)[Math.ceil(probes.length * 0.95) - 1];
-    const leftIds = probes.flatMap((probe) => Array.isArray(probe.result?.matches) ? probe.result.matches.map((item) => item?.id) : []);
-    const isolated = leftIds.every((id) => typeof id === 'string' && ids.includes(id));
-    if (!isolated || p95 === undefined) throw new Error('Namespace isolation or bounded topK failed.');
-    await Promise.all(ids.flatMap((id) => [remove(left, id), remove(right, id)]));
-    process.stdout.write(`${JSON.stringify({ provider: 'upstash-vector', namespaceIsolation: true, idempotentUpsert: true, boundedTopK: true, concurrentNodes: ids.length, p95Milliseconds: p95, forecastDailyOperations: forecast, quotaHeadroom: 'passed' })}\n`);
+    const returned = probes.flatMap((probe) => probe.result.map((match) => match.id));
+    if (!returned.every((id) => leftIds.includes(id))) throw new Error('Namespace isolation failed.');
+    if (probes.some((probe) => probe.result.length > 3)) throw new Error('Bounded topK failed.');
+    await Promise.all([remove(left, leftIds), remove(right, rightIds)]);
+    process.stdout.write(`${JSON.stringify({ provider: 'upstash-vector', namespaceIsolation: true, idempotentUpsert: true, boundedTopK: true, concurrentNodes: leftIds.length, p95Milliseconds: p95, forecastDailyOperations: forecast, quotaHeadroom: 'passed' })}\n`);
   } catch (error) {
-    await Promise.all(ids.flatMap((id) => [remove(left, id).catch(() => undefined), remove(right, id).catch(() => undefined)]));
+    await Promise.all([remove(left, leftIds), remove(right, rightIds)]);
     throw error;
   }
 })();

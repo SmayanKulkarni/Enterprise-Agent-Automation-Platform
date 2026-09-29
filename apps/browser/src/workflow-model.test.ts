@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { conditionFields, conditionSources, connect, connectionError, disconnect, expiryInstant, filterLibrary, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, parseTriggerInput, schemaFieldNameError, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
+import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
+import { attachTool, conditionFields, conditionSources, connect, connectionError, disconnect, expiryInstant, filterLibrary, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, syncChainGrants, toolError, toolsOf, parseTriggerInput, schemaFieldNameError, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
 
 describe('workflow graph', () => {
   test('only creates valid, non-duplicate connections', () => {
@@ -13,9 +14,9 @@ describe('workflow graph', () => {
     expect(connectionError(initialNodes, initialEdges, 'triage', 'context')).toBe('That connection would create a loop.');
   });
 
-  test('joins and forks are refused until a connection is removed', () => {
+  test('a step with an output is refused a second output until its connection is removed', () => {
     const nodes = [...starterNodes, { id: 'memory', kind: 'memory' as const, title: 'Memory', detail: '', x: 0, y: 0, instructions: '' }];
-    expect(connectionError(nodes, starterEdges, 'trigger', 'end')).toMatch(/already has an input/);
+    expect(connectionError(nodes, starterEdges, 'trigger', 'end')).toMatch(/already connected/);
     expect(connectionError(nodes, starterEdges, 'agent', 'trigger')).toBeDefined();
     expect(connectionError(nodes, [], 'trigger', 'end')).toBeUndefined();
   });
@@ -34,9 +35,9 @@ describe('workflow graph', () => {
     expect(connectionError(nodes, edges, 'condition', 'agent')).toMatch(/True or False/);
     expect(connectionError(nodes, edges, 'trigger', 'agent', 'true')).toMatch(/Only a Condition/);
     const inserted = connect(nodes, edges, 'condition', 'agent', 'true');
-    expect(inserted).toContainEqual({ id: 'condition-agent', from: 'condition', to: 'agent', branch: 'true' });
+    expect(inserted).toContainEqual({ id: 'condition-agent-true', from: 'condition', to: 'agent', branch: 'true' });
     expect(inserted).toContainEqual({ id: 'agent-end', from: 'agent', to: 'end' });
-    expect(connect(nodes, edges, 'condition', 'agent', 'false')).toContainEqual({ id: 'condition-agent', from: 'condition', to: 'agent', branch: 'false' });
+    expect(connect(nodes, edges, 'condition', 'agent', 'false')).toContainEqual({ id: 'condition-agent-false', from: 'condition', to: 'agent', branch: 'false' });
   });
 
   test('offers only preceding typed condition sources and prevents duplicate branches', () => {
@@ -44,8 +45,8 @@ describe('workflow graph', () => {
     const edges = [...starterEdges.slice(0, 1), { id: 'agent-condition', from: 'agent', to: 'condition' }];
     expect(conditionSources(nodes, edges, 'condition').map((node) => node.id)).toEqual(['trigger', 'agent']);
     expect(conditionFields(nodes[1]!)).toEqual([['result', 'string']]);
-    const branched = connect(nodes, edges, 'condition', 'trigger', 'true');
-    expect(connect(nodes, branched, 'condition', 'agent', 'true')).toEqual(branched);
+    const branched = connect(nodes, [...edges, { id: 'condition-end-true', from: 'condition', to: 'end', branch: 'true' as const }], 'condition', 'agent', 'true');
+    expect(branched).toHaveLength(3);
   });
 
   test('removes a connection by id', () => {
@@ -111,5 +112,93 @@ describe('workflow graph', () => {
     expect(schemaFieldNameError(schema, 'priority')).toBe('priority already exists.');
     expect(schemaFieldNameError(schema, 'priority', 'priority')).toBeUndefined();
     expect(schemaFieldNameError(schema, 'other')).toBeUndefined();
+  });
+
+  const node = (id: string, kind: WorkflowNode['kind'], config: Record<string, unknown> = {}): WorkflowNode => ({ id, kind, title: id, detail: '', x: 0, y: 0, instructions: '', config });
+  const flow = (from: string, to: string, branch?: 'true' | 'false'): WorkflowEdge => ({ id: `${from}-${to}${branch ? `-${branch}` : ''}`, from, to, ...(branch ? { branch } : {}) });
+  const toolEdge = (from: string, to: string): WorkflowEdge => ({ id: `${from}-${to}-tool`, from, to, role: 'tool' });
+  const agentConfig = { policy: { milliseconds: 1, attempts: 1, tokens: 1, cost: 1, toolRounds: 0, effects: 0 }, responseSchema: { type: 'object', properties: { result: { type: 'string' } }, required: ['result'], additionalProperties: false } };
+
+  describe('branches, joins and tools', () => {
+    test('an Agent that only has a tool edge can still lead to another Agent', () => {
+      const nodes = [node('trigger', 'trigger'), node('one', 'agent', agentConfig), node('two', 'agent', agentConfig), node('crm', 'mcp'), node('end', 'end')];
+      const edges = [flow('trigger', 'one'), flow('two', 'end'), flow('trigger', 'two'), toolEdge('one', 'crm')];
+      expect(connectionError(nodes, edges, 'one', 'two')).toBeUndefined();
+      const joined = connect(nodes, edges, 'one', 'two');
+      expect(joined).toContainEqual({ id: 'one-two', from: 'one', to: 'two' });
+      expect(connectionError(nodes, joined, 'one', 'end')).toMatch(/already connected/);
+    });
+
+    test('both Condition branches can lead to the same End and get distinct edge ids', () => {
+      const nodes = [node('trigger', 'trigger'), node('check', 'condition'), node('end', 'end')];
+      const first = connect(nodes, [flow('trigger', 'check')], 'check', 'end', 'true');
+      const second = connect(nodes, first, 'check', 'end', 'false');
+      expect(second.map((edge) => edge.id)).toEqual(['trigger-check', 'check-end-true', 'check-end-false']);
+      expect(connectionError(nodes, second, 'check', 'end', 'false')).toMatch(/already connected/);
+    });
+
+    test('a Condition branch can join a step that already has an input, but an occupied branch is refused', () => {
+      const nodes = [node('trigger', 'trigger'), node('check', 'condition'), node('one', 'agent', agentConfig), node('two', 'agent', agentConfig), node('end', 'end')];
+      const edges = [flow('trigger', 'check'), flow('check', 'one', 'true'), flow('one', 'end')];
+      expect(connect(nodes, edges, 'check', 'end', 'false')).toContainEqual({ id: 'check-end-false', from: 'check', to: 'end', branch: 'false' });
+      expect(connectionError(nodes, [...edges, flow('check', 'end', 'false')], 'check', 'two', 'true')).toBeUndefined();
+      expect(connectionError(nodes, [...edges, flow('check', 'end', 'false'), flow('trigger', 'two')], 'check', 'two', 'true')).toMatch(/branch already leads/);
+    });
+
+    test('joins never create a loop', () => {
+      const nodes = [node('trigger', 'trigger'), node('check', 'condition'), node('one', 'agent', agentConfig), node('two', 'agent', agentConfig)];
+      const edges = [flow('trigger', 'check'), flow('check', 'one', 'true'), flow('one', 'two')];
+      expect(connectionError(nodes, edges, 'two', 'check')).toBe('That connection would create a loop.');
+      expect(connectionError(nodes, edges, 'two', 'one')).toBe('That connection would create a loop.');
+    });
+
+    test('a tool MCP cannot be a flow endpoint and a flow MCP cannot become a tool', () => {
+      const nodes = [node('trigger', 'trigger'), node('one', 'agent', agentConfig), node('two', 'agent', agentConfig), node('crm', 'mcp'), node('step', 'mcp'), node('end', 'end')];
+      const edges = [flow('trigger', 'one'), flow('one', 'step'), toolEdge('one', 'crm')];
+      expect(connectionError(nodes, edges, 'crm', 'end')).toMatch(/attached to an Agent as a tool/);
+      expect(connectionError(nodes, edges, 'step', 'end')).toBeUndefined();
+      expect(toolError(nodes, edges, 'one', 'step')).toMatch(/already a step in the flow/);
+      expect(toolError(nodes, edges, 'two', 'crm')).toMatch(/another Agent/);
+      expect(toolError(nodes, edges, 'one', 'crm')).toMatch(/already a tool of this Agent/);
+      expect(toolError(nodes, edges, 'trigger', 'crm')).toMatch(/Only an Agent/);
+      expect(toolError(nodes, edges, 'two', 'end')).toMatch(/Only an MCP/);
+    });
+
+    test('an Agent takes up to sixteen tools and attaching one prepares the tool and the agent policy', () => {
+      const mcps = Array.from({ length: 17 }, (_, index) => node(`m${index}`, 'mcp', { arguments: { q: '$input.q' } }));
+      let state = { nodes: [node('agent', 'agent', agentConfig), ...mcps], edges: [] as WorkflowEdge[] };
+      for (const item of mcps.slice(0, 16)) state = attachTool(state.nodes, state.edges, 'agent', item.id);
+      expect(toolsOf(state.nodes, state.edges, 'agent')).toHaveLength(16);
+      expect(toolError(state.nodes, state.edges, 'agent', 'm16')).toMatch(/at most 16/);
+      expect(state.nodes[0]?.config?.['policy']).toMatchObject({ toolRounds: 3, effects: 3 });
+      expect(state.nodes[1]?.config?.['arguments']).toEqual({});
+      expect(attachTool(state.nodes, state.edges, 'agent', 'm16').edges).toEqual(state.edges);
+    });
+
+    test('an existing tool budget is kept when a tool is attached', () => {
+      const agent = node('agent', 'agent', { ...agentConfig, policy: { ...agentConfig.policy, toolRounds: 5, effects: 2 } });
+      expect(attachTool([agent, node('crm', 'mcp')], [], 'agent', 'crm').nodes[0]?.config?.['policy']).toMatchObject({ toolRounds: 5, effects: 2 });
+    });
+
+    test('mapping and condition sources include only fields on every path to the target', () => {
+      const output = { type: 'object', properties: { found: { type: 'string' }, ok: { type: 'boolean' } } };
+      const outputs = (candidate: WorkflowNode) => candidate.id === 'read' ? output : undefined;
+      const nodes = [node('trigger', 'trigger', { inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }), node('check', 'condition'), node('left', 'agent', agentConfig), node('right', 'agent', agentConfig), node('join', 'agent', agentConfig), node('read', 'mcp'), node('next', 'mcp'), node('gate', 'condition'), node('crm', 'mcp')];
+      const edges = [flow('trigger', 'check'), flow('check', 'left', 'true'), flow('check', 'right', 'false'), flow('left', 'join'), flow('right', 'join'), flow('join', 'read'), flow('read', 'next'), flow('next', 'gate'), toolEdge('join', 'crm')];
+      expect(mappingFields(nodes, edges, 'next', 'string', outputs).map(([value]) => value)).toEqual(['$input.text', '$node.join.result', '$node.read.found']);
+      expect(mappingFields(nodes, edges, 'join', 'string', outputs).map(([value]) => value)).toEqual(['$input.text']);
+      expect(conditionSources(nodes, edges, 'gate', outputs).map((item) => item.id)).toEqual(['trigger', 'join', 'read']);
+      expect(conditionFields(nodes.find((item) => item.id === 'read')!, outputs)).toEqual([['found', 'string'], ['ok', 'boolean']]);
+      expect(conditionSources(nodes, edges, 'gate').map((item) => item.id)).toEqual(['trigger', 'join']);
+    });
+  });
+
+  test('a chain-step MCP is granted on its nearest dominating Agent and tool MCPs are not', () => {
+    const nodes = [node('trigger', 'trigger'), node('one', 'agent', agentConfig), node('two', 'agent', { ...agentConfig, allowedCapabilities: ['other'] }), node('step', 'mcp', { capability: 'write' }), node('crm', 'mcp', { capability: 'lookup' }), node('unlinked', 'mcp', { capability: 'lost' })];
+    const edges = [flow('trigger', 'one'), flow('one', 'two'), flow('two', 'step'), toolEdge('one', 'crm')];
+    const synced = syncChainGrants(nodes, edges);
+    expect(synced.find((item) => item.id === 'two')?.config?.['allowedCapabilities']).toEqual(['other', 'write']);
+    expect(synced.find((item) => item.id === 'one')?.config?.['allowedCapabilities']).toBeUndefined();
+    expect(syncChainGrants(synced, edges)).toEqual(synced);
   });
 });

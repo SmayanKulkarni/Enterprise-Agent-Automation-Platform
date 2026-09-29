@@ -38,7 +38,7 @@ export function WebhookPanel({ api, tenantId, definitionId, webhook, admin, sche
 
   if (!webhook) return null;
 
-  const credential = credentials?.records.find((item) => item['definitionId'] === definitionId);
+  const credential = credentials?.records.find((item) => String(item['definitionId']).toLowerCase() === definitionId.toLowerCase());
   const version = Number(credential?.['version'] ?? 0);
   const enabled = credential?.['enabled'] === true;
   const action = async (name: 'provision-webhook-credential' | 'rotate-webhook-credential' | 'disable-webhook-credential') => {

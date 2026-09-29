@@ -18,9 +18,11 @@ test('graph compiler pins execution fields and excludes canvas metadata', async 
   expect(compiled.nodes[1]).toMatchObject({ id: 'agent', next: 'end', instructions: 'Classify.' });
 });
 
-test('graph compiler rejects joins, cycles, unsupported nodes and unreachable paths', () => {
-  const joined = graph(); joined.edges.push({ id: 'c', from: 'start', to: 'end' });
-  expect(validateGraph(joined).map((issue) => issue.code)).toContain('JOIN_OR_MISSING_INPUT');
+test('graph compiler rejects forks, orphans, cycles, unsupported nodes and unreachable paths', () => {
+  const forked = graph(); forked.edges.push({ id: 'c', from: 'start', to: 'end' });
+  expect(validateGraph(forked).map((issue) => issue.code)).toContain('INVALID_SUCCESSOR');
+  const orphan = graph(); orphan.edges.pop();
+  expect(validateGraph(orphan).map((issue) => issue.code)).toContain('MISSING_INPUT');
   const cyclic = graph(); cyclic.edges[1] = { id: 'b', from: 'agent', to: 'start' };
   expect(validateGraph(cyclic).map((issue) => issue.code)).toContain('CYCLE');
   const unsupported = graph(); unsupported.nodes[1]!.kind = 'http';

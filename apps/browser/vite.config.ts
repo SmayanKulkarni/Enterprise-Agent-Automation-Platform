@@ -2,6 +2,7 @@ import type { IncomingHttpHeaders } from 'node:http';
 import { defineConfig } from 'vite';
 import { localBrowserTransport } from '../../packages/browser/src/local-browser-host.js';
 
+const proxyTarget = process.env['PLATFORM_API_PROXY_TARGET'] || undefined;
 const allowedOrigins = (environment: Readonly<Record<string, string | undefined>>) => (environment['CLERK_AUTHORIZED_PARTIES'] ?? '').split(',').map((origin) => origin.trim()).filter(Boolean);
 const headers = (input: IncomingHttpHeaders, origin: string | undefined): Record<string, string | undefined> => {
   const result: Record<string, string | undefined> = {};
@@ -21,10 +22,16 @@ const readBody = async (request: AsyncIterable<Uint8Array>): Promise<Uint8Array>
 
 export default defineConfig(() => ({
   resolve: { dedupe: ['react', 'react-dom'] },
-  server: { host: 'localhost', port: 5173, strictPort: true },
+  server: {
+    host: 'localhost',
+    port: 5173,
+    strictPort: true,
+    ...(proxyTarget === undefined ? {} : { proxy: { '/api/workflow-webhook': { target: proxyTarget }, '/api/v1': { target: proxyTarget, configure: (proxy: { on: (event: 'proxyReq', handler: (request: { getHeader: (name: string) => unknown; setHeader: (name: string, value: string) => void }) => void) => void }) => { proxy.on('proxyReq', (request) => { if (request.getHeader('origin') === undefined) request.setHeader('origin', 'http://localhost:5173'); }); } } } }),
+  },
   plugins: [{
     name: 'platform-browser-api',
     configureServer(server) {
+      if (proxyTarget !== undefined) return;
       const environment = process.env;
       const origins = allowedOrigins(environment);
       const transport = process.env['VITEST'] === 'true' ? undefined : localBrowserTransport(environment);

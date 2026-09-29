@@ -92,6 +92,11 @@ export function workflowCommandHandlers(studio: StudioStore, store: WorkflowStor
       await service.invalidateMemorySource(command.context, sourceId, command.idempotencyKey, command.digest);
       return receipt(command, command.idempotencyKey, 1, 'invalidated', command.digest);
     },
+    'workflow.configure-model-settings': async (command) => {
+      const settingsId = id(command.arguments['id']);
+      const saved = await service.configureModelSettings(command.context, command.arguments['settings'], command.expectedVersion, command.idempotencyKey, command.digest);
+      return receipt(command, settingsId, saved.version, saved.state, command.digest);
+    },
     'workflow.certify': async (command) => {
       const value = command.arguments; const installationId = id(value['id']); const data = record(value['installation']) as unknown as Installation;
       if (Object.keys(data).some((key) => !['route', 'endpoint', 'health', 'manifest'].includes(key)) || !data.manifest || typeof data.manifest !== 'object') fail('INVALID');

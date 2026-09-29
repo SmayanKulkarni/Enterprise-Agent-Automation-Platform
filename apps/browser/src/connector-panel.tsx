@@ -3,9 +3,8 @@ import { useEffect, useState } from 'react';
 import { failureNotice } from './error-view.js';
 import { digest } from '../../../packages/contracts/src/index.js';
 import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
-import { mappingFields } from './workflow-model.js';
+import { isToolNode, mappingFields, toolOwner, toolsOf, type OutputSchemas } from './workflow-model.js';
 import type { PlatformApi, Projection } from './platform-api.js';
-import { OpenRouterConnectionPanel } from './openrouter-connection-panel.js';
 
 interface ConnectorPanelProps {
   api: PlatformApi;
@@ -15,8 +14,9 @@ interface ConnectorPanelProps {
   nodes: readonly WorkflowNode[];
   edges: readonly WorkflowEdge[];
   admin: boolean;
-  connection: Projection | undefined;
-  connectionState: 'loading' | 'ready' | 'failed';
+  installations: Projection | undefined;
+  refreshInstallations: () => Promise<void>;
+  outputSchemas?: OutputSchemas | undefined;
   onPin: (config: Record<string, unknown>) => void;
 }
 
@@ -53,9 +53,8 @@ function constant(type: FieldType, value: string): unknown {
   return value;
 }
 
-export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, admin, connection, connectionState, onPin }: ConnectorPanelProps) {
+export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, admin, installations, refreshInstallations, outputSchemas, onPin }: ConnectorPanelProps) {
   const config = node?.config ?? {};
-  const [installations, setInstallations] = useState<Projection>();
   const [installationId, setInstallationId] = useState(String(config['installationId'] ?? ''));
   const [capabilityName, setCapabilityName] = useState(String(config['capability'] ?? ''));
   const [newInstallationId, setNewInstallationId] = useState('');
@@ -63,13 +62,7 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
   const [token, setToken] = useState<string>();
   const [message, setMessage] = useState<string>();
 
-  const refresh = async () => {
-    setInstallations(await api.projection(tenantId, 'connector-installations'));
-  };
-
-  useEffect(() => {
-    void refresh().catch(() => setMessage('Connector choices could not be loaded.'));
-  }, [api, tenantId]);
+  const refresh = refreshInstallations;
 
   useEffect(() => {
     setInstallationId(String(config['installationId'] ?? ''));
@@ -134,7 +127,10 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
     }
   };
 
-  if (node?.kind !== 'mcp') return <OpenRouterConnectionPanel api={api} tenantId={tenantId} admin={admin} initialStatus={connection} initialState={connectionState} />;
+  const binding = node?.kind === 'mcp' ? node : undefined;
+  const asTool = binding !== undefined && isToolNode(edges, binding.id);
+  const owner = binding === undefined ? undefined : toolOwner(nodes, edges, binding.id);
+  const twin = binding !== undefined && owner !== undefined && capabilityName !== '' && toolsOf(nodes, edges, owner.id).some((item) => item.id !== binding.id && item.config?.['capability'] === capabilityName && String(item.config?.['installationId']).toLowerCase() === installationId.toLowerCase());
 
   return <section className="connector-panel" aria-label="Connector installations">
     <div className="pane-heading">
@@ -143,10 +139,11 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
         <h2>Certified capability</h2>
         <span>Only healthy, tenant-scoped certified installations are available.</span>
       </div>
-      <button className="button-secondary" onClick={() => void refresh()}>Refresh</button>
+      <button className="button-secondary" onClick={() => void refresh().catch(() => setMessage('Connector choices could not be loaded.'))}>Refresh</button>
     </div>
     {message && <p className="field-help" role="status">{message}</p>}
     {token && <p className="connector-token"><strong>Enrollment token</strong><code>{token}</code></p>}
+    {binding === undefined ? <p className="field-help">Select an MCP step on the canvas to bind it to a certified capability. Certification below applies to the whole workspace.</p> : <>
     <div className="connector-grid">
     <label className="field">Installation
       <select aria-label="Installation" value={installationId} onChange={(event) => selectInstallation(event.target.value)}>
@@ -162,9 +159,11 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
     </label>
     </div>
     {installation && <p>{String(installation['route'])} route · manifest {manifest?.version}</p>}
-    {capability && <ArgumentMappings capability={capability} config={config} nodes={nodes} edges={edges} targetId={node.id} onPin={onPin} />}
+    {capability && <ArgumentMappings capability={capability} config={config} nodes={nodes} edges={edges} targetId={binding.id} onPin={onPin} outputSchemas={outputSchemas} asTool={asTool} />}
     {admin && <button className="button" disabled={!draftId || !capability} onClick={() => void grant()}>Grant to this node</button>}
     {!admin && <p>An administrator must grant the selected Capability before publication.</p>}
+    {twin && <p role="alert" className="field-error">{owner?.title} already has a tool with this capability. An Agent can attach each capability once.</p>}
+    </>}
     {admin && <section className="connector-certify">
       <label className="field">Installation ID<input value={newInstallationId} onChange={(event) => setNewInstallationId(event.target.value)} placeholder="New ID generated when blank" /></label>
       <label className="field">Certified installation JSON<textarea rows={10} value={manifestText} onChange={(event) => setManifestText(event.target.value)} /></label>
@@ -178,15 +177,16 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
   </section>;
 }
 
-function ArgumentMappings({ capability, config, nodes, edges, targetId, onPin }: { capability: Capability; config: Record<string, unknown>; nodes: readonly WorkflowNode[]; edges: readonly WorkflowEdge[]; targetId: string; onPin: (config: Record<string, unknown>) => void }) {
+function ArgumentMappings({ capability, config, nodes, edges, targetId, onPin, outputSchemas, asTool }: { outputSchemas?: OutputSchemas | undefined; asTool: boolean; capability: Capability; config: Record<string, unknown>; nodes: readonly WorkflowNode[]; edges: readonly WorkflowEdge[]; targetId: string; onPin: (config: Record<string, unknown>) => void }) {
   const values = config['arguments'] && typeof config['arguments'] === 'object' && !Array.isArray(config['arguments']) ? config['arguments'] as Record<string, unknown> : {};
   const update = (name: string, value: unknown) => onPin({ ...config, arguments: { ...values, [name]: value } });
 
+  if (asTool) return <section><strong>Arguments</strong><p className="field-help">The Agent's model fills these on each call from the input schema: {Object.entries(capability.inputSchema.properties).map(([name, field]) => `${name} (${field.type})`).join(', ') || 'no arguments'}.</p></section>;
   return <section>
     <strong>Arguments</strong>
     {Object.entries(capability.inputSchema.properties).map(([name, field]) => <label className="field" key={name}>
       <span>{name}{capability.inputSchema.required.includes(name) ? ' (required)' : ''} · {field.type}</span>
-      <select aria-label={`${name} source`} value={typeof values[name] === 'string' && values[name].startsWith('$') ? values[name] : 'constant'} onChange={(event) => update(name, event.target.value === 'constant' ? field.type === 'boolean' ? false : '' : event.target.value)}><option value="constant" disabled={field.type === 'object' || field.type === 'array'}>Constant</option>{mappingFields(nodes, edges, targetId, field.type).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+      <select aria-label={`${name} source`} value={typeof values[name] === 'string' && values[name].startsWith('$') ? values[name] : 'constant'} onChange={(event) => update(name, event.target.value === 'constant' ? field.type === 'boolean' ? false : '' : event.target.value)}><option value="constant" disabled={field.type === 'object' || field.type === 'array'}>Constant</option>{mappingFields(nodes, edges, targetId, field.type, outputSchemas).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
       {!(typeof values[name] === 'string' && values[name].startsWith('$')) && (field.type === 'boolean' ? <select aria-label={`${name} value`} value={String(values[name] ?? false)} onChange={(event) => update(name, constant(field.type, event.target.value))}><option value="false">false</option><option value="true">true</option></select> : field.type === 'object' || field.type === 'array' ? <span role="alert">Choose a compatible Trigger or prior Agent field.</span> : <input aria-label={`${name} value`} type={field.type === 'number' ? 'number' : 'text'} value={String(values[name] ?? '')} onChange={(event) => update(name, constant(field.type, event.target.value))} />)}
       {capability.inputSchema.required.includes(name) && values[name] === undefined && <span role="alert">Choose a value for {name}.</span>}
     </label>)}

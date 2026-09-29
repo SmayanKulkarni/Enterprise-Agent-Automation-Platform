@@ -28,6 +28,8 @@ epoch-fenced procedures.
 
 To manage an OpenRouter connection, set
 `WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION=v1` and a 32-byte base64url
-`WORKFLOW_OPENROUTER_WRAPPING_KEY`. Configure each permitted exact model in
-`WORKFLOW_OPENROUTER_MODELS`, and include structured-output-capable models in
-`WORKFLOW_OPENROUTER_STRUCTURED_OUTPUT_MODELS`.
+`WORKFLOW_OPENROUTER_WRAPPING_KEY`. Models are picked in Studio from the live
+OpenRouter catalog; there is no model allowlist to configure. Run
+`pnpm sql:migrate` to add the tenant model-settings record kind, then an
+administrator sets the summary and embedding models in the Studio provider
+panel.
