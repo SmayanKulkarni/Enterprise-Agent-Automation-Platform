@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { expect, test } from 'vitest';
 import { BROWSER_COLLECTIONS } from './browser-contracts.js';
-import { BrowserV1Transport, ClerkSessionAdapter, type BrowserTransportOptions } from './index.js';
+import { BrowserV1Transport, ClerkSessionAdapter, liveClerkSessionAdapter, type BrowserTransportOptions, type ClerkBackend } from './index.js';
 import { IdentityStore } from '../../identity/src/index.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
@@ -46,8 +46,9 @@ test.each([
   ['a missing bearer token', `/api/v1/session`, { origin }, 401, 'UNAUTHENTICATED', 'denied'],
   ['a missing bearer token on a projection', `/api/v1/tenants/${tenantId}/cases`, { origin }, 401, 'UNAUTHENTICATED', 'denied'],
   ['a bad cursor', `/api/v1/tenants/${tenantId}/cases?cursor=***`, { authorization: `Bearer ${userId}`, origin }, 422, 'INVALID_CURSOR', 'invalid'],
-  ['a foreign cursor', `/api/v1/tenants/${tenantId}/cases?cursor=${Buffer.from('other.1').toString('base64url')}`, { authorization: `Bearer ${userId}`, origin }, 403, 'TENANT_MISMATCH', 'denied'],
+  ['a foreign cursor', `/api/v1/tenants/${tenantId}/cases?cursor=${Buffer.from('other.1').toString('base64url')}`, { authorization: `Bearer ${userId}`, origin }, 403, 'DENIED', 'denied'],
   ['a bad page size', `/api/v1/tenants/${tenantId}/cases?pageSize=500`, { authorization: `Bearer ${userId}`, origin }, 422, 'INVALID_PAGE_SIZE', 'invalid'],
+  ['a malformed tenant escape', `/api/v1/tenants/%zz/cases`, { authorization: `Bearer ${userId}`, origin }, 403, 'DENIED', 'denied'],
   ['an unknown route', `/api/v1/tenants/${tenantId}/nothing`, { authorization: `Bearer ${userId}`, origin }, 404, 'NOT_FOUND', 'invalid'],
   ['an unknown top-level route', `/api/v1/nothing`, { authorization: `Bearer ${userId}`, origin }, 404, 'NOT_FOUND', 'invalid'],
 ])('answers %s with the mapped status and code', async (_name, path, headers, status, code, category) => {
@@ -81,4 +82,17 @@ test('gives each uncorrelated failure its own correlation id and passes it to on
 
   expect(first.headers['x-correlation-id']).not.toBe(second.headers['x-correlation-id']);
   expect(seen[0]).toEqual({ correlationId: first.headers['x-correlation-id'], tenantId, method: 'GET', route: `/api/v1/tenants/${tenantId}/nothing` });
+});
+
+const clerkEnvironment = { CLERK_ISSUER: 'https://clerk.example', CLERK_PUBLISHABLE_KEY: 'pk_test', CLERK_SECRET_KEY: 'sk_test', CLERK_AUDIENCE: 'platform-browser-api', CLERK_AUTHORIZED_PARTIES: origin };
+const claims = { iss: 'https://clerk.example', sub: userId, sid: userId, azp: origin, exp: 4_102_444_800 };
+
+test.each([
+  ['an expired token', { verifyToken: () => Promise.reject(Object.assign(new Error('expired'), { reason: 'token-expired' })), sessions: { getSession: () => Promise.resolve({ userId, status: 'active' }) } }, 401],
+  ['a deleted session', { verifyToken: () => Promise.resolve(claims), sessions: { getSession: () => Promise.reject(Object.assign(new Error('not found'), { status: 404 })) } }, 401],
+  ['a Clerk outage', { verifyToken: () => Promise.reject(Object.assign(new Error('down'), { reason: 'jwk-remote-failed-to-load' })), sessions: { getSession: () => Promise.resolve({ userId, status: 'active' }) } }, 500],
+] satisfies [string, ClerkBackend, number][])('live Clerk adapter answers %s with %i', async (_name, backend, status) => {
+  const response = await get(transport({ clerk: liveClerkSessionAdapter(clerkEnvironment, backend) }), '/api/v1/session');
+
+  expect(response.status).toBe(status);
 });

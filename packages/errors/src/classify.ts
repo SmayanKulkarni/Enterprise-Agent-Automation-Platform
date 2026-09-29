@@ -12,7 +12,6 @@ function codeFor(error: unknown): ErrorCode {
   if (isErrorCode(error.message)) return error.message;
   if (typeof code === 'string' && TIMEOUT.has(code) || error.name === 'TimeoutError') return 'UPSTREAM_TIMEOUT';
   if (typeof code === 'string' && CONNECTION.has(code)) return 'UNAVAILABLE';
-  if (error instanceof SyntaxError || error.name === 'ContractValidationError' && code === 'INVALID_JSON') return 'INVALID_JSON';
   if (error.name === 'ContractValidationError' || typeof code === 'string' && (code.startsWith('INVALID_') || code === 'UNSUPPORTED_COMMAND')) return 'INVALID';
   return 'INTERNAL';
 }

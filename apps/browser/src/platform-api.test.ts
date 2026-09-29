@@ -113,6 +113,8 @@ describe('describeError', () => {
   });
 
   test('falls back to HTTP status when no known category is present', () => {
+    expect(describeError(new PlatformApiError(401, 'denied'))).toBe('signed-out');
+    expect(describeError(new PlatformApiError(404, 'invalid'))).toBe('not-found');
     expect(describeError(new PlatformApiError(401))).toBe('signed-out');
     expect(describeError(new PlatformApiError(403))).toBe('denied');
     expect(describeError(new PlatformApiError(404))).toBe('not-found');

@@ -151,6 +151,8 @@ const byCategory: Record<string, ErrorKind> = { denied: 'denied', invalid: 'inva
 
 export function describeError(error: unknown, { write = false }: { write?: boolean } = {}): ErrorKind {
   if (error instanceof PlatformApiError) {
+    if (error.status === 401) return 'signed-out';
+    if (error.status === 404) return 'not-found';
     const known = error.category === undefined ? undefined : byCategory[error.category];
     if (known) return known;
     if (error.status === 401) return 'signed-out';

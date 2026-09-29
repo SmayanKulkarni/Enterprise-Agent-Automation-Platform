@@ -36,3 +36,13 @@ test('reported returns the fallback and reports once with the site', () => {
   expect(reported([] as string[], 'runtime.proposals')(new Error('boom'))).toEqual([]);
   expect(lines(error)).toEqual([expect.objectContaining({ site: 'runtime.proposals' })]);
 });
+
+test('keeps a multi-frame stack and redacts key=value secrets', () => {
+  const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const cause = new Error('connect failed password=hunter2 api-key: abc123');
+  cause.stack = `Error: ${cause.message}\n${'    at frame (file.ts:1:1)\n'.repeat(30)}`;
+  report(cause, { correlationId: 'c4' });
+  const [line] = lines(error);
+  expect(String(line?.['stack']).split('\n').length).toBeGreaterThan(20);
+  expect(JSON.stringify(line)).not.toMatch(/hunter2|abc123/u);
+});

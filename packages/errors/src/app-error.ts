@@ -40,6 +40,6 @@ export class AppError extends Error {
   }
 
   toBody(): NormalizedError {
-    return { category: this.category, code: this.code, message: ERROR_CODES[this.code].message, redacted: true };
+    return { category: this.category, code: this.status === 403 ? 'DENIED' : this.code, message: ERROR_CODES[this.code].message, redacted: true };
   }
 }

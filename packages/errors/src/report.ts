@@ -4,7 +4,9 @@ import { classify, codeOf } from './classify.js';
 export interface ErrorContext { correlationId?: string; tenantId?: string; method?: string; route?: string; site?: string }
 
 const MAX_MESSAGE = 200;
-const scrub = (text: string): string => text.replace(/Bearer\s+\S+/giu, 'Bearer [redacted]').slice(0, MAX_MESSAGE);
+const MAX_STACK = 4000;
+const SECRET = /(?:Bearer\s+|(?:api[-_]?key|token|secret|password|pwd|authorization)[=:]\s*)[^\s;,'"]+/giu;
+const scrub = (text: unknown, limit = MAX_MESSAGE): string => String(text).replace(SECRET, '[redacted]').slice(0, limit);
 
 export function report(error: unknown, context: ErrorContext): ReturnType<typeof classify> {
   const app = classify(error);
@@ -17,7 +19,7 @@ export function report(error: unknown, context: ErrorContext): ReturnType<typeof
   const line = {
     correlationId, ...context, status: app.status, code: app.code, category: app.category,
     cause: { name: cause.name, ...(typeof codeOf(cause) === 'string' ? { code: codeOf(cause) } : {}), message: scrub(cause.message) },
-    ...(isServerError && cause.stack ? { stack: scrub(cause.stack) } : {}),
+    ...(isServerError && cause.stack ? { stack: scrub(cause.stack, MAX_STACK) } : {}),
   };
   (isServerError ? console.error : console.warn)(JSON.stringify(line));
 

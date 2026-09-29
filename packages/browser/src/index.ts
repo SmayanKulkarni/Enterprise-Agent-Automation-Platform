@@ -17,7 +17,9 @@ export interface ClerkSessionPort { verifySessionToken(token: string): Promise<C
 export interface ClerkSessionConfig { issuer: string; publishableKey: string; audience: string; authorizedParties: readonly string[]; }
 export interface ClerkBackend { verifyToken(token: string, options: { audience: string; authorizedParties: string[]; secretKey: string }): Promise<Record<string, unknown> | undefined>; sessions: { getSession(sessionId: string): Promise<{ userId: string; status: string }>; }; }
 const clerkBackend = (secretKey: string): ClerkBackend => ({ verifyToken, sessions: createClerkClient({ secretKey }).sessions });
-const required = (environment: Readonly<Record<string, string | undefined>>, name: string): string => { const value = environment[name]?.trim(); if (!value) throw new Error(`Missing ${name}.`); return value; };
+const required = (environment: Readonly<Record<string, string | undefined>>, name: string): string => { const value = environment[name]?.trim(); if (!value) throw new AppError('UNAVAILABLE', { cause: new Error(`Missing ${name}.`) }); return value; };
+const isTokenFailure = (error: unknown): boolean => error instanceof Error && 'reason' in error && typeof error.reason === 'string' && error.reason.startsWith('token-');
+const isMissingSession = (error: unknown): boolean => typeof error === 'object' && error !== null && 'status' in error && error.status === 404;
 const claim = (value: Record<string, unknown>, name: string): string => typeof value[name] === 'string' && value[name] ? value[name] : (() => { throw new AppError('UNAUTHENTICATED'); })();
 const expiresAt = (value: Record<string, unknown>): string => typeof value['exp'] === 'number' && Number.isSafeInteger(value['exp']) ? new Date(value['exp'] * 1000).toISOString() : (() => { throw new AppError('UNAUTHENTICATED'); })();
 
@@ -26,8 +28,8 @@ export function liveClerkSessionAdapter(environment: Readonly<Record<string, str
   const issuer = required(environment, 'CLERK_ISSUER'); const publishableKey = required(environment, 'CLERK_PUBLISHABLE_KEY'); const secretKey = required(environment, 'CLERK_SECRET_KEY'); const audience = required(environment, 'CLERK_AUDIENCE'); const authorizedParties = required(environment, 'CLERK_AUTHORIZED_PARTIES').split(',').map((origin) => origin.trim()).filter(Boolean);
   if (audience !== 'platform-browser-api' || !authorizedParties.length) throw new Error('Invalid Clerk browser configuration.');
   const client = backend ?? clerkBackend(secretKey); return new ClerkSessionAdapter({ issuer, publishableKey, audience, authorizedParties }, {
-    async verifySessionToken(token) { const verified = await client.verifyToken(token, { secretKey, audience, authorizedParties }); if (verified === undefined) throw new AppError('UNAUTHENTICATED'); return { issuer: claim(verified, 'iss'), subject: claim(verified, 'sub'), sessionId: claim(verified, 'sid'), audience, expiresAt: expiresAt(verified), tokenUse: 'session', authorizedParty: claim(verified, 'azp') }; },
-    async getSession(sessionId) { const session = await client.sessions.getSession(sessionId); return { subject: session.userId, status: session.status === 'active' ? 'active' : 'revoked' }; },
+    async verifySessionToken(token) { let verified: Record<string, unknown> | undefined; try { verified = await client.verifyToken(token, { secretKey, audience, authorizedParties }); } catch (error) { throw isTokenFailure(error) ? new AppError('UNAUTHENTICATED', { cause: error }) : error; } if (verified === undefined) throw new AppError('UNAUTHENTICATED'); return { issuer: claim(verified, 'iss'), subject: claim(verified, 'sub'), sessionId: claim(verified, 'sid'), audience, expiresAt: expiresAt(verified), tokenUse: 'session', authorizedParty: claim(verified, 'azp') }; },
+    async getSession(sessionId) { let session: { userId: string; status: string }; try { session = await client.sessions.getSession(sessionId); } catch (error) { throw isMissingSession(error) ? new AppError('UNAUTHENTICATED', { cause: error }) : error; } return { subject: session.userId, status: session.status === 'active' ? 'active' : 'revoked' }; },
   });
 }
 
@@ -156,7 +158,7 @@ export class BrowserV1Transport {
       if (path === '/api/v1/session') return await this.session(request);
       if (path === '/api/v1/tenants') return await this.tenants(request);
       const match = /^\/api\/v1\/tenants\/([^/]+)(?:\/(.*))?$/u.exec(path); if (match === null) throw new AppError('NOT_FOUND');
-      const routeTenant = tenantId(decodeURIComponent(match[1] ?? ''));
+      const routeTenant = tenantId(this.decodeSegment(match[1] ?? ''));
       const tail = match[2] ?? ''; const query = this.validateQuery(url, routeTenant);
       if (request.method === 'GET' && tail === 'events') return await this.featureNotReady(request, routeTenant);
       if (request.method === 'GET' && this.collectionRoute(tail)) return await this.projection(request, String(routeTenant), tail, query);
@@ -167,6 +169,7 @@ export class BrowserV1Transport {
     } catch (error) { const app = classify(error); this.options.onError?.(error, this.errorContext(request)); return await this.error(request, app.status, app.toBody(), this.routeTenant(request)); }
   }
 
+  private decodeSegment(segment: string): string { try { return decodeURIComponent(segment); } catch (error) { throw new AppError('INVALID_IDENTIFIER', { cause: error }); } }
   private collectionRoute(tail: string): boolean { const [collection, id, extra] = tail.split('/'); return collection !== undefined && collections.has(collection) && extra === undefined && (id === undefined || UUID.test(id)); }
   private async context(request: BrowserRequest, selectedTenant: string): Promise<ExecutionContext | undefined> { if (this.options.clerk === undefined || this.options.identity === undefined) return undefined; const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ') || authorization.length < 8) throw new AppError('UNAUTHENTICATED'); return this.options.identity.authenticate(await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')), selectedTenant, 'platform-browser-api', this.#now()); }
   private async session(request: BrowserRequest): Promise<BrowserResponse> { if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined); const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED'); const proof = await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); const user = await this.options.identity.authenticate(proof, header(request, 'x-platform-tenant') ?? await this.firstTenant(proof), 'platform-browser-api', this.#now()); return this.success(request, String(user.tenantId), { user: { id: user.userId }, tenant: { id: user.tenantId, epoch: user.tenantEpoch }, actionHints: [] }); }
@@ -194,7 +197,7 @@ export class BrowserV1Transport {
   private async connection(request: BrowserRequest, routeTenant: string): Promise<BrowserResponse> {
     const key = header(request, 'idempotency-key'); const contentType = header(request, 'content-type');
     if (!key || !UUID.test(key) || contentType !== 'application/json' || !request.body || !this.options.connections) throw new Error('DENIED');
-    const body: unknown = JSON.parse(Buffer.from(request.body).toString('utf8')); if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('INVALID');
+    let body: unknown; try { body = JSON.parse(Buffer.from(request.body).toString('utf8')); } catch (error) { throw new AppError('INVALID_JSON', { cause: error }); } if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('INVALID');
     const value = body as Record<string, unknown>; const action = value['action']; const expectedVersion = value['expectedVersion']; const secret = value['key'];
     if (!['connect', 'rotate', 'verify', 'disconnect'].includes(String(action)) || !Number.isSafeInteger(expectedVersion) || (expectedVersion as number) < 0 || (secret !== undefined && (typeof secret !== 'string' || secret.length > 4096)) || ((action === 'connect' || action === 'rotate') && typeof secret !== 'string')) throw new Error('INVALID');
     const context = await this.context(request, routeTenant); if (!context) return this.featureNotReady(request, routeTenant);

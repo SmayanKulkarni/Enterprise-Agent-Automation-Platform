@@ -43,13 +43,19 @@ test.each([['INVALID_BROWSER_DTO'], ['INVALID_ARGUMENTS'], ['UNSUPPORTED_COMMAND
   expect(classify(Object.assign(new Error('x'), { code }))).toMatchObject({ status: 422, code: 'INVALID', category: 'invalid' });
 });
 
-test('maps malformed JSON to 400', () => {
-  expect(classify(new SyntaxError('Unexpected token'))).toMatchObject({ status: 400, code: 'INVALID_JSON' });
+test('does not blame the client for a stray SyntaxError', () => {
+  expect(classify(new SyntaxError('Unexpected token'))).toMatchObject({ status: 500, code: 'INTERNAL' });
 });
 
 test('maps contract validation failures to 422 and malformed JSON contracts to 400', () => {
   expect(classify(Object.assign(new Error('x'), { name: 'ContractValidationError', code: 'INVALID_FIELD' }))).toMatchObject({ status: 422, code: 'INVALID' });
   expect(classify(Object.assign(new Error('x'), { name: 'ContractValidationError', code: 'INVALID_JSON' }))).toMatchObject({ status: 400, code: 'INVALID_JSON' });
+});
+
+test('hides which 403 reason applied in the public body', () => {
+  expect(classify(new Error('TENANT_MISMATCH'))).toMatchObject({ code: 'TENANT_MISMATCH' });
+  expect(classify(new Error('TENANT_MISMATCH')).toBody().code).toBe('DENIED');
+  expect(classify(new Error('INVALID_IDENTIFIER')).toBody().code).toBe('DENIED');
 });
 
 test.each([[new Error('surprise')], ['string'], [undefined], [Object.assign(new Error('x'), { code: 'WHO_KNOWS' })]])('maps unknown %s to 500 INTERNAL', (value) => {
