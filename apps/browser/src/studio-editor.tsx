@@ -1,11 +1,12 @@
 import { SignInButton, useAuth } from '@clerk/react';
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { connect, connectionError, createNode, disconnect, filterLibrary, initialEdges, initialNodes, issueNode, starterEdges, starterNodes, templates, type TriggerSchema, type WorkflowEdge, type WorkflowNode, type WorkflowNodeKind } from './workflow-model.js';
-import { PlatformApi, PlatformApiError, describeError, withRef, type CommandReceipt, type ErrorKind, type Projection } from './platform-api.js';
+import { PlatformApi, PlatformApiError, describeError, withRef, type CommandReceipt, type Projection } from './platform-api.js';
+import { errorView, failureNotice } from './error-view.js';
 import { ConnectorPanel } from './connector-panel.js';
 import { MemoryImportPanel } from './memory-import-panel.js';
 import { WebhookPanel } from './webhook-panel.js';
-import { Dialog, Field, KindIcon, Notice, kindLabels, StatePage, moveTabFocus } from './ui.js';
+import { Dialog, ErrorPage, Field, KindIcon, Notice, kindLabels, StatePage, moveTabFocus } from './ui.js';
 import { gsap, motionAllowed, useGSAP } from './motion.js';
 import { AttachedItem, Inspector, nodePurpose, type InspectorTab, type OpenRouterModel } from './inspector.js';
 import { RunHistory } from './run-history.js';
@@ -27,13 +28,15 @@ const noticeDurationMs = 10000;
 const scene = { width: 1600, height: 900, minimumZoom: .5, maximumZoom: 1.2, padding: 80 };
 type SaveState = 'unsaved' | 'saving' | 'saved' | 'failed';
 
+const signedOutError = new PlatformApiError(401, undefined, 'UNAUTHENTICATED');
+
 export function AuthenticatedStudio() {
   const { isLoaded, isSignedIn, getToken } = useAuth();
   const api = useMemo(() => new PlatformApi(getToken), [getToken]);
   const [tenants, setTenants] = useState<readonly { id: string; profiles: readonly string[] }[]>([]);
   const [tenantId, setTenantId] = useState<string>();
   const [attempt, setAttempt] = useState(0);
-  const [failure, setFailure] = useState<ErrorKind>();
+  const [failure, setFailure] = useState<{ error: unknown }>();
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     if (!isSignedIn) { setTenants([]); setTenantId(undefined); setLoaded(false); setFailure(undefined); return; }
@@ -46,14 +49,13 @@ export function AuthenticatedStudio() {
       setLoaded(true);
     }).catch((error: unknown) => {
       if (error instanceof DOMException && error.name === 'AbortError') return;
-      setFailure(describeError(error));
+      setFailure({ error });
     });
     return () => controller.abort();
   }, [api, isSignedIn, attempt]);
   if (!isLoaded) return <StatePage busy title="Opening your workspace">Checking your session…</StatePage>;
-  if (!isSignedIn || failure === 'signed-out') return <StatePage title="Sign in required" actions={<SignInButton mode="modal" forceRedirectUrl={location.pathname}><button className="button">Sign in</button></SignInButton>}>Sign in to save and run workflows.</StatePage>;
-  if (failure === 'denied') return <StatePage title="Access denied" actions={<a className="button-secondary" href="/">Home</a>}>Your account can't open this workspace.</StatePage>;
-  if (failure !== undefined) return <StatePage title="Service unavailable" actions={<><button className="button" onClick={() => setAttempt((value) => value + 1)}>Retry</button><a className="button-secondary" href="/">Home</a></>}>Workspace access is unavailable. Try again.</StatePage>;
+  if (!isSignedIn || (failure !== undefined && errorView(failure.error).kind === 'signed-out')) return <ErrorPage error={failure?.error ?? signedOutError} message="Sign in to save and run workflows." actions={<SignInButton mode="modal" forceRedirectUrl={location.pathname}><button className="button">Sign in</button></SignInButton>} />;
+  if (failure !== undefined) return <ErrorPage error={failure.error} onRetry={() => setAttempt((value) => value + 1)} actions={<a className="button-secondary" href="/">Home</a>} />;
   if (loaded && tenants.length === 0) return <StatePage title="No workspace" actions={<a className="button-secondary" href="/">Home</a>}>Your account isn't a member of any workspace yet. Ask a workspace admin to invite you.</StatePage>;
   if (!tenantId) return <StatePage busy title="Opening your workspace">Checking your session…</StatePage>;
   const profiles = tenants.find((item) => item.id === tenantId)?.profiles ?? [];
@@ -231,7 +233,7 @@ export function StudioEditor({ api, tenantId, admin = false, editor = false, ope
       setDrafts(refreshed.records);
       applyDraft(latest);
       setNotice(`Reloaded revision ${latest['revision']}.`);
-    } catch { setNotice('The current draft could not be reloaded. Your local edits are unchanged.'); }
+    } catch (error) { setNotice(failureNotice(error, 'The current draft could not be reloaded. Your local edits are unchanged.')); }
     finally { setPending(undefined); }
   };
   const run = async () => {
@@ -243,7 +245,7 @@ export function StudioEditor({ api, tenantId, admin = false, editor = false, ope
       setIssues(nextIssues); setCandidate(result.state === 'passed' ? result.digest : undefined);
       setNotice(result.state === 'passed' ? `Revision ${revision} passed server checks. Review digest ${result.digest}.` : `${nextIssues.length} issue(s) need attention.`);
       if (nextIssues.length > 0) requestAnimationFrame(() => summaryRef.current?.focus());
-    } catch { setNotice('Server check is unavailable.'); }
+    } catch (error) { setNotice(failureNotice(error, 'Server check failed.')); }
     finally { setPending(undefined); }
   };
   const publish = async () => {
@@ -261,7 +263,7 @@ export function StudioEditor({ api, tenantId, admin = false, editor = false, ope
     try {
       const older = await api.projection(tenantId, 'workflow-runs', undefined, undefined, { pageSize: 50, cursor });
       setRuns((current) => current === undefined ? older : { ...older, records: [...current.records, ...older.records] });
-    } catch { setNotice('Older Run History could not be loaded.'); }
+    } catch (error) { setNotice(failureNotice(error, 'Older Run History could not be loaded.')); }
     finally { setLoadingOlderRuns(false); }
   };
   const start = async (input: Record<string, unknown> = {}) => {
@@ -274,12 +276,12 @@ export function StudioEditor({ api, tenantId, admin = false, editor = false, ope
   const decide = async (runId: string, bindingDigest: string, decision: 'approve' | 'reject', version: number) => {
     if (!api || !tenantId) return;
     try { await api.command({ tenantId, owner: 'workflow', name: 'approve', expectedVersion: version, arguments: { id: runId, bindingDigest, decision } }); await refreshRuns(); }
-    catch { setNotice('Approval is stale or was denied. Refresh run status.'); }
+    catch (error) { setNotice(failureNotice(error, 'Approval was not recorded.', { write: true })); }
   };
   const reconcile = async (runId: string, version: number, disposition: 'adopt' | 'no-effect') => {
     if (!api || !tenantId) return;
     try { await api.command({ tenantId, owner: 'workflow', name: 'reconcile', expectedVersion: version, arguments: { id: runId, disposition } }); await refreshRuns(); }
-    catch { setNotice('Reconciliation could not be recorded. Refresh run status.'); }
+    catch (error) { setNotice(failureNotice(error, 'Reconciliation could not be recorded.', { write: true })); }
   };
   const drop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); const kind = event.dataTransfer.getData('application/workflow-kind') as WorkflowNodeKind; if (kind in templates) add(kind, point(event.clientX, event.clientY)); };
   const beginDrag = (event: ReactPointerEvent<HTMLElement>, node: WorkflowNode) => { if (event.button !== 0 || (event.target as HTMLElement).closest('.port')) return; const location = point(event.clientX, event.clientY); event.currentTarget.setPointerCapture(event.pointerId); setSelected(node.id); setDragging({ id: node.id, offsetX: location.x - node.x, offsetY: location.y - node.y }); };

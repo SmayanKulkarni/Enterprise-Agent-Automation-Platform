@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { expiryInstant, localDateTime } from './workflow-model.js';
 import { PlatformApiError, withRef, type PlatformApi, type Projection } from './platform-api.js';
+import { failureNotice } from './error-view.js';
 
 type MemoryItem = Record<string, unknown>;
 type Retrieval = Record<string, unknown> & { runId: unknown };
@@ -21,16 +22,16 @@ export function WorkflowMemoryPanel({ api, tenantId, definitionId, admin, initia
   useEffect(() => { setRuns(initialRunsState === 'ready' ? initialRuns : undefined); }, [initialRuns, initialRunsState]);
   const action = async (name: 'withdraw-memory' | 'hold-memory' | 'release-memory-hold' | 'delete-memory', item: MemoryItem) => {
     try { await api.command({ tenantId, owner: 'workflow', name, expectedVersion: Number(item['version']), arguments: { id: String(item['id']), reason: 'Administrator lifecycle action.' } }); setMessage('Memory lifecycle action recorded.'); await refresh(); }
-    catch { setMessage('Memory lifecycle action was not accepted.'); }
+    catch (error) { setMessage(failureNotice(error, 'Memory lifecycle action was not accepted.', { write: true })); }
   };
   const correct = async (item: MemoryItem) => {
     const text = replacement[String(item['id'])] ?? '';
     try { await api.command({ tenantId, owner: 'workflow', name: 'correct-memory', expectedVersion: Number(item['version']), arguments: { id: String(item['id']), text } }); setReplacement((value) => ({ ...value, [String(item['id'])]: '' })); setMessage('Corrected successor promoted and predecessor withdrawn.'); await refresh(); }
-    catch { setMessage('Memory correction was not accepted.'); }
+    catch (error) { setMessage(failureNotice(error, 'Memory correction was not accepted.', { write: true })); }
   };
   const invalidate = async (sourceId: string) => {
     try { await api.command({ tenantId, owner: 'workflow', name: 'invalidate-memory-source', expectedVersion: 0, arguments: { sourceId } }); setMessage('Source invalidated for future retrieval.'); await refresh(); }
-    catch { setMessage('Source invalidation was not accepted.'); }
+    catch (error) { setMessage(failureNotice(error, 'Source invalidation was not accepted.', { write: true })); }
   };
   const setItemExpiry = async (item: MemoryItem) => {
     const itemId = String(item['id']);

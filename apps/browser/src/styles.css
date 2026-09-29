@@ -87,6 +87,13 @@ button, select, input:not([type="checkbox"]):not([type="radio"]), summary { min-
 .state-page h1 { margin: 0; font-size: clamp(28px, 4vw, 38px); letter-spacing: -.03em; }
 .state-page p { margin: 0; color: var(--muted); line-height: 1.55; }
 .state-actions { display: flex; align-items: center; justify-content: center; gap: var(--space-3); }
+.error-page { align-items: center; }
+.error-glyph { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 50%; border: 1px solid; }
+.error-page[data-tone="soft"] .error-glyph { color: var(--warning); border-color: var(--warning); background: var(--warning-surface); }
+.error-page[data-tone="danger"] .error-glyph { color: var(--danger); border-color: var(--danger); background: var(--danger-surface); }
+.ref-chip { display: inline-flex; align-items: center; gap: var(--space-2); padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: var(--text-xs); }
+.ref-chip code { color: var(--ink); }
+.ref-chip:hover { border-color: var(--ink); }
 dialog.confirm-dialog { max-width: 420px; border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
 dialog.confirm-dialog::backdrop { background: rgb(20 23 21 / 32%); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }

@@ -1,4 +1,6 @@
+
 import { useEffect, useState } from 'react';
+import { failureNotice } from './error-view.js';
 import { digest } from '../../../packages/contracts/src/index.js';
 import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
 import { mappingFields } from './workflow-model.js';
@@ -97,8 +99,8 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
       onPin({ ...config, installationId, capability: capability.name, manifestDigest: manifest.digest, grantId: result.objectId });
       setMessage('Capability granted to this node. Save the draft, then run the server check.');
       await refresh();
-    } catch {
-      setMessage('Grant was denied. Only an administrator can grant a healthy certified Capability.');
+    } catch (error) {
+      setMessage(failureNotice(error, 'Grant failed. Only an administrator can grant a healthy certified Capability.', { write: true }));
     }
   };
 
@@ -127,8 +129,8 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
       setToken(result.enrollmentToken);
       setMessage(result.enrollmentToken ? 'Copy this token now. It will not be shown again.' : 'Installation revoked.');
       await refresh();
-    } catch {
-      setMessage('Token change was denied or the installation changed. Refresh and retry.');
+    } catch (error) {
+      setMessage(failureNotice(error, 'Token change failed.', { write: true }));
     }
   };
 

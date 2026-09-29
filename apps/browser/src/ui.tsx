@@ -1,5 +1,7 @@
-import { Component, cloneElement, useEffect, useId, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode } from 'react';
+import { Component, cloneElement, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode } from 'react';
+import { errorView, type ErrorViewKind } from './error-view.js';
 import { gsap, motionAllowed } from './motion.js';
+import { errorRef } from './platform-api.js';
 
 export function Field({ label, help, error, children }: { label: string; help?: string | undefined; error?: string | undefined; children: ReactElement }) {
   const id = useId();
@@ -67,4 +69,44 @@ export class PageBoundary extends Component<{ children: ReactNode }, { failed: b
   override render() {
     return this.state.failed ? <StatePage title="Something went wrong" actions={<><button className="button" onClick={() => location.reload()}>Reload</button><a className="button-secondary" href="/">Home</a></>}>This page stopped working. Reloading usually fixes it; nothing was sent on your behalf.</StatePage> : this.props.children;
   }
+}
+
+const glyphPaths: Record<ErrorViewKind, string> = {
+  'signed-out': 'M7 11V8a5 5 0 0110 0v3M5 11h14v9H5z',
+  denied: 'M7 11V8a5 5 0 0110 0v3M5 11h14v9H5zM12 14.5v2',
+  'not-found': 'M11 4a7 7 0 100 14 7 7 0 000-14zM20 20l-4-4M8.5 8.5l5 5M13.5 8.5l-5 5',
+  conflict: 'M20 11a8 8 0 00-14.5-4.5L4 8M4 4v4h4M4 13a8 8 0 0014.5 4.5L20 16M20 20v-4h-4',
+  invalid: 'M12 3l9 16H3zM12 10v4M12 17v.5',
+  'rate-limited': 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2',
+  unknown: 'M12 3a9 9 0 100 18 9 9 0 000-18zM9.5 9.5a2.5 2.5 0 114 2c-.9.6-1.5 1-1.5 2M12 17v.5',
+  unavailable: 'M4 8a12 12 0 0116 0M7 12a7 7 0 0110 0M10 16a2.5 2.5 0 014 0M12 20v.01M4 4l16 16',
+  timeout: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2',
+  'not-ready': 'M13 2L4 14h7l-1 8 9-12h-7z',
+};
+
+const softKinds: readonly ErrorViewKind[] = ['signed-out', 'denied', 'not-found', 'conflict', 'invalid', 'not-ready'];
+
+function RefChip({ reference }: { reference: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => { void navigator.clipboard?.writeText(reference).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1800); }, () => undefined); };
+  return <button type="button" className="ref-chip" onClick={copy} aria-label={`Copy support reference ${reference}`}><span>Ref</span><code>{reference}</code><span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span></button>;
+}
+
+export function ErrorPage({ error, message, actions, onRetry, write = false }: { error: unknown; message?: string; actions?: ReactNode; onRetry?: () => void; write?: boolean }) {
+  const view = errorView(error, { write });
+  const reference = errorRef(error);
+  const root = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const element = root.current;
+    if (!element || !motionAllowed()) return;
+    const tween = gsap.fromTo(element.children, { y: 14, opacity: 0 }, { y: 0, opacity: 1, duration: .45, stagger: .07, ease: 'power3.out', clearProps: 'transform,opacity' });
+    return () => { tween.kill(); };
+  }, [view.kind]);
+  return <section ref={root} className="state-page error-page" role="alert" data-tone={softKinds.includes(view.kind) ? 'soft' : 'danger'}>
+    <i className="error-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={glyphPaths[view.kind]} /></svg></i>
+    <h1>{view.title}</h1>
+    <p>{message ?? view.message}</p>
+    {reference !== undefined && <RefChip reference={reference} />}
+    {(actions || (view.retryable && onRetry)) && <div className="state-actions">{view.retryable && onRetry && <button className="button" onClick={onRetry}>Try again</button>}{actions}</div>}
+  </section>;
 }

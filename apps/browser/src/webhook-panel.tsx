@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { PlatformApi, Projection } from './platform-api.js';
+import { failureNotice } from './error-view.js';
 import { parseTriggerInput, type TriggerSchema } from './workflow-model.js';
 
 type WebhookPanelProps = {
@@ -46,8 +47,8 @@ export function WebhookPanel({ api, tenantId, definitionId, webhook, admin, sche
       setSecret(result.webhookSecret);
       setMessage(result.webhookSecret ? 'Copy the signing secret now. It will not be shown again.' : 'Credential updated.');
       await refresh();
-    } catch {
-      setMessage('Credential change was denied or stale. Refresh and retry.');
+    } catch (error) {
+      setMessage(failureNotice(error, 'Credential change failed.', { write: true }));
     }
   };
   const test = async () => {
@@ -67,8 +68,8 @@ export function WebhookPanel({ api, tenantId, definitionId, webhook, admin, sche
       }
       setAcceptedRunId(undefined);
       setMessage(testMessage[outcome?.outcome ?? 'not-found']);
-    } catch {
-      setMessage('Webhook test was denied or unavailable.');
+    } catch (error) {
+      setMessage(failureNotice(error, 'Webhook test failed.', { write: true }));
     }
   };
   const url = `${window.location.origin}/api/workflow-webhook/${tenantId}/${definitionId}`;
