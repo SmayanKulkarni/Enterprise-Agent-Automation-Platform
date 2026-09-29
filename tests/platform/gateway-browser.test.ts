@@ -30,7 +30,7 @@ describe('browser session and capability gateway seams', () => {
     const browser = new BrowserV1Transport({ allowedOrigins: ['https://app.example'], clerk, identity, now: () => now });
     const response = await browser.handle({ method: 'GET', path: '/api/v1/session', headers: { authorization: 'Bearer session-token', origin: 'https://app.example' } });
     expect(response.status).toBe(200);
-    expect((await browser.handle({ method: 'GET', path: '/api/v1/session', headers: { authorization: 'Bearer session-token', origin: 'https://foreign.example' } })).status).toBe(400);
+    expect((await browser.handle({ method: 'GET', path: '/api/v1/session', headers: { authorization: 'Bearer session-token', origin: 'https://foreign.example' } })).status).toBe(403);
     const fresh = () => Promise.resolve({ caseId: 'case-1', watermark: 3, eventSequence: 3, generation: 1, version: 3, classification: 'restricted-operational' as const, redacted: true });
     const workbench = new CaseWorkbench(); await workbench.ingest({ caseId: 'case-1', watermark: 1, eventSequence: 1, generation: 1, version: 1, classification: 'restricted-operational', redacted: true }, fresh);
     expect((await workbench.ingest({ caseId: 'case-1', watermark: 2, eventSequence: 3, generation: 1, version: 2, classification: 'restricted-operational', redacted: true }, fresh)).version).toBe(3);

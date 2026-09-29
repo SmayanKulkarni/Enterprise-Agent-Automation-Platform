@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { digest } from '../../contracts/src/index.js';
+import { report } from '../../errors/src/report.js';
+import { reported } from '../../errors/src/swallow.js';
 import { validateValue, type CompiledNode, type JsonSchema, type NodePolicy, type WorkflowDefinition } from './graph.js';
 import type { Installation, RunEvent, WorkflowRun } from './service.js';
 import { memoryFingerprint, memoryItemId, namespace, resolveMemoryScope, validateMemoryProposal, type HostedMemoryPort, type MemoryImport, type MemoryItem } from './memory.js';
@@ -152,7 +154,7 @@ export class WorkflowWorker {
         return [{ id: item.id, type: item.data.type, text, sourceId: item.data.sourceId, sourceDigest: item.data.sourceDigest, definitionId: item.data.definitionId, revision: item.data.producingRevision, score: match.score }];
       }).sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
       return this.recordMemory(tenantId, current, node, retrievalId, selected.length ? 'success' : 'empty', selected, imports.map((item) => item.id));
-    } catch { return this.recordMemory(tenantId, current, node, retrievalId, 'unavailable', [], [], 'provider-unavailable'); }
+    } catch (error) { report(error, { site: 'runtime.memory-retrieval', tenantId }); return this.recordMemory(tenantId, current, node, retrievalId, 'unavailable', [], [], 'provider-unavailable'); }
   }
 
   private async recordMemory(tenantId: string, current: WorkflowRecord<WorkflowRun>, node: CompiledNode, retrievalId: string, status: 'success' | 'empty' | 'unavailable', items: readonly Record<string, unknown>[], importIds: readonly string[], failure?: string): Promise<StepResult> {
@@ -170,7 +172,7 @@ export class WorkflowWorker {
     const call = async (selectedModel: string, attempt: number): Promise<ModelResult | undefined> => {
       const remaining = Date.parse(prepared.deadline) - Date.now(); if (remaining <= 0) fail('NODE_DEADLINE');
       let output: ModelResult | undefined;
-      try { output = await this.model.complete({ ...request, model: selectedModel, policy: { ...limits, milliseconds: remaining } }); } catch {}
+      try { output = await this.model.complete({ ...request, model: selectedModel, policy: { ...limits, milliseconds: remaining } }); } catch (error) { report(error, { site: 'runtime.model', tenantId }); }
       await this.afterCircuit(tenantId, `model:${provider}`, output === undefined);
       current = await this.store.workerWrite(tenantId, 'run', current.id, current.version, current.state, { ...current.data, history: [...current.data.history, event(node, 'attempted', `${provider}:${selectedModel}:${attempt}:${output ? 'succeeded' : 'failed'}`)] });
       return output;
@@ -195,7 +197,7 @@ export class WorkflowWorker {
     if (proposed !== undefined && !(config['allowedCapabilities'] as string[]).includes(String(proposed))) fail('UNGRANTED_CAPABILITY');
     const proposals = Array.isArray(result.output['memoryProposals']) ? result.output['memoryProposals'] : [];
     const output = { ...result.output }; delete output['memoryProposals'];
-    const pendingIds = await this.stageProposals(tenantId, current.data, node.id, proposals).catch(() => [] as string[]);
+    const pendingIds = await this.stageProposals(tenantId, current.data, node.id, proposals).catch(reported([] as string[], 'runtime.memory-proposals'));
     return this.complete(tenantId, current, node, { ...output, ...(pendingIds.length ? { memoryProposalIds: pendingIds } : {}) }, `${provider}:${result.model}:${result.tokens}:${result.cost}`);
   }
 
@@ -262,7 +264,7 @@ export class WorkflowWorker {
     const blocked = await this.beforeCircuit(tenantId, `connector:${pin.installationId}`);
     if (blocked) return { waiting: 'circuit', deadline: new Date(Math.min(Date.parse(blocked), Date.parse(deadline))).toISOString() };
     effect = await this.store.workerWrite(tenantId, 'effect', id, effect.version, 'possible-send', { ...effect.data, state: 'possible-send' });
-    const result = await this.mcp.invoke(installation.data, pin.capability, args, id, deadline).catch(() => ({ outcome: 'unknown-outcome' as const }));
+    const result = await this.mcp.invoke(installation.data, pin.capability, args, id, deadline).catch(reported({ outcome: 'unknown-outcome' as const }, 'runtime.mcp'));
     if (result.outcome === 'unknown-outcome') return this.stop(tenantId, current, node, 'RECONCILIATION_REQUIRED', true);
     if (result.outcome === 'succeeded' && !result.output) return this.stop(tenantId, current, node, 'RECONCILIATION_REQUIRED', true);
     if (result.outcome === 'not-dispatched') await this.afterCircuit(tenantId, `connector:${pin.installationId}`, true);

@@ -1,3 +1,5 @@
+import { PlatformApiError } from './platform-api.js';
+
 export interface BrowserState {
   path: string;
   tenantId?: string;
@@ -32,4 +34,10 @@ export function selectPath(state: BrowserState, path: string): BrowserState {
 
 function internalPath(path: string): boolean {
   return path.startsWith('/') && !path.startsWith('//');
+}
+
+export function sessionFailureView(error: unknown): 'signed-out' | 'forbidden' | 'unavailable' {
+  if (!(error instanceof PlatformApiError)) return 'unavailable';
+  if (error.status === 401) return 'signed-out';
+  return error.status === 403 || error.category === 'denied' ? 'forbidden' : 'unavailable';
 }

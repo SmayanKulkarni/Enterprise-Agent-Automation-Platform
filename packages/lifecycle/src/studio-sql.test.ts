@@ -22,3 +22,10 @@ test('the Studio store port replays an identical command and rejects a reused ke
 test('maps an Azure SQL revision row without trusting driver date formatting', () => {
   expect(studioRecord({ id: '22222222-2222-4222-8222-222222222222', tenant_id: '11111111-1111-4111-8111-111111111111', revision: 1, state: 'draft', digest: 'a'.repeat(64), author_id: '33333333-3333-4333-8333-333333333333', draft_json: JSON.stringify({ id: 'package' }), created_at: new Date('2026-09-18T00:00:00.000Z') })).toMatchObject({ revision: 1, createdAt: '2026-09-18T00:00:00.000Z' });
 });
+
+test('maps the string a SQL bigint revision arrives as and rejects non-integers', () => {
+  const row = { id: '22222222-2222-4222-8222-222222222222', tenant_id: '11111111-1111-4111-8111-111111111111', state: 'draft', digest: 'a'.repeat(64), author_id: '33333333-3333-4333-8333-333333333333', draft_json: JSON.stringify({ id: 'package' }), created_at: new Date('2026-09-18T00:00:00.000Z') };
+  expect(studioRecord({ ...row, revision: '7' })).toMatchObject({ revision: 7 });
+  expect(() => studioRecord({ ...row, revision: '1.5' })).toThrow();
+  expect(() => studioRecord({ ...row, revision: '9007199254740993' })).toThrow();
+});

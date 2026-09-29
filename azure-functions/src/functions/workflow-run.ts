@@ -4,19 +4,24 @@ import { AzureSqlWorkflowStore } from '../../../packages/workflow/src/sql.js';
 import { WorkflowWorker, type StepResult } from '../../../packages/workflow/src/runtime.js';
 import { HttpMcpPort, HttpModelPort, UpstashVectorMemoryPort } from '../../../packages/workflow/src/ports.js';
 import { OpenRouterConnectionCrypto } from '../../../packages/workflow/src/openrouter-connection.js';
+import { report } from '../../../packages/errors/src/report.js';
 
 interface Input { tenantId: string; runId: string; definitionId: string; }
+
+const logged = <I extends { tenantId: string; runId?: string }, O>(site: string, handler: (input: I) => Promise<O>) => async (input: I): Promise<O> => {
+  try { return await handler(input); } catch (error) { report(error, { site, tenantId: input.tenantId, ...(input.runId ? { correlationId: input.runId } : {}) }); throw error; }
+};
 
 const store = (): AzureSqlWorkflowStore => new AzureSqlWorkflowStore(process.env['AZURE_SQL_CONNECTION_STRING'] ?? '');
 const worker = (): WorkflowWorker => { const workflowStore = store(); const crypto = process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY'] && process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION'] ? OpenRouterConnectionCrypto.fromEnvironment(process.env) : undefined; return new WorkflowWorker(workflowStore, new HttpModelPort(process.env, crypto ? { store: workflowStore, crypto } : undefined), new HttpMcpPort(), new UpstashVectorMemoryPort()); };
 
-df.app.activity('workflowStep', { handler: async (input: Input & { nodeId: string }) => worker().step(input.tenantId, input.runId, input.definitionId, input.nodeId) });
-df.app.activity('workflowExpire', { handler: async (input: Input & { nodeId: string }) => worker().expire(input.tenantId, input.runId, input.nodeId) });
-df.app.activity('workflowSummary', { handler: async (input: Input) => worker().summarize(input.tenantId, input.runId) });
-df.app.activity('workflowSummaryFailed', { handler: async (input: Input) => worker().summaryFailed(input.tenantId, input.runId) });
-df.app.activity('workflowMemoryPromote', { handler: async (input: Input) => worker().promote(input.tenantId, input.runId) });
-df.app.activity('workflowMemoryRemove', { handler: async (input: { tenantId: string; itemId: string }) => worker().remove(input.tenantId, input.itemId) });
-df.app.activity('workflowMemoryCorrect', { handler: async (input: { tenantId: string; itemId: string; text: string }) => worker().correct(input.tenantId, input.itemId, input.text) });
+df.app.activity('workflowStep', { handler: logged('workflowStep', async (input: Input & { nodeId: string }) => worker().step(input.tenantId, input.runId, input.definitionId, input.nodeId)) });
+df.app.activity('workflowExpire', { handler: logged('workflowExpire', async (input: Input & { nodeId: string }) => worker().expire(input.tenantId, input.runId, input.nodeId)) });
+df.app.activity('workflowSummary', { handler: logged('workflowSummary', async (input: Input) => worker().summarize(input.tenantId, input.runId)) });
+df.app.activity('workflowSummaryFailed', { handler: logged('workflowSummaryFailed', async (input: Input) => worker().summaryFailed(input.tenantId, input.runId)) });
+df.app.activity('workflowMemoryPromote', { handler: logged('workflowMemoryPromote', async (input: Input) => worker().promote(input.tenantId, input.runId)) });
+df.app.activity('workflowMemoryRemove', { handler: logged('workflowMemoryRemove', async (input: { tenantId: string; itemId: string }) => worker().remove(input.tenantId, input.itemId)) });
+df.app.activity('workflowMemoryCorrect', { handler: logged('workflowMemoryCorrect', async (input: { tenantId: string; itemId: string; text: string }) => worker().correct(input.tenantId, input.itemId, input.text)) });
 
 df.app.orchestration('workflowRun', function* (context) {
   const input = context.df.getInput<Input>();

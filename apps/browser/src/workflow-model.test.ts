@@ -1,11 +1,42 @@
 import { describe, expect, test } from 'vitest';
-import { conditionFields, conditionSources, connect, disconnect, expiryInstant, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, parseTriggerInput, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
+import { conditionFields, conditionSources, connect, connectionError, disconnect, expiryInstant, filterLibrary, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, parseTriggerInput, schemaFieldNameError, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
 
 describe('workflow graph', () => {
   test('only creates valid, non-duplicate connections', () => {
-    expect(connect(initialNodes, initialEdges, 'trigger', 'plan')).toHaveLength(initialEdges.length + 1);
+    const nodes = [...initialNodes, { id: 'free', kind: 'agent' as const, title: 'Free', detail: '', x: 0, y: 0, instructions: '' }];
     expect(connect(initialNodes, initialEdges, 'trigger', 'triage')).toEqual(initialEdges);
+    expect(connect(initialNodes, initialEdges, 'trigger', 'context')).toEqual(initialEdges);
     expect(connect(initialNodes, initialEdges, 'trigger', 'missing')).toEqual(initialEdges);
+    expect(connect(initialNodes, initialEdges, 'plan', 'trigger')).toEqual(initialEdges);
+    expect(connect(initialNodes, initialEdges, 'action', 'free')).toEqual(initialEdges);
+    expect(connect(nodes, initialEdges, 'approval', 'free')).toEqual(initialEdges);
+    expect(connectionError(initialNodes, initialEdges, 'triage', 'context')).toBe('That connection would create a loop.');
+  });
+
+  test('joins and forks are refused until a connection is removed', () => {
+    const nodes = [...starterNodes, { id: 'memory', kind: 'memory' as const, title: 'Memory', detail: '', x: 0, y: 0, instructions: '' }];
+    expect(connectionError(nodes, starterEdges, 'trigger', 'end')).toMatch(/already has an input/);
+    expect(connectionError(nodes, starterEdges, 'agent', 'trigger')).toBeDefined();
+    expect(connectionError(nodes, [], 'trigger', 'end')).toBeUndefined();
+  });
+
+  test('connecting an unlinked step splices it into the chain in either direction', () => {
+    const nodes = [...starterNodes, { id: 'memory', kind: 'memory' as const, title: 'Memory', detail: '', x: 0, y: 0, instructions: '' }];
+    const before = connect(nodes, starterEdges, 'memory', 'agent');
+    expect(before.map((edge) => `${edge.from}>${edge.to}`).sort()).toEqual(['agent>end', 'memory>agent', 'trigger>memory']);
+    const after = connect(nodes, starterEdges, 'agent', 'memory');
+    expect(after.map((edge) => `${edge.from}>${edge.to}`).sort()).toEqual(['agent>memory', 'memory>end', 'trigger>agent']);
+  });
+
+  test('a condition needs a branch and keeps it when a step is inserted', () => {
+    const nodes = [...starterNodes, { id: 'condition', kind: 'condition' as const, title: 'Condition', detail: '', x: 0, y: 0, instructions: '' }];
+    const edges = [{ id: 'trigger-condition', from: 'trigger', to: 'condition' }, { id: 'condition-end', from: 'condition', to: 'end', branch: 'true' as const }];
+    expect(connectionError(nodes, edges, 'condition', 'agent')).toMatch(/True or False/);
+    expect(connectionError(nodes, edges, 'trigger', 'agent', 'true')).toMatch(/Only a Condition/);
+    const inserted = connect(nodes, edges, 'condition', 'agent', 'true');
+    expect(inserted).toContainEqual({ id: 'condition-agent', from: 'condition', to: 'agent', branch: 'true' });
+    expect(inserted).toContainEqual({ id: 'agent-end', from: 'agent', to: 'end' });
+    expect(connect(nodes, edges, 'condition', 'agent', 'false')).toContainEqual({ id: 'condition-agent', from: 'condition', to: 'agent', branch: 'false' });
   });
 
   test('offers only preceding typed condition sources and prevents duplicate branches', () => {
@@ -18,7 +49,7 @@ describe('workflow graph', () => {
   });
 
   test('removes a connection by id', () => {
-    expect(disconnect(initialEdges, 'trigger-triage')).not.toContainEqual(expect.objectContaining({ id: 'trigger-triage' }));
+    expect(disconnect(initialEdges, 'trigger-context')).not.toContainEqual(expect.objectContaining({ id: 'trigger-context' }));
   });
 
   test('updates only valid memory bounds', () => {
@@ -63,5 +94,22 @@ describe('workflow graph', () => {
     expect(issueNode(starterNodes, '/nodes/1/config/model')?.id).toBe('agent');
     expect(issueNode(starterNodes, '/nodes/missing')).toBeUndefined();
     expect(issueNode(starterNodes, '/edges/0')).toBeUndefined();
+  });
+
+  test('filters library groups by label, kind, or help text, and drops empty groups', () => {
+    const groups = [{ title: 'Logic', items: [{ kind: 'trigger' as const, label: 'Trigger' }, { kind: 'agent' as const, label: 'Agent step' }] }, { title: 'Knowledge', items: [{ kind: 'memory' as const, label: 'Memory' }] }];
+    const help = { memory: 'Reads permitted, bounded workflow memory.' };
+    expect(filterLibrary(groups, '', help)).toEqual(groups);
+    expect(filterLibrary(groups, 'bounded workflow', help)).toEqual([{ title: 'Knowledge', items: [{ kind: 'memory', label: 'Memory' }] }]);
+    expect(filterLibrary(groups, 'nonexistent', help)).toEqual([]);
+  });
+
+  test('validates a trigger field name against emptiness, shape, and duplicates', () => {
+    const schema = setSchemaField({ type: 'object', properties: {}, required: [], additionalProperties: false }, 'priority', 'number', true);
+    expect(schemaFieldNameError(schema, '')).toBe('Enter a field name.');
+    expect(schemaFieldNameError(schema, '1bad')).toBe('Use letters, numbers, and underscores; start with a letter.');
+    expect(schemaFieldNameError(schema, 'priority')).toBe('priority already exists.');
+    expect(schemaFieldNameError(schema, 'priority', 'priority')).toBeUndefined();
+    expect(schemaFieldNameError(schema, 'other')).toBeUndefined();
   });
 });

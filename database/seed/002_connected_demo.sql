@@ -30,7 +30,7 @@ INSERT INTO @users (id, subject, profile) VALUES
 INSERT INTO [identity].users (id, issuer, subject, display_name)
 SELECT u.id, N'https://demo.example.invalid', u.subject, u.subject
 FROM @users AS u
-WHERE NOT EXISTS (SELECT 1 FROM [identity].users AS current_user WHERE current_user.issuer = N'https://demo.example.invalid' AND current_user.subject = u.subject);
+WHERE NOT EXISTS (SELECT 1 FROM [identity].users AS existing_user WHERE existing_user.issuer = N'https://demo.example.invalid' AND existing_user.subject = u.subject);
 
 DECLARE @tenant_id uniqueidentifier;
 DECLARE tenant_cursor CURSOR LOCAL FAST_FORWARD FOR SELECT id FROM (VALUES (@alpha), (@bravo)) AS tenants(id);

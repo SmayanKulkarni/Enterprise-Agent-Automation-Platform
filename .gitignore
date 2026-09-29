@@ -21,3 +21,4 @@ docs/adr/*
 .superpowers/
 .agents
 tests/
+.playwright-mcp/

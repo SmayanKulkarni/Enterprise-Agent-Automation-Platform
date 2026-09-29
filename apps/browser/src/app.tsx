@@ -1,7 +1,7 @@
 import { Show, SignInButton, SignUpButton, UserButton, useAuth } from '@clerk/react';
 import { useEffect, useMemo, useState } from 'react';
-import { PlatformApi, PlatformApiError } from './platform-api.js';
-import { browserState, selectTenant, signedIn, signedOut, type BrowserState } from './session-state.js';
+import { PlatformApi } from './platform-api.js';
+import { browserState, selectTenant, sessionFailureView, signedIn, signedOut, type BrowserState } from './session-state.js';
 
 type View = 'loading' | 'ready' | 'signed-out' | 'no-membership' | 'forbidden' | 'unavailable';
 
@@ -32,7 +32,7 @@ export function App() {
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        setView(error instanceof PlatformApiError && error.status === 401 ? 'signed-out' : error instanceof PlatformApiError && (error.status === 403 || error.status === 400 || error.category === 'denied') ? 'forbidden' : 'unavailable');
+        setView(sessionFailureView(error));
       });
     return () => controller.abort();
   }, [api, isLoaded, isSignedIn, sessionId, state.path, state.tenantId, state.cacheEpoch, state.streamEpoch]);

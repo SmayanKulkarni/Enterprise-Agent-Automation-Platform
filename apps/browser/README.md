@@ -25,3 +25,9 @@ the Clerk issuer and subject must exist in `[identity].users`, with a current
 membership in an active tenant. Run `pnpm sql:migrate` and `pnpm sql:verify`
 first; the API reads Tenant-scoped snapshots only through the membership and
 epoch-fenced procedures.
+
+To manage an OpenRouter connection, set
+`WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION=v1` and a 32-byte base64url
+`WORKFLOW_OPENROUTER_WRAPPING_KEY`. Configure each permitted exact model in
+`WORKFLOW_OPENROUTER_MODELS`, and include structured-output-capable models in
+`WORKFLOW_OPENROUTER_STRUCTURED_OUTPUT_MODELS`.

@@ -28,7 +28,7 @@ describe('Technical Implementation M8 fixture and Azure policy shell', () => {
     const envelope: ContractEnvelope = { messageId: messageId(correlation), contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: now, sender: 'fixture-browser', tenantId: tenantId(TECHNICAL_TENANTS[0]), classification: 'restricted-operational', payload: { expectedVersion: 0, arguments: { seedVersion: TECHNICAL_SEED_VERSION } } };
     const request = { method: 'POST' as const, path: `/api/v1/tenants/${TECHNICAL_TENANTS[0]}/commands/case/run`, headers: { authorization: 'Bearer fixture-session', origin: 'https://app.example', 'content-type': 'application/vnd.platform.browser.v1+json', 'idempotency-key': '33333333-3333-4333-8333-333333333333', 'x-correlation-id': correlation, 'if-match': '0' }, body: (await encodeContract(descriptorFor('browser.v1'), envelope)).bytes };
     expect((await transport.handle(request)).status).toBe(200);
-    expect((await transport.handle({ ...request, body: (await encodeContract(descriptorFor('browser.v1'), { ...envelope, payload: { expectedVersion: 0, arguments: { seedVersion: 'stale' } } })).bytes })).status).toBe(400);
+    expect((await transport.handle({ ...request, body: (await encodeContract(descriptorFor('browser.v1'), { ...envelope, payload: { expectedVersion: 0, arguments: { seedVersion: 'stale' } } })).bytes })).status).toBe(409);
   });
 
   test('fails closed before an Azure adapter sees an out-of-policy plan', async () => {

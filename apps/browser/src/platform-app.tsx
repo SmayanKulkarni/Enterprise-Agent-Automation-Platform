@@ -6,6 +6,7 @@ import { SignIn } from './sign-in.js';
 import { Governance, type Role } from './governance-preview.js';
 import { AuthenticatedStudio, StudioEditor } from './studio-editor.js';
 import { PageBoundary, StatePage } from './ui.js';
+import { ThemeToggle } from './theme.js';
 
 export function App({ authEnabled }: { authEnabled: boolean }) {
   const [route, setRoute] = useState<Route>(() => routeFromPath(window.location.pathname));
@@ -20,6 +21,6 @@ export function App({ authEnabled }: { authEnabled: boolean }) {
 
 function TopBar({ route, role, authEnabled, navigate }: { route: Route; role: Role; authEnabled: boolean; navigate: Navigate }) {
   const product = route === 'studio' || route === 'governance';
-  return <header className={product ? 'topbar topbar-product' : 'topbar'}><button className="wordmark" onClick={() => navigate('home')} aria-label="Threadline home"><span className="brand-mark"><i /><i /><i /></span><span>threadline</span></button><nav aria-label="Primary navigation"><button className={route === 'studio' ? 'active' : ''} onClick={() => navigate('studio')}>Studio</button>{!authEnabled && role === 'admin' && <button className={route === 'governance' ? 'active' : ''} onClick={() => navigate('governance')}>Governance</button>}{route === 'home' && <a href="#platform">Platform</a>}</nav><div className="topbar-actions">{product && <span className="workspace-switcher">{authEnabled ? 'Authenticated workspace' : 'Fixture workspace'}</span>}{authEnabled ? <ClerkAccount navigate={navigate} /> : <button className="text-button" onClick={() => navigate('signin')}>Sign in</button>}{!product && <button className="button button-small" onClick={() => navigate('studio')}>Open studio</button>}</div></header>;
+  return <header className={product ? 'topbar topbar-product' : 'topbar'}><button className="wordmark" onClick={() => navigate('home')} aria-label="Threadline home"><span className="brand-mark"><i /><i /><i /></span><span>threadline</span></button><nav aria-label="Primary navigation"><button className={route === 'studio' ? 'active' : ''} onClick={() => navigate('studio')}>Studio</button>{!authEnabled && role === 'admin' && <button className={route === 'governance' ? 'active' : ''} onClick={() => navigate('governance')}>Governance</button>}{route === 'home' && <a href="#platform">Platform</a>}</nav><div className="topbar-actions"><ThemeToggle />{product && <span className="workspace-switcher">{authEnabled ? 'Authenticated workspace' : 'Fixture workspace'}</span>}{authEnabled ? <ClerkAccount navigate={navigate} /> : <button className="text-button" onClick={() => navigate('signin')}>Sign in</button>}{!product && <button className="button button-small" onClick={() => navigate('studio')}>Open studio</button>}</div></header>;
 }
 function ClerkAccount({ navigate }: { navigate: Navigate }) { const { isSignedIn } = useUser(); return isSignedIn ? <UserButton /> : <button className="text-button" onClick={() => navigate('signin')}>Sign in</button>; }

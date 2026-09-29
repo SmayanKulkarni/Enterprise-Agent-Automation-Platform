@@ -109,9 +109,42 @@ The implementation keeps the tenant allowlist disabled by default. Memory activi
 - Manual Start no longer uses a `window` `CustomEvent` — `Inspector` takes an `onStart` callback and a `startReason`, so the Trigger's manual-start button and the header's Start button share one `start(input)` function and one disabled/pending state.
 - A failed check produces a focusable error summary (`issueNode` in `workflow-model.ts` resolves a check-issue JSON path back to its node by id or index) that moves focus to itself and lets each issue jump to and select its node.
 
+## Threadline UI refresh — library, canvas, and Inspector (tickets 05/06)
+
+- Node placement and connection are fully keyboard- and single-pointer-capable: `add()` centres a new node on the current viewport (falling back to `760,540` only when the canvas ref is unavailable), staggering repeated adds by `(sequence % 5) * 24`; a library click no longer needs a drag. `nodeKeyDown` moves a focused node with the arrow keys (20px, 80px with Shift), deletes it with Delete/Backspace in live mode, and Escape on the canvas clears both a pending connection and edge selection. The duplicate "+ Add agent step" action is gone.
+- Edges are selectable, not one-click-deletable: each edge renders as a visible path plus a 16px-wide transparent hit path; clicking the hit path sets `selectedEdge`, and removal only happens through the canvas notice's "Remove connection" button, Delete, or a per-edge Remove button in the Inspector's new Connections fieldset (`removeEdgeFromNode`, passed down from `studio-editor.tsx`).
+- `filterLibrary` (`workflow-model.ts`) is the one place library search matches label, kind, or help text; `StudioEditor` renders its empty-result message and Clear-search action from the same filtered result the groups render from, so there's no second source of truth.
+- The Inspector's live "Presentation" (Step name, Canvas note, and — only for Agent — System instructions) and "Runtime" fieldsets are visually and structurally separate; `nodePurpose` (renamed from `blockHelp`) is the single map the panel header, `LibraryGroup` help text, and `filterLibrary`'s help search all read from.
+- `StepSettings` dispatches by kind with no hooks of its own; the former inline JSON-textarea fallback is its own `RawSettings` component (reused by the MCP node's "Advanced: raw settings" disclosure) so every branch has a stable hook order.
+- Policy fields (`PolicySettings`), the Agent response schema, the Trigger field name, and the Approval timeout all keep the typed/invalid text in local state and show a `Field` error instead of silently reverting or dropping the edit; `schemaFieldNameError` (`workflow-model.ts`) is the one place trigger-field name rules (non-empty, identifier shape, no duplicate) are enforced, called from both the blur handler and the immediate type/required change handlers.
+- Responsive Studio panes are CSS-driven from two pieces of state (`pane`, `settingsOpen`) plus `data-pane`/`data-settings` attributes on `.studio-workspace` — no `matchMedia` hook, and the canvas is only ever hidden, never unmounted, so graph/zoom/scroll state survives a resize. The phone tablist and per-pane `role="tabpanel"` attributes are present at every width and are inert (hidden by CSS) above 819px.
+- Fixture-only surfaces (Skills/Connections/Runtime Inspector tabs, and Harness/Evaluations/Versions Studio panes) all render a leading "Local example — not saved or evaluated." notice and drop every button that persisted nothing (`•••`, "Attach skill", "Add connection"); the fixture tab strips follow the WAI tabs pattern via the existing `moveTabFocus` helper.
+
 ## Profiling and tracing
 
 - `pnpm profile:workflow` writes V8 CPU profiles of the workflow e2e scenario to the ignored `outputs/profiles/` directory. It measures orchestration CPU with in-memory ports; waiting on Azure SQL, model providers, MCP servers and Upstash appears only in traces.
 - Azure Functions export OpenTelemetry traces to Application Insights only when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set. `telemetry.ts` loads before any function module, records SQL (tedious) and outbound HTTP (undici) spans, and removes URL query strings before export. SQL parameter values are never attached.
 - Each Durable Functions `workflowStep` activity is one `workflow.step` span with tenant, run and node IDs. A failed node records its exception, so the stack stays on the server; Run History, Studio and browser responses are unchanged. Spans are created only in activities, never in replayed orchestration code.
 - Tenant-visible per-call timings would require timing fields on Run History events and are deferred.
+
+## Live browser sweep and timings (2026-09-29)
+
+- `BrowserV1Transport` accepts an optional `onError` and calls it for every failed request before the error is normalized. The local host logs error name, code and message server-side; nothing reaches the client. Previously the normalizer flattened SQL and programming errors to a silent 400 `INVALID_REQUEST`.
+- `FEATURE_NOT_READY` now maps to HTTP 501 with the `terminal` category instead of 400, so the UI reports the feature as unavailable instead of "denied, stale, or could not be verified".
+- `studioRecord` accepts the string that node-mssql returns for SQL `bigint`. `asInteger` rejected it, so the first `create-draft` inserted the draft and then failed reading its own row, after which the drafts list also failed with 400.
+- The local host's OpenRouter connection handler no longer dereferences a missing wrapping key; without `WORKFLOW_OPENROUTER_WRAPPING_KEY` it answers `FEATURE_NOT_READY`.
+- With `AZURE_SQL_CONNECTION_STRING` set, identity comes from SQL, not `PLATFORM_LOCAL_*`. A Clerk subject needs an `identity.users` row (real issuer and subject), a current membership, and `identity.membership_profiles` rows (`admin`, `editor`, `operator`); `identity.profiles` does not grant Studio roles. An unmapped user gets a 400 and Studio shows "Service unavailable".
+- Sweep ran against a scratch database on the same server, with the OpenRouter and wrapping keys removed from its env file.
+
+### Timings
+
+Dev server (Vite, unminified, HMR), scratch Azure SQL, live Clerk:
+
+- Studio load: `/tenants` 2.0 s, then six parallel GETs 2.0–2.4 s each; data ready about 5.1 s after navigation. Shell FCP 76 ms, load 84 ms.
+- POST `openrouter-connection` (501): 0.73 s.
+- Raw round trips from this machine: SQL 0.46 s per query (occasional 1.9–2.1 s spikes, cold connect 3.0 s), Clerk API 0.29 s.
+- Each authenticated request performs a live Clerk `getSession` plus one or two identity SQL calls before its own data query, so about four sequential round trips explain the ~2 s per request.
+
+Production build (`pnpm build:showcase`, static preview, no API): JS 440.8 kB (128.4 kB gzip), CSS 43.6 kB (10.0 kB gzip); landing FCP 108 ms, LCP 132 ms, load 79 ms.
+
+`pnpm profile:workflow`: 2.3 s run; top self time is `canonicalJson` (175 ms), an anonymous frame in contracts `index.ts` (102 ms), codecs `text` (95 ms) and `object` (77 ms), and `digest` (46 ms).

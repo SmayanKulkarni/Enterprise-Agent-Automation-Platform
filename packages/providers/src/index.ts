@@ -1,5 +1,6 @@
 import type { AdapterResult, NormalizedInvocation, ProviderAdapter } from '../../gateway/src/index.js';
 import { digest, tenantId } from '../../contracts/src/index.js';
+import { reported } from '../../errors/src/swallow.js';
 
 export type ProviderName = 'graph' | 'sql' | 'blob' | 'boards' | 'jira';
 export interface ProviderRequest { provider: ProviderName; tenantId: string; installationId: string; accountId: string; schemaVersion: string; credentialEpoch: number; operation: string; resource: string; effectId: string; arguments: Readonly<Record<string, unknown>>; deadline: string; }
@@ -46,14 +47,14 @@ abstract class ScopedAdapter implements ProviderAdapter {
       const retryAfterSeconds = response.retryAfterSeconds;
       if (response.status === 429) return { outcome: 'throttled', ...(Number.isSafeInteger(retryAfterSeconds) && retryAfterSeconds !== undefined && retryAfterSeconds >= 0 ? { retryAfterSeconds } : {}) };
       return { outcome: response.status >= 500 ? 'retryable' : 'provider-rejected' };
-    } catch { return { outcome: 'unknown-outcome' }; }
+    } catch (error) { return reported({ outcome: 'unknown-outcome' as const }, 'providers.execute')(error); }
   }
   async reconcile(input: Readonly<NormalizedInvocation>): Promise<'succeeded' | 'not-found' | 'inconclusive'> {
     if (input.credential.installationId !== this.config.installationId || input.accountId !== this.config.accountId || !this.permit(input)) return 'inconclusive';
     try {
       const found = await this.transport.reconcile(frozen({ provider: this.config.provider, tenantId: this.config.tenantId, installationId: this.config.installationId, accountId: this.config.accountId, schemaVersion: this.config.schemaVersion, credentialEpoch: this.config.credentialEpoch, operation: input.operation, resource: input.resource, effectId: input.effectId, arguments: frozen({ ...input.arguments }), deadline: input.deadline }));
       if (!found.found) return 'not-found'; this.advance(found.checkpoint); return 'succeeded';
-    } catch { return 'inconclusive'; }
+    } catch (error) { return reported('inconclusive' as const, 'providers.reconcile')(error); }
   }
   checkpoint(): ProviderCheckpoint | undefined { return this.checkpoints.get(this.config.provider, this.config.installationId, this.config.scope); }
   async reset(): Promise<{ state: 'complete' | 'blocked'; residual: readonly string[] }> {

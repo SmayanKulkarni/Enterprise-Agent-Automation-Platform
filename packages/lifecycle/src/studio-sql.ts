@@ -23,7 +23,10 @@ export interface StudioStore {
 export class StudioStoreError extends Error { constructor(public readonly code: 'CONFLICT' | 'DENIED' | 'INVALID' | 'NOT_FOUND' | 'STALE') { super('Studio storage request was not accepted.'); this.name = 'StudioStoreError'; } }
 const fail = (code: StudioStoreError['code']): never => { throw new StudioStoreError(code); };
 const asString = (value: unknown): string => typeof value === 'string' ? value : fail('INVALID');
-const asInteger = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) ? value : fail('INVALID');
+const asInteger = (value: unknown): number => {
+  const parsed = typeof value === 'string' && /^-?[0-9]+$/u.test(value) ? Number(value) : value;
+  return typeof parsed === 'number' && Number.isSafeInteger(parsed) ? parsed : fail('INVALID');
+};
 const asTimestamp = (value: unknown): string => value instanceof Date ? value.toISOString() : asString(value);
 const parseJson = <Value>(value: unknown): Value => { try { return JSON.parse(asString(value)) as Value; } catch { return fail('INVALID'); } };
 const receipt = (value: unknown): CommandReceipt => parseJson<CommandReceipt>(value);

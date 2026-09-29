@@ -16,6 +16,6 @@ describe('showcase Vercel bridge', () => {
     const denied = await browserResponse(request('https://foreign.example'), environment, backend);
     expect([400, 401, 403]).toContain(denied.status);
     expect(await denied.text()).not.toContain(tenant);
-    expect((await browserResponse(request(undefined, `${origin}/api/v1/tenants/${tenant}/cases?pageSize=0`), environment, backend)).status).toBe(400);
+    expect((await browserResponse(request(undefined, `${origin}/api/v1/tenants/${tenant}/cases?pageSize=0`), environment, backend)).status).toBe(422);
   });
 });

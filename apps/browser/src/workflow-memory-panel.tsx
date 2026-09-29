@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { expiryInstant, localDateTime } from './workflow-model.js';
-import { PlatformApiError, type PlatformApi, type Projection } from './platform-api.js';
+import { PlatformApiError, withRef, type PlatformApi, type Projection } from './platform-api.js';
 
 type MemoryItem = Record<string, unknown>;
 type Retrieval = Record<string, unknown> & { runId: unknown };
@@ -37,7 +37,7 @@ export function WorkflowMemoryPanel({ api, tenantId, definitionId, admin, initia
     const result = expiryInstant(expiry[itemId] ?? localDateTime(String(item['expiresAt'] ?? '')), String(item['expiresAt'] ?? ''));
     if (!result.iso) { setExpiryError((value) => ({ ...value, [itemId]: result.error! })); return; }
     try { await api.command({ tenantId, owner: 'workflow', name: 'set-memory-expiry', expectedVersion: Number(item['version']), arguments: { id: itemId, expiresAt: result.iso } }); setExpiryError((value) => ({ ...value, [itemId]: '' })); setMessage('Memory expiry was shortened and refreshed.'); await refresh(); }
-    catch (error) { const category = error instanceof PlatformApiError ? error.category : undefined; setExpiryError((value) => ({ ...value, [itemId]: category === 'conflict' ? 'This item changed. Refresh and try again.' : category === 'denied' ? 'You are not allowed to change this expiry.' : category === 'invalid' ? 'This expiry is not valid. Choose an earlier value.' : 'Expiry could not be updated. Try again.' })); }
+    catch (error) { const category = error instanceof PlatformApiError ? error.category : undefined; setExpiryError((value) => ({ ...value, [itemId]: withRef(category === 'conflict' ? 'This item changed. Refresh and try again.' : category === 'denied' ? 'You are not allowed to change this expiry.' : category === 'invalid' ? 'This expiry is not valid. Choose an earlier value.' : 'Expiry could not be updated. Try again.', error) })); }
   };
   const state = String(readiness?.records[0]?.['state'] ?? 'loading');
   const scoped = items?.records.filter((item) => item['stableDefinitionId'] === definitionId || item['definitionId'] === definitionId) ?? [];

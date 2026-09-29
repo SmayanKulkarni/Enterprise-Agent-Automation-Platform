@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** implemented — visual verification pending
+**Status:** implemented — visual verification superseded by `.scratch/threadline-ui-refresh/issues/05-library-canvas-and-responsive-studio.md`
 
 - [ ] Reproduce and record the repaired three-step live Studio layout at 1440, 1024, 768, and 390 CSS pixels, including 200% zoom.
 - [x] Library labels and selected-node controls wrap/read clearly; narrow-screen users retain keyboard-operable access to adding live blocks.

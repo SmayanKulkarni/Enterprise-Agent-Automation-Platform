@@ -39,6 +39,7 @@ const argumentKeys: Readonly<Record<string, readonly string[]>> = Object.freeze(
   'workflow.withdraw-memory': ['id', 'reason'], 'workflow.hold-memory': ['id', 'reason'], 'workflow.release-memory-hold': ['id', 'reason'], 'workflow.set-memory-expiry': ['id', 'expiresAt'], 'workflow.delete-memory': ['id', 'reason'],
   'workflow.correct-memory': ['id', 'text'], 'workflow.invalidate-memory-source': ['sourceId'],
 });
+export const hasCommandArgumentSchema = (owner: string, name: string): boolean => Object.hasOwn(argumentKeys, `${owner}.${name}`);
 
 export class BrowserContractError extends Error { constructor(readonly code: 'INVALID_BROWSER_DTO' | 'UNSUPPORTED_COMMAND') { super('Browser data was not accepted.'); } }
 const fail = (code: BrowserContractError['code'] = 'INVALID_BROWSER_DTO'): never => { throw new BrowserContractError(code); };

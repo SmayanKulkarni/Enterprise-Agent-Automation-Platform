@@ -141,34 +141,36 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
         <h2>Certified capability</h2>
         <span>Only healthy, tenant-scoped certified installations are available.</span>
       </div>
-      <button onClick={() => void refresh()}>Refresh</button>
+      <button className="button-secondary" onClick={() => void refresh()}>Refresh</button>
     </div>
-    {message && <p role="status">{message}</p>}
+    {message && <p className="field-help" role="status">{message}</p>}
     {token && <p className="connector-token"><strong>Enrollment token</strong><code>{token}</code></p>}
-    <label>Installation
+    <div className="connector-grid">
+    <label className="field">Installation
       <select aria-label="Installation" value={installationId} onChange={(event) => selectInstallation(event.target.value)}>
         <option value="">Select certified installation</option>
         {choices.map((item) => <option key={String(item['id'])} value={String(item['id'])}>{String(item['id'])} · healthy</option>)}
       </select>
     </label>
-    {installation && <p>{String(installation['route'])} route · manifest {manifest?.version}</p>}
-    <label>Capability
+    <label className="field">Capability
       <select aria-label="Capability" value={capabilityName} disabled={!installation} onChange={(event) => selectCapability(event.target.value)}>
         <option value="">Select capability</option>
         {manifest?.capabilities?.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.risk}</option>)}
       </select>
     </label>
+    </div>
+    {installation && <p>{String(installation['route'])} route · manifest {manifest?.version}</p>}
     {capability && <ArgumentMappings capability={capability} config={config} nodes={nodes} edges={edges} targetId={node.id} onPin={onPin} />}
-    {admin && <button disabled={!draftId || !capability} onClick={() => void grant()}>Grant to this node</button>}
+    {admin && <button className="button" disabled={!draftId || !capability} onClick={() => void grant()}>Grant to this node</button>}
     {!admin && <p>An administrator must grant the selected Capability before publication.</p>}
     {admin && <section className="connector-certify">
-      <label>Installation ID<input value={newInstallationId} onChange={(event) => setNewInstallationId(event.target.value)} placeholder="New ID generated when blank" /></label>
-      <label>Certified installation JSON<textarea rows={10} value={manifestText} onChange={(event) => setManifestText(event.target.value)} /></label>
-      <button onClick={() => void certify()}>Certify installation</button>
+      <label className="field">Installation ID<input value={newInstallationId} onChange={(event) => setNewInstallationId(event.target.value)} placeholder="New ID generated when blank" /></label>
+      <label className="field">Certified installation JSON<textarea rows={10} value={manifestText} onChange={(event) => setManifestText(event.target.value)} /></label>
+      <button className="button" onClick={() => void certify()}>Certify installation</button>
       {choices.filter((item) => item['route'] === 'private').map((item) => <div key={String(item['id'])}>
-        <button onClick={() => void tokenAction(String(item['id']), Number(item['version']), 'enroll')}>Enroll</button>
-        <button onClick={() => void tokenAction(String(item['id']), Number(item['version']), 'rotate')}>Rotate</button>
-        <button onClick={() => void tokenAction(String(item['id']), Number(item['version']), 'revoke')}>Revoke</button>
+        <button className="button-secondary" onClick={() => void tokenAction(String(item['id']), Number(item['version']), 'enroll')}>Enroll</button>
+        <button className="button-secondary" onClick={() => void tokenAction(String(item['id']), Number(item['version']), 'rotate')}>Rotate</button>
+        <button className="button-secondary" onClick={() => void tokenAction(String(item['id']), Number(item['version']), 'revoke')}>Revoke</button>
       </div>)}
     </section>}
   </section>;

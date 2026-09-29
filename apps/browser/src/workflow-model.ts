@@ -35,19 +35,18 @@ export const starterNodes: WorkflowNode[] = [
 export const starterEdges: WorkflowEdge[] = [{ id: 'trigger-agent', from: 'trigger', to: 'agent' }, { id: 'agent-end', from: 'agent', to: 'end' }];
 
 export const initialNodes: WorkflowNode[] = [
-  { id: 'trigger', kind: 'trigger', title: 'New support request', detail: 'Webhook intake', x: 90, y: 300, instructions: 'Accept a validated support request from the intake webhook.' },
-  { id: 'triage', kind: 'agent', title: 'Triage request', detail: 'Bounded agent', x: 370, y: 150, instructions: 'Classify the request, identify the account, and determine whether a customer-facing action is allowed.' },
-  { id: 'context', kind: 'retriever', title: 'Find account context', detail: 'Knowledge search', x: 370, y: 450, instructions: 'Retrieve account context and cited policy documents for the request.' },
-  { id: 'plan', kind: 'agent', title: 'Plan resolution', detail: 'Bounded agent', x: 680, y: 300, instructions: 'Propose the safest supported resolution. Request approval before any account change above the policy threshold.' },
-  { id: 'approval', kind: 'approval', title: 'Approve account change', detail: 'Human checkpoint', x: 960, y: 300, instructions: 'Wait for an authorised approver when the planned action changes an account.' },
-  { id: 'action', kind: 'mcp', title: 'Apply account action', detail: 'Governed tool call', x: 1240, y: 300, instructions: 'Execute the approved account action through the Billing actions MCP connection.' },
+  { id: 'trigger', kind: 'trigger', title: 'New support request', detail: 'Webhook intake', x: 100, y: 300, instructions: 'Accept a validated support request from the intake webhook.' },
+  { id: 'context', kind: 'retriever', title: 'Find account context', detail: 'Knowledge search', x: 380, y: 300, instructions: 'Retrieve account context and cited policy documents for the request.' },
+  { id: 'triage', kind: 'agent', title: 'Triage request', detail: 'Bounded agent', x: 660, y: 300, instructions: 'Classify the request, identify the account, and determine whether a customer-facing action is allowed.' },
+  { id: 'plan', kind: 'agent', title: 'Plan resolution', detail: 'Bounded agent', x: 940, y: 300, instructions: 'Propose the safest supported resolution. Request approval before any account change above the policy threshold.' },
+  { id: 'approval', kind: 'approval', title: 'Approve account change', detail: 'Human checkpoint', x: 1220, y: 300, instructions: 'Wait for an authorised approver when the planned action changes an account.' },
+  { id: 'action', kind: 'mcp', title: 'Apply account action', detail: 'Governed tool call', x: 1500, y: 300, instructions: 'Execute the approved account action through the Billing actions MCP connection.' },
 ];
 
 export const initialEdges: WorkflowEdge[] = [
-  { id: 'trigger-triage', from: 'trigger', to: 'triage' },
   { id: 'trigger-context', from: 'trigger', to: 'context' },
+  { id: 'context-triage', from: 'context', to: 'triage' },
   { id: 'triage-plan', from: 'triage', to: 'plan' },
-  { id: 'context-plan', from: 'context', to: 'plan' },
   { id: 'plan-approval', from: 'plan', to: 'approval' },
   { id: 'approval-action', from: 'approval', to: 'action' },
 ];
@@ -63,9 +62,55 @@ export function createNode(kind: WorkflowNodeKind, x: number, y: number, sequenc
   return { id: `${kind}-${sequence}`, kind, ...template, x, y, config: defaults[kind] ?? {} };
 }
 
+type Branch = 'true' | 'false' | undefined;
+const linked = (edges: readonly WorkflowEdge[], id: string): boolean => edges.some((edge) => edge.from === id || edge.to === id);
+const reaches = (edges: readonly WorkflowEdge[], start: string, goal: string, seen = new Set<string>()): boolean => start === goal || !seen.has(start) && (seen.add(start), edges.some((edge) => edge.from === start && reaches(edges, edge.to, goal, seen)));
+
+function linkError(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], from: string, to: string, branch: Branch): string | undefined {
+  const source = nodes.find((node) => node.id === from);
+  const target = nodes.find((node) => node.id === to);
+  if (!source || !target) return 'Choose two existing steps.';
+  if (from === to) return "A step can't connect to itself.";
+  if (source.kind === 'end') return 'End is the last step and has no output.';
+  if (target.kind === 'trigger') return 'The Trigger starts the workflow and has no input.';
+  if (source.kind === 'condition' && !branch) return 'Use the True or False output of a Condition.';
+  if (source.kind !== 'condition' && branch) return 'Only a Condition has True and False outputs.';
+  if (edges.some((edge) => edge.from === from && edge.to === to)) return 'Those steps are already connected.';
+  if (source.kind === 'approval' && target.kind !== 'mcp') return 'Approval can only lead to an MCP tool.';
+  if (reaches(edges, to, from)) return 'That connection would create a loop.';
+  return undefined;
+}
+
+function splice(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], from: string, to: string, branch: Branch): WorkflowEdge[] | string {
+  const inbound = edges.find((edge) => edge.to === to);
+  const outbound = edges.find((edge) => edge.from === from && edge.branch === branch);
+  const kind = (id: string) => nodes.find((node) => node.id === id)?.kind;
+  const link = (a: string, b: string, edgeBranch?: 'true' | 'false'): WorkflowEdge => ({ id: `${a}-${b}`, from: a, to: b, ...(edgeBranch ? { branch: edgeBranch } : {}) });
+  if (!inbound && !outbound) return [...edges, link(from, to, branch)];
+  if (inbound && !outbound && !linked(edges, from) && kind(from) !== 'trigger' && kind(from) !== 'condition') {
+    const rest = edges.filter((edge) => edge !== inbound);
+    const first = linkError(nodes, rest, inbound.from, from, inbound.branch);
+    return first ?? [...rest, link(inbound.from, from, inbound.branch), link(from, to)];
+  }
+  if (outbound && !inbound && !linked(edges, to) && kind(to) !== 'end' && kind(to) !== 'condition') {
+    const rest = edges.filter((edge) => edge !== outbound);
+    const last = linkError(nodes, rest, to, outbound.to, undefined);
+    return last ?? [...rest, link(from, to, branch), link(to, outbound.to)];
+  }
+  return inbound ? 'That step already has an input. Remove its connection, or connect an unlinked step to insert it.' : 'That output is already connected. Remove its connection, or connect an unlinked step to insert it.';
+}
+
+export function connectionError(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], from: string, to: string, branch?: 'true' | 'false'): string | undefined {
+  const error = linkError(nodes, edges, from, to, branch);
+  if (error) return error;
+  const result = splice(nodes, edges, from, to, branch);
+  return typeof result === 'string' ? result : undefined;
+}
+
 export function connect(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], from: string, to: string, branch?: 'true' | 'false'): WorkflowEdge[] {
-  if (from === to || !nodes.some((node) => node.id === from) || !nodes.some((node) => node.id === to) || edges.some((edge) => edge.from === from && (edge.to === to || branch !== undefined && edge.branch === branch))) return [...edges];
-  return [...edges, { id: `${from}-${to}`, from, to, ...(branch ? { branch } : {}) }];
+  if (linkError(nodes, edges, from, to, branch)) return [...edges];
+  const result = splice(nodes, edges, from, to, branch);
+  return typeof result === 'string' ? [...edges] : result;
 }
 
 export function conditionSources(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], conditionId: string): readonly WorkflowNode[] {
@@ -113,6 +158,14 @@ export function updateIntegerConfig(config: Record<string, unknown>, key: 'limit
 export type TriggerFieldType = 'string' | 'number' | 'boolean' | 'object' | 'array';
 export interface TriggerSchema { type: 'object'; properties: Record<string, { type: TriggerFieldType }>; required: string[]; additionalProperties: false; }
 
+export function schemaFieldNameError(schema: TriggerSchema, name: string, previousName?: string): string | undefined {
+  const normalized = name.trim();
+  if (!normalized) return 'Enter a field name.';
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(normalized)) return 'Use letters, numbers, and underscores; start with a letter.';
+  if (normalized !== previousName && normalized in schema.properties) return `${normalized} already exists.`;
+  return undefined;
+}
+
 export function setSchemaField(schema: TriggerSchema, name: string, type: TriggerFieldType, required: boolean, previousName?: string): TriggerSchema {
   const normalized = name.trim();
   const properties = Object.fromEntries(Object.entries(schema.properties).filter(([key]) => key !== previousName || previousName === normalized));
@@ -139,6 +192,12 @@ export function parseTriggerInput(schema: TriggerSchema, values: Record<string, 
     if (typeof value !== 'string') { errors[name] = 'Enter text.'; continue; } input[name] = value;
   }
   return Object.keys(errors).length ? { errors } : { input };
+}
+
+export function filterLibrary<T extends { title: string; items: readonly { kind: WorkflowNodeKind; label: string }[] }>(groups: readonly T[], query: string, help: Partial<Record<WorkflowNodeKind, string>>): T[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...groups];
+  return groups.flatMap((group) => { const items = group.items.filter((item) => [item.label, item.kind, help[item.kind] ?? ''].some((text) => text.toLowerCase().includes(needle))); return items.length ? [{ ...group, items }] : []; });
 }
 
 export function localDateTime(iso: string): string {

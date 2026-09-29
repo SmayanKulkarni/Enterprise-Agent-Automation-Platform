@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { browserState, selectPath, selectTenant, signedIn, signedOut } from './session-state.js';
+import { PlatformApiError } from './platform-api.js';
+import { browserState, selectPath, selectTenant, sessionFailureView, signedIn, signedOut } from './session-state.js';
 
 describe('browser session state', () => {
   test('restores an allowed deep link after sign-in and clears scoped state on Tenant change', () => {
@@ -34,5 +35,22 @@ describe('browser session state', () => {
     const state = browserState('/studio');
     expect(selectPath(state, '/catalog/packages')).toMatchObject({ path: '/catalog/packages' });
     expect(selectPath(state, 'https://attacker.example')).toMatchObject({ path: '/' });
+  });
+});
+
+describe('session failure view', () => {
+  test.each([
+    [401, undefined, 'signed-out'],
+    [403, undefined, 'forbidden'],
+    [422, 'denied', 'forbidden'],
+    [400, undefined, 'unavailable'],
+    [400, 'invalid', 'unavailable'],
+    [500, undefined, 'unavailable'],
+  ] as const)('maps status %i category %s to %s', (status, category, view) => {
+    expect(sessionFailureView(new PlatformApiError(status, category))).toBe(view);
+  });
+
+  test('treats a non-API failure as unavailable', () => {
+    expect(sessionFailureView(new TypeError('Failed to fetch'))).toBe('unavailable');
   });
 });

@@ -33,10 +33,15 @@ export interface PlatformCommand {
 }
 
 export class PlatformApiError extends Error {
-  constructor(readonly status: number, readonly category?: string) {
+  constructor(readonly status: number, readonly category?: string, readonly code?: string, readonly correlationId?: string) {
     super('Platform request failed.');
   }
 }
+
+let latestCorrelationId: string | undefined;
+export const lastCorrelationId = (): string | undefined => latestCorrelationId;
+export const errorRef = (error: unknown): string | undefined => error instanceof PlatformApiError ? error.correlationId?.slice(0, 8) : undefined;
+export const withRef = (message: string, error: unknown): string => { const ref = errorRef(error); return ref === undefined ? message : `${message} Ref: ${ref}`; };
 
 export class PlatformApi {
   private readonly commandKeys = new Map<string, string>();
@@ -85,26 +90,33 @@ export class PlatformApi {
       ...(await clerkAuthorizationHeader(this.getToken)),
     };
     const response = await fetch(`${this.apiOrigin}/api/v1/tenants/${encodeURIComponent(command.tenantId)}/commands/${encodeURIComponent(command.owner)}/${encodeURIComponent(command.name)}`, { method: 'POST', headers, body: JSON.stringify(payload), ...(signal === undefined ? {} : { signal }) });
-    const body: unknown = await response.json();
-    const responsePayload = record(body)['payload'];
-    if (!response.ok) throw new PlatformApiError(response.status, errorCategory(responsePayload));
-    return commandReceipt(responsePayload);
+    return commandReceipt(await parseResponse(response, correlationId));
   }
 
   async openRouterConnection(tenantId: string, action: 'connect' | 'rotate' | 'verify' | 'disconnect', expectedVersion: number, key?: string): Promise<CommandReceipt> {
-    const response = await fetch(`${this.apiOrigin}/api/v1/tenants/${encodeURIComponent(tenantId)}/openrouter-connection`, { method: 'POST', headers: { accept: mediaType, 'content-type': 'application/json', 'x-platform-tenant': tenantId, 'idempotency-key': crypto.randomUUID(), ...(await clerkAuthorizationHeader(this.getToken)) }, body: JSON.stringify({ action, expectedVersion, ...(key === undefined ? {} : { key }) }) });
-    const payload = record((await response.json()))['payload']; if (!response.ok) throw new PlatformApiError(response.status, errorCategory(payload)); return commandReceipt(payload);
+    const correlationId = crypto.randomUUID();
+    const response = await fetch(`${this.apiOrigin}/api/v1/tenants/${encodeURIComponent(tenantId)}/openrouter-connection`, { method: 'POST', headers: { accept: mediaType, 'content-type': 'application/json', 'x-platform-tenant': tenantId, 'idempotency-key': crypto.randomUUID(), 'x-correlation-id': correlationId, ...(await clerkAuthorizationHeader(this.getToken)) }, body: JSON.stringify({ action, expectedVersion, ...(key === undefined ? {} : { key }) }) });
+    return commandReceipt(await parseResponse(response, correlationId));
   }
 
   private async get(path: string, tenantId: string | undefined, signal: AbortSignal | undefined): Promise<unknown> {
-    const headers: Record<string, string> = { accept: mediaType, 'x-correlation-id': crypto.randomUUID(), ...(await clerkAuthorizationHeader(this.getToken)) };
+    const correlationId = crypto.randomUUID();
+    const headers: Record<string, string> = { accept: mediaType, 'x-correlation-id': correlationId, ...(await clerkAuthorizationHeader(this.getToken)) };
     if (tenantId !== undefined) headers['x-platform-tenant'] = tenantId;
     const response = await fetch(`${this.apiOrigin}${path}`, { headers, ...(signal === undefined ? {} : { signal }) });
-    const body: unknown = await response.json();
-    const payload = record(body)['payload'];
-    if (!response.ok) throw new PlatformApiError(response.status, errorCategory(payload));
-    return payload;
+    return parseResponse(response, correlationId);
   }
+}
+
+async function parseResponse(response: Response, sentCorrelationId: string): Promise<unknown> {
+  const correlationId = response.headers.get('x-correlation-id') ?? sentCorrelationId;
+  latestCorrelationId = correlationId;
+  const body: unknown = await response.json().catch(() => undefined);
+  if (!response.ok) {
+    const error = errorOf(body);
+    throw new PlatformApiError(response.status, error?.category, error?.code, correlationId);
+  }
+  return record(body)['payload'];
 }
 
 function commandReceipt(value: unknown): CommandReceipt {
@@ -123,9 +135,14 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function errorCategory(payload: unknown): string | undefined {
-  const error = payload !== null && typeof payload === 'object' && !Array.isArray(payload) ? (payload as Record<string, unknown>)['error'] : undefined;
-  return error !== null && typeof error === 'object' && !Array.isArray(error) && typeof (error as Record<string, unknown>)['category'] === 'string' ? (error as Record<string, unknown>)['category'] as string : undefined;
+const asRecord = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+
+function errorOf(body: unknown): { category?: string; code?: string } | undefined {
+  const envelope = asRecord(body);
+  const error = asRecord(asRecord(envelope?.['payload'] ?? envelope)?.['error']);
+  if (error === undefined) return undefined;
+  const { category, code } = error;
+  return { ...(typeof category === 'string' ? { category } : {}), ...(typeof code === 'string' ? { code } : {}) };
 }
 
 export type ErrorKind = 'signed-out' | 'denied' | 'not-found' | 'conflict' | 'invalid' | 'rate-limited' | 'unknown' | 'unavailable';

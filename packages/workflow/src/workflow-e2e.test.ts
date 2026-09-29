@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { BrowserV1Transport, ClerkSessionAdapter, type BrowserCommand } from '../../browser/src/index.js';
 import { workflowCommandHandlers } from '../../browser/src/workflow-commands.js';
 import { decodeContract, descriptorFor, digest, tenantId, type ContractEnvelope } from '../../contracts/src/index.js';
@@ -11,7 +11,7 @@ import { InMemoryHostedMemoryPort } from './memory.js';
 import type { MemoryItem } from './memory.js';
 import { WorkflowService, type Installation, type WorkflowRun } from './service.js';
 import type { GraphDraft, CapabilityPin, WorkflowDefinition } from './graph.js';
-import type { WorkflowStore, WorkflowRecord, RecordKind, PublishedDefinition } from './sql.js';
+import type { WorkflowStore, WorkflowRecord, RecordKind, PublishedDefinition, ReconciliationWrite } from './sql.js';
 
 const tenant = '11111111-1111-4111-8111-111111111111';
 const otherTenant = '22222222-2222-4222-8222-222222222222';
@@ -38,7 +38,7 @@ class MemoryStudio implements StudioStore {
 }
 
 class MemoryWorkflow implements WorkflowStore {
-  readonly records = new Map<string, WorkflowRecord>(); readonly published = new Map<string, PublishedDefinition>(); readonly receipts = new Map<string, { digest: string; value: Record<string, unknown> }>();
+  readonly records = new Map<string, WorkflowRecord<unknown>>(); readonly published = new Map<string, PublishedDefinition>(); readonly receipts = new Map<string, { digest: string; value: Record<string, unknown> }>();
   constructor(private readonly studio: MemoryStudio) {}
   async assertProfile(context: ExecutionContext, profile: 'editor' | 'admin' | 'operator') { if (context.userId !== admin && (context.userId !== editor || profile === 'admin')) fail('DENIED'); }
   private key(tenantId: string, kind: RecordKind, id: string) { return `${tenantId}:${kind}:${id}`; }
@@ -54,6 +54,19 @@ class MemoryWorkflow implements WorkflowStore {
     if (existing) { if (existing.digest !== requestDigest) fail('CONFLICT'); return { receipt: existing.value, replayed: true }; }
     await this.workerWrite(String(context.tenantId), kind, id, expectedVersion, state, data);
     this.receipts.set(receiptKey, { digest: requestDigest, value: receipt }); return { receipt, replayed: false };
+  }
+  async reconcile(context: ExecutionContext, input: ReconciliationWrite) {
+    await this.assertProfile(context, 'admin');
+    const previous = this.receipts.get(`${context.tenantId}:${input.key}`);
+    if (previous) { if (previous.digest !== input.requestDigest) fail('CONFLICT'); return previous.value; }
+    const runKey = this.key(String(context.tenantId), 'run', input.run.id);
+    const effectKey = this.key(String(context.tenantId), 'effect', input.effect.id);
+    if (this.records.get(runKey)?.version !== input.run.version || this.records.get(effectKey)?.version !== input.effect.version) fail('STALE');
+    this.records.set(effectKey, { ...input.effect, version: input.effect.version + 1, state: input.effectData.state, data: input.effectData });
+    this.records.set(runKey, { ...input.run, version: input.run.version + 1, state: input.runData.status, data: input.runData });
+    this.receipts.set(`${context.tenantId}:${input.effectKey}`, { digest: input.requestDigest, value: input.effectReceipt });
+    this.receipts.set(`${context.tenantId}:${input.key}`, { digest: input.requestDigest, value: input.receipt });
+    return input.receipt;
   }
   async workerRead<T>(tenantId: string, kind: RecordKind, id: string) { return this.records.get(this.key(tenantId, kind, id)) as WorkflowRecord<T> | undefined; }
   async workerList<T>(tenantId: string, kind: RecordKind) { return [...this.records.entries()].filter(([key]) => key.startsWith(`${tenantId}:${kind}:`)).map(([, value]) => value as WorkflowRecord<T>); }
@@ -115,6 +128,7 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   expect((await command(editor, 'studio.save-draft', 1, { id: draftId, draft: valid }, saveKey)).payload).toMatchObject({ revision: 2, state: 'draft' });
   const checked = await command(editor, 'workflow.check', 2, { id: draftId });
   expect(checked.payload).toMatchObject({ state: 'passed', issues: [] });
+  expect((await command(editor, 'workflow.check', 2, { id: draftId, tenantId: otherTenant })).payload['error']).toMatchObject({ category: 'invalid' });
   expect((await command(editor, 'workflow.publish', 2, { id: draftId, reviewDigest: checked.payload['digest'] })).payload['error']).toMatchObject({ category: 'denied' });
   const published = await command(admin, 'workflow.publish', 2, { id: draftId, reviewDigest: checked.payload['digest'] });
   expect(published.status).toBe(200); const definitionId = String(published.payload['objectId']);
@@ -144,6 +158,8 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   outcome = 'unknown-outcome';
   const uncertainId = randomUUID();
   expect((await command(editor, 'workflow.start', 0, { id: definitionId, input: {} }, uncertainId)).status).toBe(200);
+  const priorEffectId = randomUUID();
+  await store.workerWrite<EffectData>(tenant, 'effect', priorEffectId, 0, 'succeeded', { runId: uncertainId, nodeId: 'prior', installationId, requestDigest: 'a'.repeat(64), argumentsDigest: 'b'.repeat(64), state: 'succeeded' });
   for (const nodeId of ['trigger', 'agent', 'condition', 'approval']) await worker.step(tenant, uncertainId, definitionId, nodeId);
   const uncertainApproval = (await store.workerRead<WorkflowRun>(tenant, 'run', uncertainId))!;
   expect((await command(admin, 'workflow.approve', uncertainApproval.version, { id: uncertainId, bindingDigest: uncertainApproval.data.waiting!.bindingDigest, decision: 'approve' })).status).toBe(200);
@@ -155,7 +171,10 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   expect((await command(editor, 'workflow.reconcile', unknown.version, { id: uncertainId, disposition: 'no-effect' })).payload['error']).toMatchObject({ category: 'denied' });
   expect((await command(admin, 'workflow.reconcile', unknown.version, { id: uncertainId, disposition: 'no-effect' })).status).toBe(200);
   expect((await store.workerRead<WorkflowRun>(tenant, 'run', uncertainId))?.state).toBe('failed');
+  expect((await store.workerRead<EffectData>(tenant, 'effect', priorEffectId))?.state).toBe('succeeded');
+  expect((await store.workerList<EffectData>(tenant, 'effect')).find((item) => item.data.runId === uncertainId && item.id !== priorEffectId)?.state).toBe('failed');
   let modelCalls = 0;
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
   const unavailable = new WorkflowWorker(store, { complete: async () => { modelCalls += 1; throw new Error('unavailable'); } }, { invoke: async () => ({ outcome: 'not-dispatched' }) }, memory);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const runId = randomUUID();
@@ -168,6 +187,8 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   await unavailable.step(tenant, blockedId, definitionId, 'trigger');
   expect(await unavailable.step(tenant, blockedId, definitionId, 'agent')).toMatchObject({ waiting: 'circuit' });
   expect(modelCalls).toBe(3);
+  expect(errorLog.mock.calls.filter(([line]) => String(line).includes('runtime.model'))).toHaveLength(modelCalls);
+  errorLog.mockRestore();
   const summaryWorker = new WorkflowWorker(store, { complete: async () => ({ output: {}, model: 'unused', tokens: 0, cost: 0 }), summarize: async () => ({ text: 'Source-linked summary.', sources: ['agent'] }) }, { invoke: async () => ({ outcome: 'not-dispatched' }) }, memory);
   await summaryWorker.summarize(tenant, startKey);
   const memoryDraftId = randomUUID();

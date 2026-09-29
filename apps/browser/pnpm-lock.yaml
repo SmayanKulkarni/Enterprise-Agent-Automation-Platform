@@ -14,6 +14,12 @@ importers:
       '@fluentui/react-components':
         specifier: ^9.72.0
         version: 9.74.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(scheduler@0.28.0)
+      '@gsap/react':
+        specifier: ^2.1.2
+        version: 2.1.2(gsap@3.15.0)(react@19.3.0)
+      gsap:
+        specifier: ^3.15.0
+        version: 3.15.0
       react:
         specifier: ^19.2.3
         version: 19.3.0
@@ -762,6 +768,12 @@ packages:
   '@griffel/style-types@1.4.2':
     resolution: {integrity: sha512-MsSghfpyxR2MpTrYdcCozISsSLkmFjNw94wNPi4bDBRLW8W43718W/ZjmUdVkoM0KXMtJPYuEkx8Mzibqb03qA==}
 
+  '@gsap/react@2.1.2':
+    resolution: {integrity: sha512-JqliybO1837UcgH2hVOM4VO+38APk3ECNrsuSM4MuXp+rbf+/2IG2K1YJiqfTcXQHH7XlA0m3ykniFYstfq0Iw==}
+    peerDependencies:
+      gsap: ^3.12.5
+      react: '>=17'
+
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
     engines: {node: '>=6.0.0'}
@@ -999,6 +1011,9 @@ packages:
 
   glob-to-regexp@0.4.1:
     resolution: {integrity: sha512-lkX1HJXwyMcprw/5YUZc2s7DrpAiHB21/V+E1rHUrVNokkvB6bqMzT0VfV6/86ZNabt1k14YOIaT7nDvOX3Iiw==}
+
+  gsap@3.15.0:
+    resolution: {integrity: sha512-dMW4CWBTUK1AEEDeZc1g4xpPGIrSf9fJF960qbTZmN/QwZIWY5wgliS6JWl9/25fpTGJrMRtSjGtOmPnfjZB+A==}
 
   js-cookie@3.0.8:
     resolution: {integrity: sha512-yeJd4aNAdYZQjaon2bpD/Gb0B/omw7HQOsynXXcOiWVCacbBcPlgn8S/d1X6blFSaHao7ozqtW7NZW19xpCtIw==}
@@ -2466,6 +2481,11 @@ snapshots:
     dependencies:
       csstype: 3.2.3
 
+  '@gsap/react@2.1.2(gsap@3.15.0)(react@19.3.0)':
+    dependencies:
+      gsap: 3.15.0
+      react: 19.3.0
+
   '@jridgewell/resolve-uri@3.1.2': {}
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
@@ -2650,6 +2670,8 @@ snapshots:
     optional: true
 
   glob-to-regexp@0.4.1: {}
+
+  gsap@3.15.0: {}
 
   js-cookie@3.0.8: {}
 

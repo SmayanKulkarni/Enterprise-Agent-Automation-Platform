@@ -3,8 +3,13 @@ SET XACT_ABORT ON;
 BEGIN TRANSACTION;
 
 DECLARE @constraint sysname;
+DECLARE @statement nvarchar(max);
 SELECT @constraint = name FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'workflow.records') AND definition LIKE N'%webhook-credential%';
-IF @constraint IS NOT NULL EXEC(N'ALTER TABLE [workflow].[records] DROP CONSTRAINT [' + REPLACE(@constraint, N']', N']]') + N'];');
+IF @constraint IS NOT NULL
+BEGIN
+  SET @statement = N'ALTER TABLE [workflow].[records] DROP CONSTRAINT ' + QUOTENAME(@constraint);
+  EXEC(@statement);
+END;
 ALTER TABLE [workflow].records ADD CONSTRAINT CK_workflow_records_kind CHECK (kind IN (N'installation', N'run', N'effect', N'summary', N'grant', N'circuit', N'webhook-credential', N'webhook-dispatch', N'memory-import', N'memory-item', N'memory-lifecycle', N'memory-retrieval'));
 CREATE INDEX IX_workflow_records_run_history ON [workflow].records (tenant_id, kind, created_at DESC, id DESC) INCLUDE (version, state);
 

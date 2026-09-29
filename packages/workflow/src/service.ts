@@ -6,6 +6,7 @@ import type { StudioDraft } from '../../lifecycle/src/studio.js';
 import { compileGraph, validateGraph, validateSchema, validateValue, type CapabilityPin, type GraphDraft, type GraphIssue, type JsonSchema, type WorkflowDefinition } from './graph.js';
 import { memoryFingerprint, memoryItemId, redacted, type HostedMemoryPort, type MemoryImport, type MemoryItem } from './memory.js';
 import type { RunHistoryCursor, WorkflowRecord, WorkflowStore } from './sql.js';
+import type { EffectData } from './runtime.js';
 import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrouter-connection.js';
 
 export interface CapabilityManifest { digest: string; version: string; certified: boolean; capabilities: readonly { name: string; risk: 'R1' | 'R2' | 'R3'; inputSchema: JsonSchema; outputSchema: JsonSchema }[]; }
@@ -105,6 +106,11 @@ const graph = (stored: StudioStoredDraft<StudioDraft | GraphDraft>): GraphDraft 
 const definitionId = (draftId: string, revision: number): string => {
   const bytes = createHash('sha256').update(`${draftId}:${revision}`).digest();
   bytes[6] = (bytes[6]! & 0x0f) | 0x50; bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  return `${bytes.subarray(0, 4).toString('hex')}-${bytes.subarray(4, 6).toString('hex')}-${bytes.subarray(6, 8).toString('hex')}-${bytes.subarray(8, 10).toString('hex')}-${bytes.subarray(10, 16).toString('hex')}`;
+};
+const reconciliationEffectKey = (key: string): string => {
+  const bytes = createHash('sha256').update(`${key}:effect`).digest();
+  bytes[6] = (bytes[6]! & 15) | 80; bytes[8] = (bytes[8]! & 63) | 128;
   return `${bytes.subarray(0, 4).toString('hex')}-${bytes.subarray(4, 6).toString('hex')}-${bytes.subarray(6, 8).toString('hex')}-${bytes.subarray(8, 10).toString('hex')}-${bytes.subarray(10, 16).toString('hex')}`;
 };
 const memoryFailure = (value: unknown): string | undefined => {
@@ -215,6 +221,25 @@ export class WorkflowService {
     delete updated.waiting;
     await this.store.write(context, 'admin', 'run', runId, current.version, decision === 'approve' ? 'running' : 'failed', { ...updated, status: decision === 'approve' ? 'running' : 'failed' }, key, requestDigest, { commandId: key, objectId: runId, revision: current.version + 1, state: decision, digest: bindingDigest, evidenceIds: [] });
     await scheduler.raise(runId, 'approval', { bindingDigest, decision });
+  }
+
+  async reconcile(context: ExecutionContext, runId: string, disposition: 'adopt' | 'no-effect', expectedVersion: number, key: string, requestDigest: string): Promise<Record<string, unknown>> {
+    await this.store.assertProfile(context, 'admin');
+    const run = await this.store.read<WorkflowRun>(context, 'run', id(runId)) ?? fail('STALE');
+    if (run.state !== 'unknown-outcome' || run.version !== expectedVersion) fail('STALE');
+    const history = await this.store.runHistory(context, 1, undefined, runId);
+    const unresolved = (history.effects as readonly WorkflowRecord<EffectData>[]).filter((effect) => effect.data.runId === runId && ['possible-send', 'unknown-outcome'].includes(effect.state));
+    if (unresolved.length !== 1) fail('STALE');
+    const effect = unresolved[0] ?? fail('STALE');
+    const effectState = disposition === 'adopt' ? 'succeeded' : 'failed';
+    const effectData: EffectData = { ...effect.data, state: effectState };
+    const runData: WorkflowRun = { ...run.data, status: 'failed', history: [...run.data.history, { nodeId: effect.data.nodeId, kind: 'reconciliation', state: 'failed', at: new Date().toISOString(), detail: disposition, receiptId: effect.id }] };
+    const receipt = { commandId: key, objectId: runId, revision: run.version + 1, state: 'failed', digest: await digest(runData.history), evidenceIds: [] };
+    return this.store.reconcile(context, {
+      run, effect, runData, effectData, key, effectKey: reconciliationEffectKey(key), requestDigest,
+      receipt,
+      effectReceipt: { commandId: key, objectId: effect.id, revision: effect.version + 1, state: disposition, digest: effect.data.requestDigest, evidenceIds: [] },
+    });
   }
 
   async grant(context: ExecutionContext, draftId: string, nodeId: string, installationId: string, capability: string, key: string, requestDigest: string): Promise<void> {
@@ -374,7 +399,7 @@ export class WorkflowService {
     else if (collection === 'workflow-grants') records = (await this.store.list<CapabilityGrant>(context, 'grant')).map((item) => ({ id: item.id, version: item.version, state: item.state, ...item.data }));
     else if (collection === 'workflow-webhook-credentials') records = (await this.store.list<WebhookCredential>(context, 'webhook-credential')).map((item) => ({ id: item.id, version: item.version, state: item.state, definitionId: item.data.definitionId, enabled: item.data.enabled, rotatedAt: item.data.rotatedAt, ...(item.data.previousExpiresAt ? { previousExpiresAt: item.data.previousExpiresAt } : {}) }));
     else if (collection === 'openrouter-connections') records = (await this.store.list<OpenRouterConnection>(context, 'openrouter-connection')).map((item) => ({ id: item.id, version: item.version, state: item.state, provider: item.data.provider, enabled: item.data.enabled, ...(item.data.verifiedAt ? { verifiedAt: item.data.verifiedAt } : {}) }));
-    else if (collection === 'openrouter-models') records = [{ id: 'openrouter', provider: 'openrouter', models: this.openRouterModels, configured: this.openRouter !== undefined && this.openRouterModels.length > 0 }];
+    else if (collection === 'openrouter-models') records = [{ id: '00000000-0000-5000-8000-000000000003', provider: 'openrouter', models: this.openRouterModels, configured: this.openRouter !== undefined && this.openRouterModels.length > 0 }];
     else if (collection === 'workflow-memory-imports') records = (await this.store.list<MemoryImport>(context, 'memory-import')).map((item) => ({ id: item.id, version: item.version, ...item.data }));
     else if (collection === 'workflow-memory-items') records = (await this.store.list<MemoryItem>(context, 'memory-item')).map((item) => ({ id: item.id, version: item.version, state: item.state, stableDefinitionId: item.data.stableDefinitionId, definitionId: item.data.definitionId, producingRevision: item.data.producingRevision, type: item.data.type, sourceId: item.data.sourceId, sourceDigest: item.data.sourceDigest, ownerScoped: item.data.ownerId !== undefined, ...(item.data.predecessorId ? { predecessorId: item.data.predecessorId } : {}), ...(item.data.promotedAt ? { promotedAt: item.data.promotedAt } : {}), ...(item.data.expiresAt ? { expiresAt: item.data.expiresAt } : {}), hold: item.data.hold === true, ...(memoryFailure(item.data.failure) ? { failure: memoryFailure(item.data.failure) } : {}), vectorState: item.data.vectorState }));
     else if (collection === 'workflow-memory-readiness') { const state = this.memoryReadiness(tenantId); records = [{ id: '00000000-0000-5000-8000-000000000001', state, enabled: state === 'ready', provider: 'upstash-vector' }]; }

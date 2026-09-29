@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { PlatformApi, PlatformApiError, describeError } from './platform-api.js';
+import { PlatformApi, PlatformApiError, describeError, errorRef, lastCorrelationId, withRef } from './platform-api.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -58,6 +58,46 @@ describe('PlatformApi', () => {
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     await expect(new PlatformApi(() => Promise.resolve('short-lived')).command({ tenantId: '11111111-1111-4111-8111-111111111111', owner: 'vendor', name: 'publish', expectedVersion: 0, arguments: {} })).rejects.toMatchObject({ status: 400, category: 'invalid' });
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('error responses', () => {
+  const correlationId = 'abcdef12-0000-4000-8000-000000000000';
+
+  test('an empty 404 body becomes a PlatformApiError, never a SyntaxError', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 404, headers: { 'x-correlation-id': correlationId } })));
+
+    await expect(new PlatformApi(() => Promise.resolve('t')).session()).rejects.toMatchObject({ name: 'Error', status: 404, correlationId });
+  });
+
+  test('a non-JSON error body still yields the status and the sent correlation id', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>Bad Gateway</html>', { status: 502 })));
+
+    const error = await new PlatformApi(() => Promise.resolve('t')).tenants().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformApiError);
+    expect(error).toMatchObject({ status: 502, correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/u) });
+  });
+
+  test('surfaces the server code, category and correlation id', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: { error: { category: 'conflict', code: 'STALE', message: 'x' } } }), { status: 409, headers: { 'x-correlation-id': correlationId } })));
+
+    const error = await new PlatformApi(() => Promise.resolve('t')).tenants().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ status: 409, category: 'conflict', code: 'STALE', correlationId });
+    expect(lastCorrelationId()).toBe(correlationId);
+    expect(errorRef(error)).toBe('abcdef12');
+    expect(withRef('Save failed.', error)).toBe('Save failed. Ref: abcdef12');
+  });
+
+  test('withRef leaves messages alone when there is no correlation id', () => {
+    expect(withRef('Save failed.', new Error('x'))).toBe('Save failed.');
+  });
+
+  test('an empty success body is a PlatformApiError', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+
+    await expect(new PlatformApi(() => Promise.resolve('t')).tenants()).rejects.toBeInstanceOf(PlatformApiError);
   });
 });
 

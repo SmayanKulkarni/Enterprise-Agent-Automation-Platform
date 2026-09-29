@@ -3,6 +3,7 @@ import type { JsonSchema } from './graph.js';
 import type { HostedMemoryItem, HostedMemoryMatch, HostedMemoryPort } from './memory.js';
 import type { McpPort, ModelPort, ModelRequest, ModelResult } from './runtime.js';
 import type { WorkflowStore } from './sql.js';
+import { reported } from '../../errors/src/swallow.js';
 import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrouter-connection.js';
 
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -60,7 +61,7 @@ export class HttpMcpPort implements McpPort {
       const result = parsed['result']; if (result['isError'] === true) return { outcome: 'unknown-outcome' };
       const output = result['structuredContent']; if (!object(output)) return { outcome: 'unknown-outcome' };
       return { outcome: 'succeeded', output };
-    } catch { return { outcome: 'unknown-outcome' }; }
+    } catch (error) { return reported({ outcome: 'unknown-outcome' as const }, 'ports.mcp')(error); }
   }
 }
 
