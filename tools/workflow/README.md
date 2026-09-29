@@ -12,3 +12,13 @@ node tools/workflow/private-agent.mjs
 ```
 
 Set `WORKFLOW_AGENT_MCP_TOKEN` if the MCP endpoint requires a bearer token. Rotating or revoking the installation token in Studio stops the current agent until its environment is updated. The agent submits each result again until the platform accepts it; a command that may have been delivered is never polled a second time.
+
+## CPU profile
+
+```sh
+pnpm profile:workflow
+```
+
+Runs the workflow e2e scenario under the V8 CPU profiler and prints the top self-time frames from repository code. `PROFILE_REPEAT` sets the extra iterations (default 200). Profiles are written to the gitignored `outputs/profiles/`; the worker's profile (the larger file) is the interesting one, and opens as a flamegraph in speedscope or Chrome DevTools.
+
+The e2e ports are in-memory, so time spent waiting on SQL, model providers and MCP servers is not represented. Use Application Insights for that.
