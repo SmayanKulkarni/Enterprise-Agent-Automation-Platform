@@ -1,0 +1,6 @@
+import './telemetry.js';
+import './functions/browser-api.js';
+import './functions/workflow-agent.js';
+import './functions/workflow-dispatch-recovery.js';
+import './functions/workflow-run.js';
+import './functions/workflow-webhook.js';

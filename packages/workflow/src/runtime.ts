@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { digest } from '../../contracts/src/index.js';
 import { validateValue, type CompiledNode, type JsonSchema, type NodePolicy, type WorkflowDefinition } from './graph.js';
 import type { Installation, RunEvent, WorkflowRun } from './service.js';
@@ -12,6 +13,8 @@ export interface McpPort { invoke(installation: Installation, capability: string
 export interface EffectData { runId: string; nodeId: string; installationId: string; requestDigest: string; argumentsDigest: string; state: 'prepared' | 'queued' | 'possible-send' | 'succeeded' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown>; }
 export interface StepResult { next?: string; waiting?: 'approval' | 'connector' | 'circuit'; deadline?: string; bindingDigest?: string; effectId?: string; completed?: boolean; failed?: boolean; }
 interface CircuitData { failures: number; openedUntil?: string; probeUntil?: string; }
+
+const tracer = trace.getTracer('workflow');
 
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
 function ensure(condition: unknown, code: string): asserts condition { if (!condition) throw Object.assign(new Error(code), { code }); }
@@ -33,7 +36,20 @@ const resolve = (input: Record<string, unknown>, outputs: Record<string, Record<
 export class WorkflowWorker {
   constructor(private readonly store: WorkflowStore, private readonly model: ModelPort, private readonly mcp: McpPort, private readonly memory: HostedMemoryPort) {}
 
-  async step(tenantId: string, runId: string, definitionId: string, nodeId: string): Promise<StepResult> {
+  step(tenantId: string, runId: string, definitionId: string, nodeId: string): Promise<StepResult> {
+    return tracer.startActiveSpan('workflow.step', { attributes: { 'workflow.tenant_id': tenantId, 'workflow.run_id': runId, 'workflow.node_id': nodeId } }, async (span) => {
+      try {
+        return await this.runStep(tenantId, runId, definitionId, nodeId);
+      } catch (error) {
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error && 'code' in error ? String(error.code) : 'NODE_FAILED' });
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
+  }
+
+  private async runStep(tenantId: string, runId: string, definitionId: string, nodeId: string): Promise<StepResult> {
     const published = await this.store.workerDefinition(tenantId, definitionId); ensure(published, 'NOT_FOUND');
     const node = published.definition.nodes.find((item) => item.id === nodeId); ensure(node, 'INVALID');
     const current = await this.store.workerRead<WorkflowRun>(tenantId, 'run', runId); ensure(current && current.data.definitionId === definitionId && current.data.definitionDigest === published.digest, 'DENIED');
@@ -56,6 +72,9 @@ export class WorkflowWorker {
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String(error.code) : 'NODE_FAILED';
       if (code === 'STALE') throw error;
+      const active = trace.getActiveSpan();
+      active?.recordException(error as Error);
+      active?.setStatus({ code: SpanStatusCode.ERROR, message: code });
       const latest = await this.store.workerRead<WorkflowRun>(tenantId, 'run', runId);
       if (node.kind === 'mcp' && (await this.store.workerRead<EffectData>(tenantId, 'effect', effectId(runId, node.id)))?.state === 'possible-send') return this.stop(tenantId, latest ?? current, node, 'RECONCILIATION_REQUIRED', true);
       return this.stop(tenantId, latest ?? current, node, code);

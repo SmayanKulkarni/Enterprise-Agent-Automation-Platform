@@ -108,3 +108,10 @@ The implementation keeps the tenant allowlist disabled by default. Memory activi
 - Any edit that would discard the canvas (switching drafts, switching tenant, reloading) routes through one `guard()` that opens a confirmation `Dialog`; nothing destructive fires without it.
 - Manual Start no longer uses a `window` `CustomEvent` — `Inspector` takes an `onStart` callback and a `startReason`, so the Trigger's manual-start button and the header's Start button share one `start(input)` function and one disabled/pending state.
 - A failed check produces a focusable error summary (`issueNode` in `workflow-model.ts` resolves a check-issue JSON path back to its node by id or index) that moves focus to itself and lets each issue jump to and select its node.
+
+## Profiling and tracing
+
+- `pnpm profile:workflow` writes V8 CPU profiles of the workflow e2e scenario to the ignored `outputs/profiles/` directory. It measures orchestration CPU with in-memory ports; waiting on Azure SQL, model providers, MCP servers and Upstash appears only in traces.
+- Azure Functions export OpenTelemetry traces to Application Insights only when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set. `telemetry.ts` loads before any function module, records SQL (tedious) and outbound HTTP (undici) spans, and removes URL query strings before export. SQL parameter values are never attached.
+- Each Durable Functions `workflowStep` activity is one `workflow.step` span with tenant, run and node IDs. A failed node records its exception, so the stack stays on the server; Run History, Studio and browser responses are unchanged. Spans are created only in activities, never in replayed orchestration code.
+- Tenant-visible per-call timings would require timing fields on Run History events and are deferred.
