@@ -15,6 +15,7 @@ const end = (id = 'end'): GraphNode => node(id, 'end', {});
 const tool = (id: string, capability = 'lookup'): GraphNode => node(id, 'mcp', { installationId, capability, manifestDigest, grantId, target: 'crm', arguments: {}, policy });
 const chain = (id: string, args: Record<string, unknown>, capability = 'read'): GraphNode => node(id, 'mcp', { installationId, capability, manifestDigest, grantId, target: 'crm', arguments: args, policy });
 const flow = (from: string, to: string, branch?: 'true' | 'false'): GraphEdge => ({ id: `${from}-${to}${branch ? `-${branch}` : ''}`, from, to, ...(branch ? { branch } : {}) });
+const memoryTool = (id: string): GraphNode => node(id, 'memory', { limit: 3, maxChars: 500, policy: { milliseconds: 30000, attempts: 1, tokens: 0, cost: 0, toolRounds: 0, effects: 0 } });
 const attach = (from: string, to: string): GraphEdge => ({ id: `${from}-${to}-tool`, from, to, role: 'tool' });
 const draft = (nodes: GraphNode[], edges: GraphEdge[]): GraphDraft => ({ kind: 'graph-v1', nodes, edges });
 const pin = (nodeId: string, capability: string, risk: CapabilityPin['risk'] = 'R2', inputSchema: JsonSchema = query, outputSchema: JsonSchema = result): CapabilityPin => ({ nodeId, installationId, capability, manifestDigest, grantId, risk, inputSchema, outputSchema });
@@ -117,5 +118,57 @@ describe('tool edges', () => {
   test('a tool is never a data source', () => {
     const graph = draft([trigger, agent('agent'), tool('crm'), chain('read', { query: '$node.crm.result' }), end()], [flow('start', 'agent'), flow('agent', 'read'), flow('read', 'end'), attach('agent', 'crm')]);
     expect(codes(graph, [...toolPins, pin('read', 'read', 'R1')])).toContain('INVALID_MAPPING');
+  });
+
+  test('an Agent may attach one Memory tool next to several MCPs and its capabilities ignore the memory node', async () => {
+    const graph = draft([trigger, agent('agent'), tool('crm'), memoryTool('recall'), end()], [flow('start', 'agent'), flow('agent', 'end'), attach('agent', 'crm'), attach('agent', 'recall')]);
+    expect(codes(graph, toolPins)).toEqual([]);
+    const compiled = await compileGraph('11111111-1111-4111-8111-111111111111', 1, graph, toolPins);
+    expect(compiled.nodes.find((item) => item.id === 'agent')).toMatchObject({ tools: ['crm', 'recall'], config: { allowedCapabilities: ['lookup'] } });
+    expect(compiled.nodes.find((item) => item.id === 'recall')).toEqual({ id: 'recall', kind: 'memory', config: memoryTool('recall').config, tool: true, next: null });
+    expect(compiled.capabilityPins.map((item) => item.nodeId)).toEqual(['crm']);
+  });
+
+  test('an Agent with only a Memory tool needs no pins and keeps its authored capabilities untouched', async () => {
+    const graph = draft([trigger, agent('agent'), memoryTool('recall'), end()], [flow('start', 'agent'), flow('agent', 'end'), attach('agent', 'recall')]);
+    expect(codes(graph)).toEqual([]);
+    const compiled = await compileGraph('11111111-1111-4111-8111-111111111111', 1, graph, []);
+    expect(compiled.nodes.find((item) => item.id === 'agent')?.config['allowedCapabilities']).toEqual([]);
+    expect(compiled.capabilityPins).toEqual([]);
+  });
+
+  test('a Memory tool with flow edges, a second owner, a non-Agent owner or a twin Memory tool is refused', () => {
+    const base = (): GraphDraft => draft([trigger, agent('agent'), memoryTool('recall'), end()], [flow('start', 'agent'), flow('agent', 'end'), attach('agent', 'recall')]);
+    const inbound = base(); inbound.edges.push(flow('start', 'recall'));
+    expect(codes(inbound)).toContain('INVALID_TOOL_EDGE');
+    const outbound = base(); outbound.edges.push(flow('recall', 'end'));
+    expect(codes(outbound)).toContain('INVALID_TOOL_EDGE');
+    const shared = draft([trigger, agent('one'), agent('two'), memoryTool('recall'), end()], [flow('start', 'one'), flow('one', 'two'), flow('two', 'end'), attach('one', 'recall'), attach('two', 'recall')]);
+    expect(codes(shared)).toContain('INVALID_TOOL_EDGE');
+    const wrongOwner = base(); wrongOwner.edges[2] = attach('start', 'recall');
+    expect(codes(wrongOwner)).toContain('INVALID_TOOL_EDGE');
+    const twin = draft([trigger, agent('agent'), memoryTool('one'), memoryTool('two'), end()], [flow('start', 'agent'), flow('agent', 'end'), attach('agent', 'one'), attach('agent', 'two')]);
+    expect(codes(twin)).toContain('DUPLICATE_TOOL');
+  });
+
+  test('a Memory tool node must still carry valid memory settings and the Agent still needs tool policy', () => {
+    const broken = draft([trigger, agent('agent'), node('recall', 'memory', { limit: 99, maxChars: 500, policy }), end()], [flow('start', 'agent'), flow('agent', 'end'), attach('agent', 'recall')]);
+    expect(codes(broken)).toContain('INVALID_MEMORY');
+    const noRounds = draft([trigger, agent('agent', { policy: { ...policy, effects: 0 } }), memoryTool('recall'), end()], [flow('start', 'agent'), flow('agent', 'end'), attach('agent', 'recall')]);
+    expect(codes(noRounds)).toContain('TOOL_POLICY_REQUIRED');
+  });
+
+  test('the tool limit counts Memory and MCP targets together', () => {
+    const many = Array.from({ length: 16 }, (_, index) => tool(`t${index}`, `cap${index}`));
+    const pins = many.map((item) => pin(item.id, String(item.config['capability'])));
+    const full = draft([trigger, agent('agent'), ...many, end()], [flow('start', 'agent'), flow('agent', 'end'), ...many.map((item) => attach('agent', item.id))]);
+    expect(codes(full, pins)).toEqual([]);
+    const over = draft([trigger, agent('agent'), ...many, memoryTool('recall'), end()], [flow('start', 'agent'), flow('agent', 'end'), ...many.map((item) => attach('agent', item.id)), attach('agent', 'recall')]);
+    expect(codes(over, pins)).toContain('TOO_MANY_TOOLS');
+  });
+
+  test('a Memory step in the flow stays a step and cannot double as a tool', () => {
+    const graph = draft([trigger, agent('agent'), node('read', 'memory', { limit: 3, maxChars: 500, policy }), end()], [flow('start', 'read'), flow('read', 'agent'), flow('agent', 'end'), attach('agent', 'read')]);
+    expect(codes(graph)).toContain('INVALID_TOOL_EDGE');
   });
 });

@@ -14,6 +14,7 @@ export interface StudioStore {
   create(context: ExecutionContext, id: string, draft: StudioDraft | GraphDraft, idempotencyKey?: string): Promise<StudioStoredDraft<StudioDraft | GraphDraft>>;
   get(context: ExecutionContext, id: string): Promise<StudioStoredDraft<StudioDraft | GraphDraft>>;
   list(context: ExecutionContext): Promise<readonly StudioStoredDraft<StudioDraft | GraphDraft>[]>;
+  revisions(context: ExecutionContext, id: string): Promise<readonly StudioStoredDraft<StudioDraft | GraphDraft>[]>;
   save(context: ExecutionContext, id: string, expectedRevision: number, draft: StudioDraft | GraphDraft, idempotencyKey: string): Promise<StudioStoredDraft<StudioDraft | GraphDraft>>;
   appendRun(context: ExecutionContext, id: string, evidence: StudioRunEvidence): Promise<void>;
   appendReview(context: ExecutionContext, id: string, evidence: StudioReviewEvidence): Promise<void>;
@@ -47,6 +48,10 @@ export class AzureSqlStudioStore implements StudioStore {
   async get(context: ExecutionContext, id: string): Promise<StudioStoredDraft<StudioDraft | GraphDraft>> { return this.draftCall('studio.get_draft', context, (request) => request.input('draft_id', sql.UniqueIdentifier, id)); }
   async list(context: ExecutionContext): Promise<readonly StudioStoredDraft<StudioDraft | GraphDraft>[]> {
     const result = await this.call('studio.list_drafts', this.context(context)); return Object.freeze((result.recordset as Record<string, unknown>[]).map(studioRecord));
+  }
+  async revisions(context: ExecutionContext, id: string): Promise<readonly StudioStoredDraft<StudioDraft | GraphDraft>[]> {
+    const result = await this.call('studio.list_revisions', (request) => this.context(context)(request).input('draft_id', sql.UniqueIdentifier, id));
+    return Object.freeze((result.recordset as Record<string, unknown>[]).map(studioRecord));
   }
   async save(context: ExecutionContext, id: string, expectedRevision: number, draft: StudioDraft | GraphDraft, idempotencyKey: string): Promise<StudioStoredDraft<StudioDraft | GraphDraft>> {
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || !idempotencyKey) fail('INVALID'); const draftJson = canonicalJson(draft); const draftDigest = await digest(draft);

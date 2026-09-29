@@ -200,6 +200,7 @@ export class WorkflowService {
 
   async draft(context: ExecutionContext, draftId: string): Promise<StudioStoredDraft<StudioDraft | GraphDraft>> { return this.studio.get(context, id(draftId)); }
   async drafts(context: ExecutionContext): Promise<readonly StudioStoredDraft<StudioDraft | GraphDraft>[]> { return (await this.studio.list(context)).filter((item) => (item.draft as unknown as GraphDraft).kind === 'graph-v1'); }
+  async revisions(context: ExecutionContext, draftId: string): Promise<readonly StudioStoredDraft<StudioDraft | GraphDraft>[]> { return (await this.studio.revisions(context, id(draftId))).filter((item) => (item.draft as unknown as GraphDraft).kind === 'graph-v1'); }
 
   async pins(context: ExecutionContext, draftId: string): Promise<CapabilityPin[]> {
     const grants = (await this.store.list<CapabilityGrant>(context, 'grant')).filter((record) => record.state === 'active' && record.data.draftId.toLowerCase() === draftId.toLowerCase());
@@ -414,6 +415,7 @@ export class WorkflowService {
     const tenantId = String(context.tenantId);
     let records: Record<string, unknown>[] = [];
     if (collection === 'workflow-drafts') records = (await this.drafts(context)).map((item) => ({ id: item.id, revision: item.revision, digest: item.digest, state: item.state, graph: item.draft }));
+    else if (collection === 'workflow-revisions') { const draftId = id(recordId); records = (await this.revisions(context, draftId)).map((item) => ({ id: draftId, revision: item.revision, digest: item.digest, state: item.state, createdAt: item.createdAt, graph: item.draft })); }
     else if (collection === 'workflow-definitions') records = (await this.store.definitions(context, recordId)).map((item) => ({ id: item.id, draftId: item.draftId, revision: item.draftRevision, digest: item.digest, nodes: item.definition.nodes.map((node) => ({ id: node.id, kind: node.kind, next: node.next, ...(node.tools ? { tools: node.tools } : {}), ...(node.tool ? { tool: true } : {}) })), capabilityPins: item.definition.capabilityPins.map((pin) => ({ capability: pin.capability, risk: pin.risk, manifestDigest: pin.manifestDigest })) }));
     else if (collection === 'workflow-runs') {
       const pageSize = query?.pageSize ?? 50;

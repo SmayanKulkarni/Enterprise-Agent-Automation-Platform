@@ -49,9 +49,9 @@ export function ModelPicker({ label, value, onChange, models, help, requireStruc
       {status === 'ready' && rows.length === 0 && <li role="presentation" className="model-status" aria-live="polite">No model matches “{draft}”. Press Enter to use it as typed.</li>}
       {rows.map((row, index) => row.id === OTHER_DEPLOYMENT
         ? <li key={row.id} id={`${id}-option-${index}`} role="option" aria-selected={index === active} className={index === active ? 'active' : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(row)}><strong>Other deployment name…</strong><small>Type the name of your own deployment.</small></li>
-        : <li key={row.id} id={`${id}-option-${index}`} role="option" aria-selected={row.id === value} className={`${index === active ? 'active' : ''} ${(requireStructured && !row.structuredOutput) || (requireTools && !row.tools) ? 'unsupported' : ''}`} onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setActive(index)} onClick={() => choose(row)}>
+        : <li key={row.id} id={`${id}-option-${index}`} role="option" aria-selected={row.id === value} className={`${index === active ? 'active' : ''} ${(requireStructured && !row.structuredOutput) || (requireTools && row.tools === false) ? 'unsupported' : ''}`} onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setActive(index)} onClick={() => choose(row)}>
           <strong>{row.name ?? row.id}</strong><code>{row.id}</code>
-          <small>{[context(row), pricing(row), row.tools ? 'tools' : 'no tools', row.structuredOutput ? undefined : 'no structured output'].filter(Boolean).join(' · ')}</small>
+          <small>{[context(row), pricing(row), row.tools === true ? 'tools' : row.tools === false ? 'no tools' : undefined, row.structuredOutput ? undefined : 'no structured output'].filter(Boolean).join(' · ')}</small>
         </li>)}
       {visible.length > VISIBLE_LIMIT && <li role="presentation" className="model-status">{visible.length - VISIBLE_LIMIT} more. Keep typing to narrow the list.</li>}
     </ul>}

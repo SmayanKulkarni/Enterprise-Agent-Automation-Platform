@@ -17,7 +17,7 @@ A named, schema-bound operation exposed by an installed Extension and authorized
 _Avoid_: Function, action
 
 **Agent tool**:
-A Capability attached to an Agent by a tool edge that the model may call, one call at a time, during that Agent's step; it is not a step in the flow.
+A Capability, or the Operational Memory search and save pair, attached to an Agent by a tool edge that the model may call, one call at a time, during that Agent's step; it is not a step in the flow.
 _Avoid_: Plugin, chain step, parallel call
 
 **Branch join**:

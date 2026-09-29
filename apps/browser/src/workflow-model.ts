@@ -56,6 +56,12 @@ export const initialEdges: WorkflowEdge[] = [
   { id: 'approval-action', from: 'approval', to: 'action' },
 ];
 
+export function freeSequence(nodes: readonly WorkflowNode[], kind: WorkflowNodeKind, from: number): number {
+  let index = from;
+  while (nodes.some((node) => node.id === `${kind}-${String(index)}`)) index += 1;
+  return index;
+}
+
 export function createNode(kind: WorkflowNodeKind, x: number, y: number, sequence: number): WorkflowNode {
   const template = templates[kind];
   const defaults: Partial<Record<WorkflowNodeKind, Record<string, unknown>>> = {
@@ -94,7 +100,7 @@ function linkError(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[
   if (from === to) return "A step can't connect to itself.";
   if (source.kind === 'end') return 'End is the last step and has no output.';
   if (target.kind === 'trigger') return 'The Trigger starts the workflow and has no input.';
-  if (isToolNode(edges, from) || isToolNode(edges, to)) return 'This MCP is attached to an Agent as a tool. Remove that tool connection to use it as a step in the flow.';
+  if (isToolNode(edges, from) || isToolNode(edges, to)) return 'This step is attached to an Agent as a tool. Remove that tool connection to use it as a step in the flow.';
   if (source.kind === 'condition' && !branch) return 'Use the True or False output of a Condition.';
   if (source.kind !== 'condition' && branch) return 'Only a Condition has True and False outputs.';
   if (flowOf(edges).some((edge) => edge.from === from && edge.to === to && edge.branch === branch)) return 'Those steps are already connected.';
@@ -143,15 +149,19 @@ export function connect(nodes: readonly WorkflowNode[], edges: readonly Workflow
   return typeof result === 'string' ? [...edges] : result;
 }
 
+const TOOL_KINDS: readonly WorkflowNodeKind[] = ['mcp', 'memory'];
+export const isToolCapable = (node: WorkflowNode): boolean => TOOL_KINDS.includes(node.kind);
+
 export function toolError(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], agentId: string, toolId: string): string | undefined {
   const agent = nodes.find((node) => node.id === agentId);
   const tool = nodes.find((node) => node.id === toolId);
-  if (!agent || !tool) return 'Choose an Agent and an MCP.';
-  if (agent.kind !== 'agent') return 'Only an Agent can use tools. Attach the MCP to an Agent.';
-  if (tool.kind !== 'mcp') return 'Only an MCP can be attached as a tool.';
-  if (edges.some((edge) => edge.role === 'tool' && edge.from === agentId && edge.to === toolId)) return 'That MCP is already a tool of this Agent.';
-  if (isToolNode(edges, toolId)) return 'That MCP is already a tool of another Agent. Add another MCP step for this Agent.';
-  if (linked(flowOf(edges), toolId)) return 'That MCP is already a step in the flow. Remove its flow connections to use it as a tool.';
+  if (!agent || !tool) return 'Choose an Agent and a tool.';
+  if (agent.kind !== 'agent') return 'Only an Agent can use tools. Attach the MCP or Memory step to an Agent.';
+  if (!isToolCapable(tool)) return 'Only an MCP or Memory step can be attached as a tool.';
+  if (edges.some((edge) => edge.role === 'tool' && edge.from === agentId && edge.to === toolId)) return 'That step is already a tool of this Agent.';
+  if (isToolNode(edges, toolId)) return 'That step is already a tool of another Agent. Add another step for this Agent.';
+  if (linked(flowOf(edges), toolId)) return 'That step is already in the flow. Remove its flow connections to use it as a tool.';
+  if (tool.kind === 'memory' && toolsOf(nodes, edges, agentId).some((item) => item.kind === 'memory')) return 'An Agent can have only one Memory tool.';
   if (toolEdgesOf(edges, agentId).length >= MAX_AGENT_TOOLS) return `An Agent can have at most ${String(MAX_AGENT_TOOLS)} tools.`;
   return undefined;
 }
@@ -164,7 +174,7 @@ export function attachTool(nodes: readonly WorkflowNode[], edges: readonly Workf
     return { ...config, policy: { ...policy, toolRounds: rounds >= 1 ? rounds : DEFAULT_TOOL_ROUNDS, effects: effects >= 1 ? effects : DEFAULT_TOOL_ROUNDS } };
   };
   return {
-    nodes: nodes.map((node) => node.id === agentId ? { ...node, config: bump(node.config ?? {}) } : node.id === toolId ? { ...node, config: { ...node.config, arguments: {} } } : node),
+    nodes: nodes.map((node) => node.id === agentId ? { ...node, config: bump(node.config ?? {}) } : node.id === toolId && node.kind === 'mcp' ? { ...node, config: { ...node.config, arguments: {} } } : node),
     edges: [...edges, { id: edgeId(edges, agentId, toolId, undefined, 'tool'), from: agentId, to: toolId, role: 'tool' }],
   };
 }

@@ -16,8 +16,8 @@ export const MAX_AGENT_TOOLS = 16;
 const kinds = new Set<NodeKind>(['trigger', 'memory', 'agent', 'condition', 'approval', 'mcp', 'end']);
 const forbidden = /(?:token|secret|password|credential|api.?key|private.?key|authorization|connection.?string|cookie|bearer)/iu;
 const messages: Record<string, string> = {
-  INVALID_TOOL_EDGE: 'A tool edge runs from one Agent to one MCP step; that MCP step has no other connections.',
-  DUPLICATE_TOOL: 'An Agent cannot have two tools with the same capability.',
+  INVALID_TOOL_EDGE: 'A tool edge runs from one Agent to one MCP or Memory step; that step has no other connections.',
+  DUPLICATE_TOOL: 'An Agent cannot have two tools with the same capability, or more than one Memory tool.',
   TOO_MANY_TOOLS: `An Agent can have at most ${MAX_AGENT_TOOLS} tools.`,
   TOOL_POLICY_REQUIRED: 'An Agent with tools needs at least one tool round and one external effect in its policy.',
   MISSING_INPUT: 'This step is not connected to a previous step.',
@@ -100,7 +100,7 @@ function validateNodes(nodes: readonly unknown[], pins: readonly CapabilityPin[]
 
 interface FlowModel { flow: GraphEdge[]; tools: GraphEdge[]; incoming: Map<string, GraphEdge[]>; outgoing: Map<string, GraphEdge[]>; toolsOf: Map<string, GraphEdge[]>; toolIn: Map<string, GraphEdge[]>; }
 
-const toolEdgeValid = (edge: GraphEdge, byId: ReadonlyMap<string, GraphNode>): boolean => edge.role === 'tool' && edge.branch === undefined && byId.get(edge.from)?.kind === 'agent' && byId.get(edge.to)?.kind === 'mcp';
+const toolEdgeValid = (edge: GraphEdge, byId: ReadonlyMap<string, GraphNode>): boolean => edge.role === 'tool' && edge.branch === undefined && byId.get(edge.from)?.kind === 'agent' && (byId.get(edge.to)?.kind === 'mcp' || byId.get(edge.to)?.kind === 'memory');
 const group = (edges: readonly GraphEdge[], key: 'from' | 'to'): Map<string, GraphEdge[]> => edges.reduce((map, edge) => map.set(edge[key], [...(map.get(edge[key]) ?? []), edge]), new Map<string, GraphEdge[]>());
 
 function validateEdges(edges: readonly unknown[], byId: ReadonlyMap<string, GraphNode>, issues: GraphIssue[]): FlowModel {
@@ -125,12 +125,15 @@ const successorInvalid = (node: GraphNode, next: readonly GraphEdge[]): boolean 
   return next.length === 0 || next.length > 2 || branches.some((branch) => branch !== 'true' && branch !== 'false') || new Set(branches).size !== branches.length;
 };
 
+const toolCapability = (node: GraphNode | undefined): string[] => node?.kind === 'mcp' ? [String(node.config['capability'])] : [];
+
 function validateAgentTools(node: GraphNode, byId: ReadonlyMap<string, GraphNode>, model: FlowModel, issues: GraphIssue[]): void {
   const attached = model.toolsOf.get(node.id) ?? [];
   if (attached.length === 0) return;
   if (attached.length > MAX_AGENT_TOOLS) issues.push(issue(`/nodes/${node.id}`, 'TOO_MANY_TOOLS'));
-  const capabilities = attached.map((edge) => byId.get(edge.to)?.config['capability']);
-  if (new Set(capabilities).size !== capabilities.length) issues.push(issue(`/nodes/${node.id}`, 'DUPLICATE_TOOL'));
+  const capabilities = attached.flatMap((edge) => toolCapability(byId.get(edge.to)));
+  const memoryTools = attached.filter((edge) => byId.get(edge.to)?.kind === 'memory').length;
+  if (new Set(capabilities).size !== capabilities.length || memoryTools > 1) issues.push(issue(`/nodes/${node.id}`, 'DUPLICATE_TOOL'));
   const limits = node.config['policy'];
   if (policy(limits) && (limits.toolRounds < 1 || limits.effects < 1)) issues.push(issue(`/nodes/${node.id}`, 'TOOL_POLICY_REQUIRED'));
 }
@@ -138,7 +141,7 @@ function validateAgentTools(node: GraphNode, byId: ReadonlyMap<string, GraphNode
 function validateToolNode(node: GraphNode, model: FlowModel, issues: GraphIssue[]): boolean {
   const attached = model.toolIn.get(node.id) ?? [];
   if (attached.length === 0) return false;
-  if (node.kind !== 'mcp' || attached.length > 1 || (model.incoming.get(node.id) ?? []).length > 0 || (model.outgoing.get(node.id) ?? []).length > 0) issues.push(issue(`/nodes/${node.id}`, 'INVALID_TOOL_EDGE'));
+  if (node.kind !== 'mcp' && node.kind !== 'memory' || attached.length > 1 || (model.incoming.get(node.id) ?? []).length > 0 || (model.outgoing.get(node.id) ?? []).length > 0) issues.push(issue(`/nodes/${node.id}`, 'INVALID_TOOL_EDGE'));
   return true;
 }
 
@@ -166,7 +169,7 @@ function validateFlowNode(node: GraphNode, byId: ReadonlyMap<string, GraphNode>,
     let ancestor = immediateDominator(dominated, node.id);
     while (ancestor !== undefined && byId.get(ancestor)?.kind !== 'agent') ancestor = immediateDominator(dominated, ancestor);
     const agent = ancestor === undefined ? undefined : byId.get(ancestor);
-    const toolCapabilities = agent ? (model.toolsOf.get(agent.id) ?? []).map((edge) => String(byId.get(edge.to)?.config['capability'])) : [];
+    const toolCapabilities = agent ? (model.toolsOf.get(agent.id) ?? []).flatMap((edge) => toolCapability(byId.get(edge.to))) : [];
     if (agent && !effectiveCapabilities(agent.config, toolCapabilities).includes(String(node.config['capability']))) issues.push(issue(at, 'UNGRANTED_CAPABILITY'));
     const args = node.config['arguments'];
     if (object(args) && Object.values(args).some((value) => { const source = typeof value === 'string' ? /^\$node\.([a-zA-Z0-9_-]+)\./u.exec(value)?.[1] : undefined; return source !== undefined && !prior(source, node.id); })) issues.push(issue(at, 'INVALID_MAPPING'));
@@ -214,10 +217,11 @@ export function validateGraph(value: unknown, pins: readonly CapabilityPin[] = [
 }
 
 const compileNode = (node: GraphNode, graph: GraphDraft, toolTargets: ReadonlySet<string>, byId: ReadonlyMap<string, GraphNode>): CompiledNode => {
-  if (toolTargets.has(node.id)) return { id: node.id, kind: 'mcp', config: { ...node.config, arguments: {} }, tool: true, next: null };
+  if (toolTargets.has(node.id)) return node.kind === 'memory' ? { id: node.id, kind: 'memory', config: node.config, tool: true, next: null } : { id: node.id, kind: 'mcp', config: { ...node.config, arguments: {} }, tool: true, next: null };
   const flow = graph.edges.filter((edge) => edge.from === node.id && isFlowEdge(edge));
   const tools = node.kind === 'agent' ? graph.edges.filter((edge) => edge.from === node.id && edge.role === 'tool').map((edge) => edge.to) : [];
-  const config = tools.length ? { ...node.config, allowedCapabilities: effectiveCapabilities(node.config, tools.map((id) => String(byId.get(id)?.config['capability']))) } : node.config;
+  const capabilities = tools.flatMap((id) => toolCapability(byId.get(id)));
+  const config = capabilities.length ? { ...node.config, allowedCapabilities: effectiveCapabilities(node.config, capabilities) } : node.config;
   const branch = (name: 'true' | 'false'): string | null => flow.find((edge) => edge.branch === name)?.to ?? null;
   return { id: node.id, kind: node.kind as NodeKind, config, ...(node.kind === 'agent' ? { instructions: node.instructions } : {}), ...(tools.length ? { tools } : {}), next: node.kind === 'end' ? null : node.kind === 'condition' ? { true: branch('true'), false: branch('false') } : flow[0]!.to };
 };

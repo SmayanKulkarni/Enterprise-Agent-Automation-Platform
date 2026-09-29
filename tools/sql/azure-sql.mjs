@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import sql from 'mssql';
+import { seedSource } from './admin-seed.mjs';
 
 const workdir = process.cwd();
 const actionName = process.argv[2];
@@ -50,8 +51,10 @@ try {
       );`);
   }
   for (const file of files) {
-    const source = await readFile(resolve(workdir, 'database', folder, file), 'utf8');
+    const raw = await readFile(resolve(workdir, 'database', folder, file), 'utf8');
     const id = file.replace(/\.sql$/u, '');
+    const source = actionName === 'seed' ? seedSource(file, raw, process.env) : raw;
+    if (source === undefined) { console.log(`Skipped ${id}.`); continue; }
     if (actionName !== 'migrate') { await pool.request().batch(source); console.log(`Passed ${id}.`); continue; }
     const checksum = createHash('sha256').update(source).digest('hex');
     const prior = await pool.request().input('id', sql.NVarChar(255), id).query('SELECT digest FROM dbo.platform_schema_migrations WHERE id = @id;');

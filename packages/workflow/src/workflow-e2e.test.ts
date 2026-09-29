@@ -27,11 +27,13 @@ const fail = (code: string): never => { throw Object.assign(new Error(code), { c
 class MemoryStudio implements StudioStore {
   private readonly drafts = new Map<string, StudioStoredDraft<StudioDraft | GraphDraft>>();
   private readonly commands = new Map<string, { id: string; digest: string; saved: StudioStoredDraft<StudioDraft | GraphDraft> }>();
+  private readonly history = new Map<string, StudioStoredDraft<StudioDraft | GraphDraft>[]>();
   readonly checks = new Map<string, StudioRunEvidence[]>();
-  async create(context: ExecutionContext, id: string, draft: StudioDraft | GraphDraft, key?: string) { const valueDigest = await digest(draft); const receiptKey = `${context.tenantId}:${key}`; const previous = key ? this.commands.get(receiptKey) : undefined; if (previous) { if (previous.id !== id || previous.digest !== valueDigest) fail('CONFLICT'); return previous.saved; } if (this.drafts.has(id)) fail('CONFLICT'); const saved = { id, tenantId: String(context.tenantId), revision: 1, state: 'draft' as const, digest: valueDigest, author: context.userId, draft, createdAt: new Date().toISOString() }; this.drafts.set(id, saved); if (key) this.commands.set(receiptKey, { id, digest: valueDigest, saved }); return saved; }
+  async create(context: ExecutionContext, id: string, draft: StudioDraft | GraphDraft, key?: string) { const valueDigest = await digest(draft); const receiptKey = `${context.tenantId}:${key}`; const previous = key ? this.commands.get(receiptKey) : undefined; if (previous) { if (previous.id !== id || previous.digest !== valueDigest) fail('CONFLICT'); return previous.saved; } if (this.drafts.has(id)) fail('CONFLICT'); const saved = { id, tenantId: String(context.tenantId), revision: 1, state: 'draft' as const, digest: valueDigest, author: context.userId, draft, createdAt: new Date().toISOString() }; this.drafts.set(id, saved); this.history.set(id, [saved]); if (key) this.commands.set(receiptKey, { id, digest: valueDigest, saved }); return saved; }
   async get(context: ExecutionContext, id: string) { const saved = this.drafts.get(id); if (!saved || saved.tenantId !== context.tenantId) fail('DENIED'); return saved!; }
   async list(context: ExecutionContext) { return [...this.drafts.values()].filter((item) => item.tenantId === context.tenantId); }
-  async save(context: ExecutionContext, id: string, expectedRevision: number, draft: StudioDraft | GraphDraft, key: string) { const valueDigest = await digest(draft); const receiptKey = `${context.tenantId}:${key}`; const previous = this.commands.get(receiptKey); if (previous) { if (previous.id !== id || previous.digest !== valueDigest) fail('CONFLICT'); return previous.saved; } const current = await this.get(context, id); if (current.revision !== expectedRevision) fail('STALE'); const saved = { ...current, revision: current.revision + 1, digest: valueDigest, draft }; this.drafts.set(id, saved); this.commands.set(receiptKey, { id, digest: valueDigest, saved }); return saved; }
+  async revisions(context: ExecutionContext, id: string) { return [...this.history.get(id) ?? []].filter((item) => item.tenantId === context.tenantId).sort((left, right) => right.revision - left.revision); }
+  async save(context: ExecutionContext, id: string, expectedRevision: number, draft: StudioDraft | GraphDraft, key: string) { const valueDigest = await digest(draft); const receiptKey = `${context.tenantId}:${key}`; const previous = this.commands.get(receiptKey); if (previous) { if (previous.id !== id || previous.digest !== valueDigest) fail('CONFLICT'); return previous.saved; } const current = await this.get(context, id); if (current.revision !== expectedRevision) fail('STALE'); const saved = { ...current, revision: current.revision + 1, digest: valueDigest, draft }; this.drafts.set(id, saved); this.history.set(id, [...this.history.get(id) ?? [], saved]); this.commands.set(receiptKey, { id, digest: valueDigest, saved }); return saved; }
   async appendRun(context: ExecutionContext, id: string, evidence: StudioRunEvidence) { await this.get(context, id); this.checks.set(id, [...this.checks.get(id) ?? [], evidence]); }
   async appendReview() {}
   async rememberCommand(_tenantId: string, _key: string, _requestDigest: string, receipt: StudioReceipt) { return receipt; }
@@ -126,6 +128,13 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   const saveKey = randomUUID();
   expect((await command(editor, 'studio.save-draft', 1, { id: draftId, draft: valid }, saveKey)).status).toBe(200);
   expect((await command(editor, 'studio.save-draft', 1, { id: draftId, draft: valid }, saveKey)).payload).toMatchObject({ revision: 2, state: 'draft' });
+  const history = await projection(admin, `workflow-revisions/${draftId}`);
+  expect(history.status).toBe(200);
+  expect(history.payload['records']).toMatchObject([{ id: draftId, revision: 2, state: 'draft', graph: valid }, { id: draftId, revision: 1, state: 'draft', graph: first }]);
+  expect(JSON.stringify(history.payload['records'])).not.toContain('author');
+  expect((await projection(editor, 'workflow-revisions')).payload['error']).toMatchObject({ category: 'invalid' });
+  expect((await projection(editor, `workflow-revisions/${randomUUID()}`)).payload['records']).toEqual([]);
+  expect((await projection(editor, `workflow-revisions/${draftId}`, otherTenant)).payload['error']).toMatchObject({ category: 'denied' });
   const checked = await command(editor, 'workflow.check', 2, { id: draftId });
   expect(checked.payload).toMatchObject({ state: 'passed', issues: [] });
   expect((await command(editor, 'workflow.check', 2, { id: draftId, tenantId: otherTenant })).payload['error']).toMatchObject({ category: 'invalid' });

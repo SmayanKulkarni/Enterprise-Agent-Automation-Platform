@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
-import { attachTool, conditionFields, conditionSources, connect, connectionError, disconnect, expiryInstant, filterLibrary, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, syncChainGrants, toolError, toolsOf, parseTriggerInput, schemaFieldNameError, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
+import { createNode, freeSequence, attachTool, conditionFields, conditionSources, connect, connectionError, disconnect, expiryInstant, filterLibrary, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, syncChainGrants, toolError, toolsOf, parseTriggerInput, schemaFieldNameError, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
 
 describe('workflow graph', () => {
   test('only creates valid, non-duplicate connections', () => {
@@ -157,7 +157,7 @@ describe('workflow graph', () => {
       const edges = [flow('trigger', 'one'), flow('one', 'step'), toolEdge('one', 'crm')];
       expect(connectionError(nodes, edges, 'crm', 'end')).toMatch(/attached to an Agent as a tool/);
       expect(connectionError(nodes, edges, 'step', 'end')).toBeUndefined();
-      expect(toolError(nodes, edges, 'one', 'step')).toMatch(/already a step in the flow/);
+      expect(toolError(nodes, edges, 'one', 'step')).toMatch(/already in the flow/);
       expect(toolError(nodes, edges, 'two', 'crm')).toMatch(/another Agent/);
       expect(toolError(nodes, edges, 'one', 'crm')).toMatch(/already a tool of this Agent/);
       expect(toolError(nodes, edges, 'trigger', 'crm')).toMatch(/Only an Agent/);
@@ -173,6 +173,36 @@ describe('workflow graph', () => {
       expect(state.nodes[0]?.config?.['policy']).toMatchObject({ toolRounds: 3, effects: 3 });
       expect(state.nodes[1]?.config?.['arguments']).toEqual({});
       expect(attachTool(state.nodes, state.edges, 'agent', 'm16').edges).toEqual(state.edges);
+    });
+
+    test('a Memory step can be attached as the one Memory tool of an Agent, next to MCP tools', () => {
+      const memoryConfig = { limit: 3, maxChars: 2000, policy: { milliseconds: 30000, attempts: 1, tokens: 0, cost: 0, toolRounds: 0, effects: 0 } };
+      const nodes = [node('trigger', 'trigger'), node('one', 'agent', agentConfig), node('two', 'agent', agentConfig), node('crm', 'mcp'), node('recall', 'memory', memoryConfig), node('extra', 'memory', memoryConfig), node('end', 'end')];
+      const start = attachTool(nodes, [flow('trigger', 'one'), flow('one', 'end')], 'one', 'crm');
+      const withMemory = attachTool(start.nodes, start.edges, 'one', 'recall');
+      expect(toolsOf(withMemory.nodes, withMemory.edges, 'one').map((item) => item.id)).toEqual(['crm', 'recall']);
+      expect(withMemory.nodes.find((item) => item.id === 'recall')?.config).toEqual(memoryConfig);
+      expect(toolError(withMemory.nodes, withMemory.edges, 'one', 'extra')).toBe('An Agent can have only one Memory tool.');
+      expect(toolError(withMemory.nodes, withMemory.edges, 'two', 'recall')).toMatch(/another Agent/);
+      expect(toolError(withMemory.nodes, withMemory.edges, 'one', 'recall')).toMatch(/already a tool of this Agent/);
+      expect(toolError(withMemory.nodes, withMemory.edges, 'two', 'extra')).toBeUndefined();
+      expect(connectionError(withMemory.nodes, withMemory.edges, 'recall', 'end')).toMatch(/attached to an Agent as a tool/);
+      expect(connectionError(withMemory.nodes, withMemory.edges, 'trigger', 'recall')).toMatch(/attached to an Agent as a tool/);
+    });
+
+    test('a Memory step already in the flow cannot become a tool and Memory tools do not count as chain grants', () => {
+      const nodes = [node('trigger', 'trigger'), node('one', 'agent', agentConfig), node('read', 'memory'), node('end', 'end')];
+      const edges = [flow('trigger', 'read'), flow('read', 'one'), flow('one', 'end')];
+      expect(toolError(nodes, edges, 'one', 'read')).toMatch(/already in the flow/);
+      const tooled = attachTool([node('trigger', 'trigger'), node('one', 'agent', agentConfig), node('recall', 'memory')], [flow('trigger', 'one')], 'one', 'recall');
+      expect(syncChainGrants(tooled.nodes, tooled.edges).find((item) => item.id === 'one')?.config?.['allowedCapabilities']).toBeUndefined();
+    });
+
+    test('memory tools count toward the sixteen-tool limit', () => {
+      const mcps = Array.from({ length: 16 }, (_, index) => node(`m${index}`, 'mcp'));
+      let state = { nodes: [node('agent', 'agent', agentConfig), node('recall', 'memory'), ...mcps], edges: [] as WorkflowEdge[] };
+      for (const item of mcps) state = attachTool(state.nodes, state.edges, 'agent', item.id);
+      expect(toolError(state.nodes, state.edges, 'agent', 'recall')).toMatch(/at most 16/);
     });
 
     test('an existing tool budget is kept when a tool is attached', () => {
@@ -201,4 +231,13 @@ describe('workflow graph', () => {
     expect(synced.find((item) => item.id === 'one')?.config?.['allowedCapabilities']).toBeUndefined();
     expect(syncChainGrants(synced, edges)).toEqual(synced);
   });
+});
+
+test('a new step never reuses the id of a step loaded from a saved revision', () => {
+  const stub = (id: string, kind: WorkflowNode['kind']): WorkflowNode => ({ id, kind, title: id, detail: '', x: 0, y: 0, instructions: '' });
+  const loaded = [stub('mcp-1', 'mcp'), stub('mcp-2', 'mcp'), stub('agent-1', 'agent')];
+  expect(freeSequence(loaded, 'mcp', 1)).toBe(3);
+  expect(freeSequence(loaded, 'memory', 1)).toBe(1);
+  expect(freeSequence(loaded, 'agent', 2)).toBe(2);
+  expect(createNode('mcp', 0, 0, freeSequence(loaded, 'mcp', 1)).id).toBe('mcp-3');
 });

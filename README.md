@@ -932,6 +932,7 @@ Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 | `VITE_PLATFORM_API_ORIGIN` | Browser | API origin when separate |
 | `AZURE_SQL_CONNECTION_STRING` | API, Functions | Enables SQL mode |
 | `PLATFORM_LOCAL_CLERK_SUBJECT`, `PLATFORM_LOCAL_TENANTS` | Local API | Fixture mode access |
+| `ADMIN_TEST_CLERK_SUBJECT` | `sql:seed:demo` | Clerk subject seeded as admin in each `PLATFORM_LOCAL_TENANTS` tenant, using `CLERK_ISSUER`; the admin seed is skipped when unset |
 | `WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION` | API, Functions | Wrapping key version, for example `v1` |
 | `WORKFLOW_OPENROUTER_WRAPPING_KEY` | API, Functions | 32-byte base64url key |
 | `WORKFLOW_OPENROUTER_MAX_COST_PER_1K_TOKENS` | API, Functions | Cost rate used only when OpenRouter reports no per-request cost |

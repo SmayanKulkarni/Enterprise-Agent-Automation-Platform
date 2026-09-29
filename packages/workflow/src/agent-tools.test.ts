@@ -33,14 +33,14 @@ class Store {
   async workerDefinition() { return this.definition; }
 }
 
-interface Fixture { store: Store; worker: WorkflowWorker; runId: string; requests: ModelRequest[]; invocations: { capability: string; args: Record<string, unknown> }[]; run(): Promise<WorkflowRecord<WorkflowRun>>; approve(decision: 'approve' | 'reject'): Promise<void>; }
-interface Options { risk?: CapabilityPin['risk']; script: (call: number, request: ModelRequest) => ModelResult | Promise<ModelResult>; outcome?: 'succeeded' | 'unknown-outcome' | 'failed'; agentConfig?: Record<string, unknown>; graph?: (base: GraphDraft) => GraphDraft; input?: Record<string, unknown>; }
+interface Fixture { store: Store; worker: WorkflowWorker; memory: InMemoryHostedMemoryPort; runId: string; requests: ModelRequest[]; invocations: { capability: string; args: Record<string, unknown> }[]; run(): Promise<WorkflowRecord<WorkflowRun>>; approve(decision: 'approve' | 'reject'): Promise<void>; }
+interface Options { risk?: CapabilityPin['risk']; script: (call: number, request: ModelRequest) => ModelResult | Promise<ModelResult>; outcome?: 'succeeded' | 'unknown-outcome' | 'failed'; agentConfig?: Record<string, unknown>; graph?: (base: GraphDraft) => GraphDraft; pins?: CapabilityPin[]; input?: Record<string, unknown>; memoryTenants?: string[]; }
 
 async function fixture(options: Options): Promise<Fixture> {
   const store = new Store(); const runId = '99999999-9999-4999-8999-999999999999';
   const base: GraphDraft = { kind: 'graph-v1', nodes: [node('start', 'trigger', { mode: 'manual', inputSchema: empty }), agent(options.agentConfig), tool('crm', 'lookup'), node('end', 'end', {})], edges: [flowEdge('start', 'agent'), flowEdge('agent', 'end'), { id: 'tool', from: 'agent', to: 'crm', role: 'tool' }] };
   const draft = options.graph ? options.graph(base) : base;
-  const definition = await compileGraph(definitionId, 1, draft, [pin('crm', 'lookup', options.risk ?? 'R1')]);
+  const definition = await compileGraph(definitionId, 1, draft, options.pins ?? [pin('crm', 'lookup', options.risk ?? 'R1')]);
   store.definition = { id: definitionId, draftId: definitionId, draftRevision: 1, digest: definition.digest, definition };
   await store.workerWrite(tenant, 'installation', installationId, 0, 'healthy', { route: 'public', endpoint: 'https://example.com/mcp', health: 'healthy', manifest: { version: '1', certified: true, digest: manifestDigest, capabilities: [] } });
   await store.workerWrite(tenant, 'grant', grantId, 0, 'active', {});
@@ -49,13 +49,14 @@ async function fixture(options: Options): Promise<Fixture> {
   const requests: ModelRequest[] = []; const invocations: { capability: string; args: Record<string, unknown> }[] = []; let calls = 0;
   const model: ModelPort = { complete: async (request) => { requests.push(request); calls += 1; return options.script(calls, request); } };
   const mcp: McpPort = { invoke: async (_installation, capability, args) => { invocations.push({ capability, args }); return options.outcome === 'unknown-outcome' ? { outcome: 'unknown-outcome' } : options.outcome === 'failed' ? { outcome: 'failed' } : { outcome: 'succeeded', output: { result: `found:${String(args['query'])}` } }; } };
-  const worker = new WorkflowWorker(store as unknown as WorkflowStore, model, mcp, new InMemoryHostedMemoryPort([tenant]));
+  const memory = new InMemoryHostedMemoryPort(options.memoryTenants ?? [tenant]);
+  const worker = new WorkflowWorker(store as unknown as WorkflowStore, model, mcp, memory);
   const read = async () => (await store.workerRead<WorkflowRun>(tenant, 'run', runId))!;
   const approve = async (decision: 'approve' | 'reject') => {
     const current = await read(); const waiting = current.data.waiting!; const data: WorkflowRun = { ...current.data, status: decision === 'approve' ? 'running' : 'failed', history: [...current.data.history, { nodeId: waiting.nodeId, kind: 'approval', state: decision === 'approve' ? 'completed' : 'failed', at: new Date().toISOString(), detail: decision, bindingDigest: waiting.bindingDigest }] };
     delete data.waiting; await store.workerWrite(tenant, 'run', runId, current.version, data.status, data);
   };
-  return { store, worker, runId, requests, invocations, run: read, approve };
+  return { store, worker, memory, runId, requests, invocations, run: read, approve };
 }
 
 const call = (id: string, name: string, args: Record<string, unknown>): ModelResult => ({ output: {}, model: 'gpt-4.1', tokens: 10, cost: 0.01, toolCall: { id, name, arguments: args } });
@@ -159,4 +160,101 @@ test('an unconnected condition branch completes the run', async () => {
   expect(await f.worker.step(tenant, f.runId, definitionId, 'start')).toEqual({ next: 'check' });
   expect(await f.worker.step(tenant, f.runId, definitionId, 'check')).toEqual({ completed: true });
   expect((await f.run()).state).toBe('completed');
+});
+
+const recall = node('recall', 'memory', { limit: 3, maxChars: 500, policy: { milliseconds: 30000, attempts: 1, tokens: 0, cost: 0, toolRounds: 0, effects: 0 } });
+const attached = (from: string, to: string) => ({ id: `${from}-${to}-tool`, from, to, role: 'tool' as const });
+const withMemory = (base: GraphDraft): GraphDraft => ({ ...base, nodes: [...base.nodes, recall], edges: [...base.edges, attached('agent', 'recall')] });
+const memoryOnly = (base: GraphDraft): GraphDraft => ({ ...base, nodes: [...base.nodes.filter((item) => item.id !== 'crm'), recall], edges: [...base.edges.filter((item) => item.role !== 'tool'), attached('agent', 'recall')] });
+const roomy = { policy: { ...policy, toolRounds: 5, effects: 5 } };
+const noteInput = { note: 'prefers email' };
+const toolContents = async (f: Fixture) => (await f.run()).data.agents?.['agent']?.transcript.filter((entry) => entry.role === 'tool').map((entry) => JSON.parse(entry.content) as Record<string, unknown>) ?? [];
+
+async function seedMemory(f: Fixture): Promise<void> {
+  const sourceDigest = 'c'.repeat(64); const id = '12345678-1234-4234-8234-123456789012';
+  await f.memory.upsert(`tenant-${tenant}`, { id, text: 'Customer prefers email', metadata: { stableDefinitionId: definitionId, definitionId, producingRevision: 1, type: 'task-fact', sourceId: 'input:earlier', sourceDigest, state: 'promoted', expiresAt: new Date(Date.now() + 86400000).toISOString() } });
+  await f.store.workerWrite(tenant, 'memory-item', id, 0, 'promoted', { stableDefinitionId: definitionId, definitionId, producingRevision: 1, type: 'task-fact', sourceId: 'input:earlier', sourceDigest, sourceKind: 'input', fingerprint: 'd'.repeat(64), vectorState: 'ready' });
+}
+
+test('memory_search returns provenance-bearing promoted items inside one agent step', async () => {
+  const f = await fixture({ graph: memoryOnly, script: (n) => n === 1 ? call('c1', 'memory_search', { query: 'email' }) : answer('done') });
+  await seedMemory(f);
+  const step = await start(f);
+  expect(await step()).toEqual({ next: 'end' });
+  expect(f.requests[0]?.tools?.map((item) => item.name)).toEqual(['memory_search', 'memory_save']);
+  const [content] = await toolContents(f);
+  expect(content).toMatchObject({ status: 'success', items: [{ text: 'Customer prefers email', sourceId: 'input:earlier', sourceDigest: 'c'.repeat(64) }] });
+  const run = await f.run();
+  expect(run.data.agents?.['agent']).toMatchObject({ rounds: 1, effects: 0 });
+  expect(run.data.history.map((item) => `${item.nodeId}:${item.kind}:${item.state}:${item.detail ?? ''}`)).toContain('recall:memory:completed:tool:1');
+  expect((await f.store.workerList(tenant, 'memory-retrieval'))).toHaveLength(1);
+  expect(f.invocations).toHaveLength(0);
+});
+
+test('memory_search with an empty query or a wrong argument type returns INVALID_ARGUMENTS', async () => {
+  const f = await fixture({ graph: memoryOnly, script: (n) => n === 1 ? call('c1', 'memory_search', { query: '   ' }) : n === 2 ? call('c2', 'memory_search', { query: 4 }) : answer('done') });
+  const step = await start(f);
+  expect(await step()).toEqual({ next: 'end' });
+  expect(await toolContents(f)).toEqual([{ error: 'INVALID_ARGUMENTS' }, { error: 'INVALID_ARGUMENTS' }]);
+});
+
+test('memory_save stages a pending proposal from the run input and counts as an effect', async () => {
+  const f = await fixture({ graph: memoryOnly, input: noteInput, script: (n) => n === 1 ? call('c1', 'memory_save', { type: 'task-fact', text: 'Customer prefers email', excerpt: 'prefers email' }) : answer('done') });
+  const step = await start(f);
+  expect(await step()).toEqual({ next: 'end' });
+  const items = await f.store.workerList<{ sourceId: string; sourceDigest: string }>(tenant, 'memory-item');
+  expect(items).toHaveLength(1);
+  expect(items[0]).toMatchObject({ state: 'pending', data: { sourceId: `input:${f.runId}`, sourceDigest: 'b'.repeat(64) } });
+  expect(f.memory.items.get(`tenant-${tenant}:${items[0]!.id}`)?.metadata.state).toBe('pending');
+  expect(await toolContents(f)).toEqual([{ saved: true, state: 'pending', id: items[0]!.id }]);
+  expect((await f.run()).data.agents?.['agent']).toMatchObject({ rounds: 1, effects: 1 });
+  expect(await step()).toEqual({ next: 'end' });
+  expect(await f.store.workerList(tenant, 'memory-item')).toHaveLength(1);
+});
+
+test('memory_save rejects uncited excerpts, secrets and unknown fields without staging anything pending', async () => {
+  const f = await fixture({ graph: memoryOnly, input: noteInput, agentConfig: roomy, script: (n) => n === 1 ? call('c1', 'memory_save', { type: 'task-fact', text: 'Customer likes phone', excerpt: 'likes phone' }) : n === 2 ? call('c2', 'memory_save', { type: 'task-fact', text: 'password: hunter2', excerpt: 'prefers email' }) : n === 3 ? call('c3', 'memory_save', { type: 'task-fact', text: 'ok', excerpt: 'prefers email', sourceId: 'input:x' }) : n === 4 ? call('c4', 'memory_save', { type: 'inferred', text: 'ok', excerpt: 'prefers email' }) : answer('done') });
+  const step = await start(f);
+  expect(await step()).toEqual({ next: 'end' });
+  expect(await toolContents(f)).toEqual(Array.from({ length: 4 }, () => ({ error: 'INVALID_ARGUMENTS' })));
+  expect((await f.store.workerList(tenant, 'memory-item')).filter((item) => item.state === 'pending')).toHaveLength(0);
+  expect((await f.run()).data.agents?.['agent']?.effects).toBe(0);
+});
+
+test('memory tools report MEMORY_UNAVAILABLE when operational memory is disabled for the tenant', async () => {
+  const f = await fixture({ graph: memoryOnly, input: noteInput, memoryTenants: ['00000000-0000-4000-8000-000000000000'], script: (n) => n === 1 ? call('c1', 'memory_search', { query: 'email' }) : n === 2 ? call('c2', 'memory_save', { type: 'task-fact', text: 'ok', excerpt: 'prefers email' }) : answer('done') });
+  const step = await start(f);
+  expect(await step()).toEqual({ next: 'end' });
+  expect(await toolContents(f)).toEqual([{ error: 'MEMORY_UNAVAILABLE' }, { error: 'MEMORY_UNAVAILABLE' }]);
+});
+
+test('memory_save past the external-effect limit fails the run', async () => {
+  const f = await fixture({ graph: memoryOnly, input: noteInput, agentConfig: { policy: { ...policy, toolRounds: 5, effects: 1 } }, script: () => call('c', 'memory_save', { type: 'task-fact', text: 'Customer prefers email', excerpt: 'prefers email' }) });
+  const step = await start(f);
+  expect(await step()).toEqual({ failed: true });
+  expect(f.requests.at(-1)?.toolChoice).toBe('none');
+  expect((await f.run()).state).toBe('failed');
+});
+
+test('an agent drives three MCP capabilities and memory through separate tool calls in one step', async () => {
+  const many = (base: GraphDraft): GraphDraft => withMemory({ ...base, nodes: [...base.nodes, tool('files', 'files.read'), tool('notes', 'notes')], edges: [...base.edges, attached('agent', 'files'), attached('agent', 'notes')] });
+  const pins = [pin('crm', 'lookup', 'R1'), pin('files', 'files.read', 'R1'), pin('notes', 'notes', 'R1')];
+  const f = await fixture({ graph: many, pins, input: noteInput, agentConfig: roomy, script: (n) => n === 1 ? call('c1', 't0_lookup', { query: 'a' }) : n === 2 ? call('c2', 't1_files_read', { query: 'b' }) : n === 3 ? call('c3', 't2_notes', { query: 'c' }) : n === 4 ? call('c4', 'memory_save', { type: 'task-fact', text: 'Customer prefers email', excerpt: 'prefers email' }) : answer('done') });
+  const step = await start(f);
+  expect(await step()).toEqual({ next: 'end' });
+  expect(f.requests[0]?.tools?.map((item) => item.name)).toEqual(['t0_lookup', 't1_files_read', 't2_notes', 'memory_search', 'memory_save']);
+  expect(f.invocations.map((item) => item.capability)).toEqual(['lookup', 'files.read', 'notes']);
+  expect((await f.run()).data.agents?.['agent']).toMatchObject({ rounds: 4, effects: 4 });
+  expect((await f.run()).data.outputs['agent']).toEqual({ result: 'done' });
+});
+
+test('three MCPs on one agent keep independent approval bindings per call', async () => {
+  const many = (base: GraphDraft): GraphDraft => ({ ...base, nodes: [...base.nodes, tool('files', 'files.read')], edges: [...base.edges, attached('agent', 'files')] });
+  const f = await fixture({ graph: many, risk: 'R2', pins: [pin('crm', 'lookup', 'R2'), pin('files', 'files.read', 'R1')], agentConfig: roomy, script: (n) => n === 1 ? call('c1', 't1_files_read', { query: 'b' }) : n === 2 ? call('c2', 't0_lookup', { query: 'a' }) : answer('done') });
+  const step = await start(f);
+  expect(await step()).toMatchObject({ waiting: 'approval' });
+  expect(f.invocations.map((item) => item.capability)).toEqual(['files.read']);
+  await f.approve('approve');
+  expect(await step()).toEqual({ next: 'end' });
+  expect(f.invocations.map((item) => item.capability)).toEqual(['files.read', 'lookup']);
 });

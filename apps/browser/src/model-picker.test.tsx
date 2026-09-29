@@ -30,9 +30,18 @@ describe('model picker', () => {
     expect(modelProblem(catalog[1], 'openai/gpt-5', catalog.length, true, true, 'OpenRouter')).toBeUndefined();
   });
 
+  test('a missing tools field is unknown, not unsupported: only an explicit false is rejected', () => {
+    const unknown = parseCatalogModels([{ id: 'x/stale', structuredOutput: true }])[0];
+    expect(modelProblem(unknown, 'x/stale', 1, true, true, 'OpenRouter')).toBeUndefined();
+    expect(modelProblem({ ...model('x/no'), tools: false }, 'x/no', 1, true, true, 'OpenRouter')).toMatch(/tool calling/);
+    expect(modelProblem({ ...model('x/yes'), tools: true }, 'x/yes', 1, true, true, 'OpenRouter')).toBeUndefined();
+    expect(describeModel(unknown)).toBe('structured output');
+  });
+
   test('parses catalog projections defensively and describes price and context', () => {
     const parsed = parseCatalogModels([{ id: 'a/b', structuredOutput: true, tools: true, contextLength: 1000, promptPrice: 0.000001, completionPrice: 0.000002 }, { id: 'c/d', structuredOutput: false }, { id: 5 }, null]);
-    expect(parsed.map((item) => [item.id, item.tools])).toEqual([['a/b', true], ['c/d', false]]);
+    expect(parsed.map((item) => [item.id, item.tools])).toEqual([['a/b', true], ['c/d', undefined]]);
+    expect(parseCatalogModels([{ id: 'e/f', structuredOutput: true, tools: false }])[0]?.tools).toBe(false);
     expect(describeModel(parsed[0])).toBe('1,000 token context · $1.00 in / $2.00 out per 1M tokens · structured output · tool calling');
     expect(parseCatalogModels('nope')).toEqual([]);
   });

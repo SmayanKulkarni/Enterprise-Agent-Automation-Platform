@@ -492,3 +492,12 @@ dialog.trace-drawer { position: fixed; inset: 0 0 0 auto; margin: 0; width: min(
 @media (prefers-reduced-motion: reduce) { .eyebrow-dot, .pv-edge { animation: none; } }
 :root[data-theme='dark'] .landing-cta, :root[data-theme='dark'] .governance-visual { border: 1px solid var(--line); }
 .connector-certify > .button { justify-self: start; }
+
+.revision-list { display: grid; gap: var(--space-2); margin: var(--space-4) 0 0; padding: 0; list-style: none; }
+.revision-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2) var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--panel); }
+.revision-item[data-current='true'] { border-color: var(--accent-line); background: var(--accent-surface); }
+.revision-main { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.revision-meta { grid-column: 1; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); color: var(--muted); font-size: var(--text-xs); }
+.revision-meta code { font-family: 'Geist Mono', ui-monospace, monospace; }
+.revision-item > button { grid-column: 2; grid-row: 1 / span 2; }
+@media (max-width: 640px) { .revision-item { grid-template-columns: 1fr; } .revision-item > button { grid-column: 1; grid-row: auto; justify-self: start; } }

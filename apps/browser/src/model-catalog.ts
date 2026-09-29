@@ -1,7 +1,7 @@
 export const VISIBLE_LIMIT = 50;
 export const OTHER_DEPLOYMENT = '__other__';
 
-export type CatalogModel = { id: string; structuredOutput: boolean; tools: boolean; name?: string; contextLength?: number; promptPrice?: number; completionPrice?: number };
+export type CatalogModel = { id: string; structuredOutput: boolean; tools?: boolean | undefined; name?: string; contextLength?: number; promptPrice?: number; completionPrice?: number };
 export type CatalogStatus = 'ready' | 'loading' | 'failed';
 
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -9,7 +9,7 @@ const record = (value: unknown): value is Record<string, unknown> => value !== n
 export function parseCatalogModels(value: unknown): CatalogModel[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item: unknown): CatalogModel[] => record(item) && typeof item['id'] === 'string' && typeof item['structuredOutput'] === 'boolean' ? [{
-    id: item['id'], structuredOutput: item['structuredOutput'], tools: item['tools'] === true,
+    id: item['id'], structuredOutput: item['structuredOutput'], ...(typeof item['tools'] === 'boolean' ? { tools: item['tools'] } : {}),
     ...(typeof item['name'] === 'string' ? { name: item['name'] } : {}),
     ...(typeof item['contextLength'] === 'number' ? { contextLength: item['contextLength'] } : {}),
     ...(typeof item['promptPrice'] === 'number' ? { promptPrice: item['promptPrice'] } : {}),
@@ -23,7 +23,7 @@ export const pricing = (model: CatalogModel): string | undefined => { const inpu
 
 export function describeModel(model: CatalogModel | undefined): string | undefined {
   if (!model) return undefined;
-  return [model.name, context(model), pricing(model), model.structuredOutput ? 'structured output' : undefined, model.tools ? 'tool calling' : undefined].filter(Boolean).join(' · ') || undefined;
+  return [model.name, context(model), pricing(model), model.structuredOutput ? 'structured output' : undefined, model.tools === true ? 'tool calling' : undefined].filter(Boolean).join(' · ') || undefined;
 }
 
 export function filterModels(models: readonly CatalogModel[], query: string | undefined): CatalogModel[] {
@@ -38,7 +38,7 @@ export function filterModels(models: readonly CatalogModel[], query: string | un
 export function modelProblem(selected: CatalogModel | undefined, value: string, catalogSize: number, requireStructured: boolean, requireTools: boolean, providerLabel: string): string | undefined {
   if (value && catalogSize > 0 && !selected) return `Not in the ${providerLabel} catalog.`;
   if (selected && requireStructured && !selected.structuredOutput) return 'This model does not support structured output.';
-  if (selected && requireTools && !selected.tools) return 'This model does not support tool calling, which this Agent needs for its tools.';
+  if (selected && requireTools && selected.tools === false) return 'This model does not support tool calling, which this Agent needs for its tools.';
   return undefined;
 }
 
