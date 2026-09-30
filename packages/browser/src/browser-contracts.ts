@@ -1,5 +1,7 @@
 export const BROWSER_COLLECTIONS = ['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'agent-teams', 'workflows', 'skills', 'test-runs', 'reviews', 'versions', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants', 'workflow-drafts', 'workflow-revisions', 'workflow-definitions', 'workflow-runs', 'workflow-grants', 'workflow-webhook-credentials', 'workflow-memory-imports', 'workflow-memory-items', 'workflow-memory-readiness', 'workflow-model-settings', 'connector-installations', 'openrouter-connections', 'openrouter-models'] as const;
 export type BrowserCollection = typeof BROWSER_COLLECTIONS[number];
+export const GROUP_COLLECTIONS = ['members'] as const;
+export const GROUP_QUERY_KEYS = ['range', 'tenant', 'panel', 'level', 'event', 'run', 'cursor'] as const;
 
 export const COMMANDS = {
   identity: ['request-approval', 'decide-approval', 'revoke-approval', 'grant-membership', 'revoke-membership'],
@@ -41,6 +43,7 @@ const argumentKeys: Readonly<Record<string, readonly string[]>> = Object.freeze(
   'workflow.withdraw-memory': ['id', 'reason'], 'workflow.hold-memory': ['id', 'reason'], 'workflow.release-memory-hold': ['id', 'reason'], 'workflow.set-memory-expiry': ['id', 'expiresAt'], 'workflow.delete-memory': ['id', 'reason'],
   'workflow.correct-memory': ['id', 'text'], 'workflow.invalidate-memory-source': ['sourceId'], 'workflow.configure-model-settings': ['id', 'settings'],
   'governance.create-group': ['name', 'tenantIds', 'billingTenantId'], 'governance.add-tenant': ['tenantId'], 'governance.remove-tenant': ['tenantId'],
+  'governance.add-admin': ['userId'], 'governance.remove-admin': ['userId'], 'governance.set-billing-tenant': ['tenantId'],
 });
 export const hasCommandArgumentSchema = (owner: string, name: string): boolean => Object.hasOwn(argumentKeys, `${owner}.${name}`);
 
@@ -76,6 +79,7 @@ export function decodeCommandArguments(owner: string, name: string, value: unkno
   if ('reviewDigest' in parsed && (typeof parsed['reviewDigest'] !== 'string' || !DIGEST.test(parsed['reviewDigest']))) fail();
   if ('bindingDigest' in parsed && (typeof parsed['bindingDigest'] !== 'string' || !DIGEST.test(parsed['bindingDigest']))) fail();
   if ('tenantId' in parsed) id(parsed['tenantId']);
+  if ('userId' in parsed) id(parsed['userId']);
   if ('tenantIds' in parsed) { const ids = parsed['tenantIds']; if (!Array.isArray(ids) || ids.length < 1 || ids.length > MAX_GROUP_TENANTS || new Set(ids.map((value) => id(value))).size !== ids.length) fail(); }
   if ('billingTenantId' in parsed && parsed['billingTenantId'] !== null) id(parsed['billingTenantId']);
   if ('name' in parsed && (typeof parsed['name'] !== 'string' || parsed['name'].trim().length === 0 || parsed['name'].length > 128)) fail();

@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { expect, test } from 'vitest';
 import { BROWSER_COLLECTIONS } from './browser-contracts.js';
-import { BrowserV1Transport, ClerkSessionAdapter, liveClerkSessionAdapter, type BrowserTransportOptions, type ClerkBackend, type GroupCommand } from './index.js';
+import { BrowserV1Transport, ClerkSessionAdapter, liveClerkSessionAdapter, type BrowserTransportOptions, type ClerkBackend, type GroupCommand, type GroupProjection } from './index.js';
 import { decodeContract, descriptorFor } from '../../contracts/src/index.js';
 import { IdentityStore } from '../../identity/src/index.js';
 
@@ -225,4 +225,57 @@ test('refuses to create a group in a workspace the caller is not a member of', a
   const response = await postGroup(browser, '/api/v1/groups/commands/governance/create-group', commandBody(0, { name: 'Platform', tenantIds: [otherTenant], billingTenantId: null }), { ...commandHeaders, 'if-match': '0' });
 
   expect(response.status).toBe(403);
+});
+
+const membersPath = `/api/v1/groups/${groupId}/members`;
+const membersPayload = { workspaces: [{ tenantId, name: 'one', joinedAt: '2026-01-01T00:00:00.000Z', billing: false }], admins: [], eligible: [] };
+const groupProjections = (seen: GroupProjection[] = []) => ({ groupProjections: (projection: GroupProjection) => { seen.push(projection); return Promise.resolve(membersPayload); } });
+
+test('serves the members collection to a group admin in a governance.v1 envelope carrying the group id', async () => {
+  const seen: GroupProjection[] = [];
+  const response = await get(transport(groupProjections(seen), [userId]), membersPath);
+  const envelope = decodeContract(descriptorFor('governance.v1'), response.body);
+
+  expect(response.status).toBe(200);
+  expect(envelope.tenantId).toBeUndefined();
+  expect(envelope.payload).toMatchObject({ groupId, collection: 'members', ...membersPayload });
+  expect(seen[0]).toMatchObject({ collection: 'members', query: {}, context: { userId, groupId, groupEpoch: 1, adminEpoch: 1 } });
+});
+
+test.each([
+  ['a non-admin of the group', [], membersPath],
+  ['a foreign group id', [userId], '/api/v1/groups/66666666-6666-4666-8666-666666666666/members'],
+  ['a group id that is not a UUID', [userId], '/api/v1/groups/not-a-uuid/members'],
+])('refuses a group read from %s with 403', async (_name, admins, path) => {
+  expect((await get(transport(groupProjections(), admins), path)).status).toBe(403);
+});
+
+test('refuses a group read without a bearer token with 401', async () => {
+  expect((await get(transport(groupProjections(), [userId]), membersPath, { origin })).status).toBe(401);
+});
+
+test('answers 404 for an unknown group collection', async () => {
+  expect((await get(transport(groupProjections(), [userId]), `/api/v1/groups/${groupId}/nope`)).status).toBe(404);
+});
+
+test('answers 501 for a group read when no projection handler is registered', async () => {
+  expect((await get(transport({}, [userId]), membersPath)).status).toBe(501);
+});
+
+test.each([
+  ['an unknown query key', `${membersPath}?colour=red`],
+  ['a repeated query key', `${membersPath}?range=1h&range=6h`],
+  ['a 201-character value', `${membersPath}?range=${'a'.repeat(201)}`],
+  ['an over-long cursor', `${membersPath}?cursor=${'a'.repeat(2001)}`],
+  ['a prototype key', `${membersPath}?__proto__=x`],
+])('refuses a group read with %s with 422', async (_name, path) => {
+  expect((await get(transport(groupProjections(), [userId]), path)).status).toBe(422);
+});
+
+test('passes allowed query keys to the group projection handler', async () => {
+  const seen: GroupProjection[] = [];
+  const response = await get(transport(groupProjections(seen), [userId]), `${membersPath}?range=1h&tenant=${tenantId}&cursor=${'a'.repeat(2000)}`);
+
+  expect(response.status).toBe(200);
+  expect(seen[0]?.query).toEqual({ range: '1h', tenant: tenantId, cursor: 'a'.repeat(2000) });
 });

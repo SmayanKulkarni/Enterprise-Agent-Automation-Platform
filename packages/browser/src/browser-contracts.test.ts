@@ -54,5 +54,23 @@ describe('governance command arguments', () => {
   test('rejects a non-UUID workspace on add-tenant', () => {
     expect(() => decodeCommandArguments('governance', 'add-tenant', { tenantId: 'nope' })).toThrow(BrowserContractError);
   });
+
+  test('accepts admin and billing commands with a valid id', () => {
+    const userId = '22222222-2222-4222-8222-222222222222';
+    expect(decodeCommandArguments('governance', 'add-admin', { userId })).toEqual({ userId });
+    expect(decodeCommandArguments('governance', 'remove-admin', { userId })).toEqual({ userId });
+    expect(decodeCommandArguments('governance', 'set-billing-tenant', { tenantId })).toEqual({ tenantId });
+  });
+
+  test.each([
+    ['add-admin', { userId: 'nope' }],
+    ['add-admin', {}],
+    ['remove-admin', { userId: 'nope' }],
+    ['add-admin', { userId: '22222222-2222-4222-8222-222222222222', tenantId }],
+    ['set-billing-tenant', { tenantId: 'nope' }],
+    ['set-billing-tenant', { tenantId: null }],
+  ])('rejects %s arguments %j', (name, value) => {
+    expect(() => decodeCommandArguments('governance', name, value)).toThrow(BrowserContractError);
+  });
 });
 

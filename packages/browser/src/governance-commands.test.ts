@@ -46,3 +46,23 @@ test('denies a tenant command that carries no group session', async () => {
 
   await expect(governanceCommandHandlers(store as never)['governance.add-tenant']?.({ ...base, name: 'add-tenant', expectedVersion: 1, arguments: { tenantId } })).rejects.toMatchObject({ code: 'DENIED' });
 });
+
+test.each([
+  ['add-admin', 'admin-added'],
+  ['remove-admin', 'admin-removed'],
+] as const)('passes the target user of %s to the store', async (name, state) => {
+  const { store, calls } = echoStore();
+  const userId = '77777777-7777-4777-8777-777777777777';
+  const receipt = await governanceCommandHandlers(store)[`governance.${name}`]?.({ ...base, name, group, expectedVersion: 4, arguments: { userId } });
+
+  expect(receipt).toMatchObject({ objectId: groupId, revision: 5, state });
+  expect(calls[0]?.slice(0, 4)).toEqual([name, group, 4, { userId }]);
+});
+
+test('passes the billing workspace of set-billing-tenant to the store', async () => {
+  const { store, calls } = echoStore();
+  const receipt = await governanceCommandHandlers(store)['governance.set-billing-tenant']?.({ ...base, name: 'set-billing-tenant', group, expectedVersion: 4, arguments: { tenantId } });
+
+  expect(receipt).toMatchObject({ objectId: groupId, revision: 5, state: 'billing-set' });
+  expect(calls[0]?.slice(0, 4)).toEqual(['set-billing-tenant', group, 4, { tenantId }]);
+});
