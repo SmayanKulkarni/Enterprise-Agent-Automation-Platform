@@ -6,7 +6,9 @@ import { correlationIdFrom } from '../../errors/src/boundary.js';
 import { classify } from '../../errors/src/classify.js';
 import type { ErrorContext } from '../../errors/src/report.js';
 import { type IdentityReadStore, type ExecutionContext, type GroupContext, type Proof } from '../../identity/src/index.js';
+import { logEvent } from '../../telemetry/src/events.js';
 import { BROWSER_COLLECTIONS, decodeCommandArguments, GROUP_COLLECTIONS, GROUP_QUERY_KEYS, hasCommandArgumentSchema } from './browser-contracts.js';
+import { observeRequest, ROUTES, type RequestState, type Route } from './request-telemetry.js';
 
 export interface BrowserRequest { method: 'GET' | 'POST'; path: string; headers: Readonly<Record<string, string | undefined>>; body?: Uint8Array; }
 export interface BrowserResponse { status: number; headers: Record<string, string>; body: Uint8Array; }
@@ -144,6 +146,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const collections = new Set<string>(BROWSER_COLLECTIONS);
 const groupCollections = new Set<string>(GROUP_COLLECTIONS);
 const groupQueryKeys = new Set<string>(GROUP_QUERY_KEYS);
+const TENANT_COMMAND = /^commands\/([a-z][a-z0-9-]*)\/([a-z][a-z0-9-]*)$/u;
 const GROUP_QUERY_VALUE_LIMIT = 200;
 const GROUP_CURSOR_LIMIT = 2000;
 export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
@@ -160,37 +163,45 @@ export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
 
 function header(request: BrowserRequest, name: string): string | undefined { return request.headers[name] ?? request.headers[name.toLowerCase()]; }
 export class BrowserV1Transport {
-  readonly #commands: Readonly<Record<string, BrowserCommandHandler>>; readonly #now: () => string; readonly #correlations = new WeakMap<BrowserRequest, string>();
+  readonly #commands: Readonly<Record<string, BrowserCommandHandler>>; readonly #now: () => string; readonly #correlations = new WeakMap<BrowserRequest, string>(); readonly #states = new WeakMap<BrowserRequest, RequestState>();
   constructor(private readonly options: BrowserTransportOptions) { this.#commands = options.commands ?? {}; this.#now = options.now ?? (() => new Date().toISOString()); }
 
-  async handle(request: BrowserRequest): Promise<BrowserResponse> {
+  handle(request: BrowserRequest): Promise<BrowserResponse> { return observeRequest(request.method, this.correlation(request), this.state(request), () => this.dispatch(request)); }
+
+  private async dispatch(request: BrowserRequest): Promise<BrowserResponse> {
     try {
       const url = new URL(request.path, 'https://platform.invalid'); const path = url.pathname;
       if (request.method === 'POST' || path.endsWith('/events')) this.assertOrigin(request);
-      if (path === '/api/v1/session') return await this.session(request);
-      if (path === '/api/v1/tenants') return await this.tenants(request);
-      if (path === '/api/v1/groups' && request.method === 'GET') return await this.groups(request);
+      if (path === '/api/v1/session') { this.route(request, ROUTES.session); return await this.session(request); }
+      if (path === '/api/v1/tenants') { this.route(request, ROUTES.tenants); return await this.tenants(request); }
+      if (path === '/api/v1/groups' && request.method === 'GET') { this.route(request, ROUTES.groups); return await this.groups(request); }
       const groupRead = request.method === 'GET' ? /^\/api\/v1\/groups\/([^/]+)\/([^/]+)$/u.exec(path) : null;
-      if (groupRead !== null) return await this.groupRead(request, url, this.groupId(groupRead[1] ?? ''), groupRead[2] ?? '');
+      if (groupRead !== null) { this.route(request, ROUTES.groupCollection); return await this.groupRead(request, url, this.groupId(groupRead[1] ?? ''), groupRead[2] ?? ''); }
       const groupCommand = request.method === 'POST' ? /^\/api\/v1\/groups\/(?:commands\/governance\/(create-group)|([^/]+)\/commands\/governance\/(?!create-group$)([a-z][a-z0-9-]*))$/u.exec(path) : null;
-      if (groupCommand !== null) return await this.groupCommand(request, groupCommand[2] === undefined ? undefined : this.decodeSegment(groupCommand[2]), groupCommand[1] ?? groupCommand[3] ?? '');
+      if (groupCommand !== null) { this.route(request, groupCommand[1] === undefined ? ROUTES.groupCommand : ROUTES.groupCreate); return await this.groupCommand(request, groupCommand[2] === undefined ? undefined : this.decodeSegment(groupCommand[2]), groupCommand[1] ?? groupCommand[3] ?? ''); }
       const match = /^\/api\/v1\/tenants\/([^/]+)(?:\/(.*))?$/u.exec(path); if (match === null) throw new AppError('NOT_FOUND');
-      const routeTenant = tenantId(this.decodeSegment(match[1] ?? ''));
-      const tail = match[2] ?? ''; const query = this.validateQuery(url, routeTenant);
-      if (request.method === 'GET' && tail === 'events') return await this.featureNotReady(request, routeTenant);
-      if (request.method === 'GET' && this.collectionRoute(tail)) return await this.projection(request, String(routeTenant), tail, query);
-      if (request.method === 'POST' && tail === 'openrouter-connection') return await this.connection(request, String(routeTenant));
-      const commandRoute = /^commands\/([a-z][a-z0-9-]*)\/([a-z][a-z0-9-]*)$/u.exec(tail);
-      if (request.method !== 'POST' || commandRoute === null) throw new AppError('NOT_FOUND');
+      const tail = match[2] ?? ''; const route = this.tenantRoute(request.method, tail); this.route(request, route);
+      const routeTenant = tenantId(this.decodeSegment(match[1] ?? '')); const query = this.validateQuery(url, routeTenant);
+      if (route === ROUTES.tenantEvents) return await this.featureNotReady(request, routeTenant);
+      if (route === ROUTES.tenantCollection) return await this.projection(request, String(routeTenant), tail, query);
+      if (route === ROUTES.tenantConnection) return await this.connection(request, String(routeTenant));
+      const commandRoute = TENANT_COMMAND.exec(tail);
+      if (route !== ROUTES.tenantCommand || commandRoute === null) throw new AppError('NOT_FOUND');
       return await this.command(request, String(routeTenant), commandRoute[1] ?? '', commandRoute[2] ?? '');
-    } catch (error) { const app = classify(error); this.options.onError?.(error, this.errorContext(request)); return await this.error(request, app.status, app.toBody(), this.routeTenant(request)); }
+    } catch (error) { const app = classify(error); this.state(request).code = app.code; this.options.onError?.(error, this.errorContext(request)); return await this.error(request, app.status, app.toBody(), this.routeTenant(request)); }
   }
 
+  private state(request: BrowserRequest): RequestState { let state = this.#states.get(request); if (state === undefined) { state = { route: ROUTES.unmatched }; this.#states.set(request, state); } return state; }
+  private route(request: BrowserRequest, route: Route): void { this.state(request).route = route; }
+  private tenantRoute(method: string, tail: string): Route {
+    if (method === 'GET') return tail === 'events' ? ROUTES.tenantEvents : this.collectionRoute(tail) ? ROUTES.tenantCollection : ROUTES.unmatched;
+    return tail === 'openrouter-connection' ? ROUTES.tenantConnection : TENANT_COMMAND.test(tail) ? ROUTES.tenantCommand : ROUTES.unmatched;
+  }
   private decodeSegment(segment: string): string { try { return decodeURIComponent(segment); } catch (error) { throw new AppError('INVALID_IDENTIFIER', { cause: error }); } }
   private collectionRoute(tail: string): boolean { const [collection, id, extra] = tail.split('/'); return collection !== undefined && collections.has(collection) && extra === undefined && (id === undefined || UUID.test(id)); }
   private async proof(request: BrowserRequest): Promise<Proof | undefined> { if (this.options.clerk === undefined || this.options.identity === undefined) return undefined; const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ') || authorization.length < 8) throw new AppError('UNAUTHENTICATED'); return this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); }
-  private async context(request: BrowserRequest, selectedTenant: string): Promise<ExecutionContext | undefined> { const proof = await this.proof(request); return proof === undefined || this.options.identity === undefined ? undefined : this.options.identity.authenticate(proof, selectedTenant, 'platform-browser-api', this.#now()); }
-  private async session(request: BrowserRequest): Promise<BrowserResponse> { if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined); const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED'); const proof = await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); const user = await this.options.identity.authenticate(proof, header(request, 'x-platform-tenant') ?? await this.firstTenant(proof), 'platform-browser-api', this.#now()); return this.success(request, String(user.tenantId), { user: { id: user.userId }, tenant: { id: user.tenantId, epoch: user.tenantEpoch }, actionHints: [] }); }
+  private async context(request: BrowserRequest, selectedTenant: string): Promise<ExecutionContext | undefined> { const proof = await this.proof(request); if (proof === undefined || this.options.identity === undefined) return undefined; const context = await this.options.identity.authenticate(proof, selectedTenant, 'platform-browser-api', this.#now()); this.state(request).tenantId = String(context.tenantId); return context; }
+  private async session(request: BrowserRequest): Promise<BrowserResponse> { if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined); const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED'); const proof = await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); const user = await this.options.identity.authenticate(proof, header(request, 'x-platform-tenant') ?? await this.firstTenant(proof), 'platform-browser-api', this.#now()); this.state(request).tenantId = String(user.tenantId); return this.success(request, String(user.tenantId), { user: { id: user.userId }, tenant: { id: user.tenantId, epoch: user.tenantEpoch }, actionHints: [] }); }
   private async tenants(request: BrowserRequest): Promise<BrowserResponse> { if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined); const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED'); const proof = await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); const memberships = await this.options.identity.membershipsForProof(proof); const selected = String(memberships[0]?.tenantId ?? ''); const context = await this.options.identity.authenticate(proof, selected, 'platform-browser-api', this.#now()); return this.success(request, String(context.tenantId), { tenants: memberships.map((membership) => ({ id: membership.tenantId, profiles: membership.profiles, epoch: membership.epoch })) }); }
   private async groups(request: BrowserRequest): Promise<BrowserResponse> {
     const proof = await this.proof(request); if (proof === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined);
@@ -210,12 +221,12 @@ export class BrowserV1Transport {
     if (groupId === undefined) {
       if (expectedVersion !== 0) throw new Error('STALE');
       const actor = await identity.authenticate(proof, String((validatedArguments['tenantIds'] as string[])[0]), 'platform-browser-api', this.#now());
-      return this.success(request, undefined, await handler({ ...command, userId: actor.userId }));
+      return this.success(request, undefined, await this.groupChanged(name, actor.userId, undefined, validatedArguments, () => handler({ ...command, userId: actor.userId })));
     }
     const session = await identity.authenticateGroup(proof, groupId, 'platform-browser-api', this.#now());
     const current = await identity.authenticateGroup(proof, groupId, 'platform-browser-api', this.#now());
     if (current.groupEpoch !== session.groupEpoch || current.adminEpoch !== session.adminEpoch) throw new Error('STALE');
-    return this.success(request, undefined, await handler({ ...command, userId: current.userId, group: current }));
+    return this.success(request, undefined, await this.groupChanged(name, current.userId, current.groupId, validatedArguments, () => handler({ ...command, userId: current.userId, group: current })));
   }
   private groupId(segment: string): string { const value = this.decodeSegment(segment); if (!UUID.test(value)) throw new AppError('INVALID_IDENTIFIER'); return value.toLowerCase(); }
   private groupQuery(url: URL): Readonly<Record<string, string>> {
@@ -233,6 +244,16 @@ export class BrowserV1Transport {
     const context = await this.options.identity.authenticateGroup(proof, groupId, 'platform-browser-api', this.#now());
     if (this.options.groupProjections === undefined) return this.featureNotReady(request, undefined);
     return this.success(request, undefined, { ...await this.options.groupProjections({ context, collection, query }), groupId, collection });
+  }
+  private async executed(fields: { tenant_id?: string; owner: string; name: string; actor_user_id: string }, run: () => Promise<Record<string, unknown>> | Record<string, unknown>): Promise<Record<string, unknown>> {
+    let outcome = 'ok'; let objectId: string | undefined;
+    try { const receipt = await run(); objectId = typeof receipt['objectId'] === 'string' ? receipt['objectId'] : undefined; return receipt; } catch (error) { outcome = classify(error).code; throw error; } finally { logEvent('command.executed', { ...fields, outcome, object_id: objectId }); }
+  }
+  private async groupChanged(action: string, actor: string, groupId: string | undefined, args: Readonly<Record<string, unknown>>, run: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
+    const receipt = await this.executed({ owner: 'governance', name: action, actor_user_id: actor }, run);
+    const subject = args['tenantId'] ?? args['userId'];
+    logEvent('group.changed', { group_id: groupId ?? String(receipt['objectId']), action, actor_user_id: actor, subject_id: typeof subject === 'string' ? subject : undefined });
+    return receipt;
   }
   private async firstTenant(proof: Proof): Promise<string> { if (this.options.identity === undefined) throw new Error('DENIED'); const membership = (await this.options.identity.membershipsForProof(proof))[0]; if (membership === undefined) throw new Error('DENIED'); return String(membership.tenantId); }
   private async projection(request: BrowserRequest, routeTenant: string, tail: string, query: { pageSize?: number; cursor?: string }): Promise<BrowserResponse> { const [collection, id] = tail.split('/'); const context = await this.context(request, routeTenant); if (context === undefined || collection === undefined || this.options.projections === undefined) return this.featureNotReady(request, routeTenant); return this.success(request, routeTenant, await this.options.projections({ context, collection, ...(id === undefined ? {} : { id }), ...query })); }
@@ -252,7 +273,8 @@ export class BrowserV1Transport {
     const handler = this.#commands[`${owner}.${name}`]; if (handler === undefined) return this.featureNotReady(request, routeTenant);
     const validatedArguments = hasCommandArgumentSchema(owner, name) ? decodeCommandArguments(owner, name, argumentsValue) : argumentsValue as Record<string, unknown>;
     const command: BrowserCommand = { context, tenantId: routeTenant, owner, name, idempotencyKey: key, correlationId: correlationId(correlation), expectedVersion: version, digest: await digest(validatedArguments), arguments: validatedArguments, envelope };
-    const current = await this.context(request, routeTenant); if (current === undefined || current.tenantEpoch !== context.tenantEpoch || current.membershipEpoch !== context.membershipEpoch) throw new Error('STALE'); return this.success(request, routeTenant, await handler({ ...command, context: current }));
+    const current = await this.context(request, routeTenant); if (current === undefined || current.tenantEpoch !== context.tenantEpoch || current.membershipEpoch !== context.membershipEpoch) throw new Error('STALE');
+    return this.success(request, routeTenant, await this.executed({ tenant_id: routeTenant, owner, name, actor_user_id: current.userId }, () => handler({ ...command, context: current })));
   }
   private async connection(request: BrowserRequest, routeTenant: string): Promise<BrowserResponse> {
     const key = header(request, 'idempotency-key'); const contentType = header(request, 'content-type');
@@ -268,7 +290,7 @@ export class BrowserV1Transport {
   private async error(request: BrowserRequest, status: number, error: NormalizedError, selectedTenant?: string): Promise<BrowserResponse> { return this.response(request, status, selectedTenant, { error }); }
   private correlation(request: BrowserRequest): string { let id = this.#correlations.get(request); if (id === undefined) { id = correlationIdFrom(header(request, 'x-correlation-id')); this.#correlations.set(request, id); } return id; }
   private routeTenant(request: BrowserRequest): string | undefined { const candidate = /^\/api\/v1\/tenants\/([^/?]+)/u.exec(request.path)?.[1]; return candidate !== undefined && UUID.test(candidate) ? candidate.toLowerCase() : undefined; }
-  private errorContext(request: BrowserRequest): ErrorContext { const tenant = this.routeTenant(request); return { correlationId: this.correlation(request), ...(tenant === undefined ? {} : { tenantId: tenant }), method: request.method, route: request.path.split('?')[0] ?? request.path }; }
+  private errorContext(request: BrowserRequest): ErrorContext { const verified = this.state(request).tenantId; const tenant = verified ?? this.routeTenant(request); return { correlationId: this.correlation(request), ...(tenant === undefined ? {} : { tenantId: tenant }), ...(verified === undefined ? {} : { tenantVerified: true }), method: request.method, route: request.path.split('?')[0] ?? request.path }; }
   private async response(request: BrowserRequest, status: number, selectedTenant: string | undefined, payload: Record<string, unknown>): Promise<BrowserResponse> {
     const id = this.correlation(request); const descriptor = descriptorFor(request.path.startsWith('/api/v1/groups') ? 'governance.v1' : 'browser.v1');
     const safePayload = JSON.parse(canonicalJson(payload)) as Record<string, unknown>;

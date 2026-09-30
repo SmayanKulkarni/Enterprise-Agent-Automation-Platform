@@ -1,3 +1,4 @@
+import '../../packages/telemetry/src/browser-api.js';
 import type { IncomingHttpHeaders } from 'node:http';
 import { defineConfig } from 'vite';
 import { localBrowserTransport } from '../../packages/browser/src/local-browser-host.js';

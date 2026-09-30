@@ -42,11 +42,18 @@
     "@azure/monitor-opentelemetry-exporter": "1.0.0-beta.32",
     "@clerk/backend": "^3.17.2",
     "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/api-logs": "^0.222.0",
+    "@opentelemetry/exporter-logs-otlp-http": "^0.222.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.222.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
     "@opentelemetry/instrumentation": "^0.222.0",
     "@opentelemetry/instrumentation-tedious": "^0.41.0",
     "@opentelemetry/instrumentation-undici": "^0.32.0",
     "@opentelemetry/resources": "^2.11.0",
+    "@opentelemetry/sdk-logs": "^0.222.0",
+    "@opentelemetry/sdk-metrics": "^2.11.0",
     "@opentelemetry/sdk-trace-node": "^2.11.0",
+    "@vercel/functions": "^3.9.9",
     "durable-functions": "3.3.0",
     "mssql": "^12.7.2"
   }

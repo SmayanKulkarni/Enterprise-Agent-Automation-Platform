@@ -1,9 +1,17 @@
 import { Buffer } from 'node:buffer';
-import { expect, test } from 'vitest';
+import { context, metrics, propagation, trace } from '@opentelemetry/api';
+import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { BROWSER_COLLECTIONS } from './browser-contracts.js';
 import { BrowserV1Transport, ClerkSessionAdapter, liveClerkSessionAdapter, type BrowserTransportOptions, type ClerkBackend, type GroupCommand, type GroupProjection } from './index.js';
 import { decodeContract, descriptorFor } from '../../contracts/src/index.js';
 import { IdentityStore } from '../../identity/src/index.js';
+
+let stdout: { mock: { calls: unknown[][] } };
+beforeEach(() => { stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined); });
+afterEach(() => { vi.restoreAllMocks(); trace.disable(); metrics.disable(); context.disable(); propagation.disable(); });
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const userId = '22222222-2222-4222-8222-222222222222';
@@ -278,4 +286,144 @@ test('passes allowed query keys to the group projection handler', async () => {
 
   expect(response.status).toBe(200);
   expect(seen[0]?.query).toEqual({ range: '1h', tenant: tenantId, cursor: 'a'.repeat(2000) });
+});
+
+function observe() {
+  const spans = new InMemorySpanExporter();
+  new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spans)] }).register();
+  const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000, exportTimeoutMillis: 30_000 })] });
+  metrics.setGlobalMeterProvider(provider);
+  const points = async (name: string): Promise<{ attributes: Record<string, unknown>; value: unknown }[]> => { await provider.forceFlush(); return exporter.getMetrics().slice(-1).flatMap((batch) => batch.scopeMetrics.flatMap((scope) => scope.metrics)).filter((metric) => metric.descriptor.name === name).flatMap((metric) => metric.dataPoints as { attributes: Record<string, unknown>; value: unknown }[]); };
+  return { spans, points };
+}
+const events = (name: string): Record<string, unknown>[] => stdout.mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>).filter((line) => line['event'] === name);
+const randomTenant = '77777777-7777-4777-8777-777777777777';
+
+test('a projection request yields one root span and one duration point labelled with the route template and the verified tenant', async () => {
+  const { spans, points } = observe();
+  const response = await get(transport(), `/api/v1/tenants/${tenantId}/cases`);
+
+  expect(response.status).toBe(200);
+  const finished = spans.getFinishedSpans();
+  expect(finished).toHaveLength(1);
+  expect(finished[0]?.name).toBe('browser.request');
+  expect(finished[0]?.attributes).toMatchObject({ 'http.request.method': 'GET', 'http.route': '/api/v1/tenants/:tenantId/:collection', 'http.response.status_code': 200, tenant_id: tenantId, 'app.correlation_id': response.headers['x-correlation-id'] });
+  const duration = await points('http.server.request.duration');
+  expect(duration).toHaveLength(1);
+  expect(duration[0]?.attributes).toEqual({ 'http.route': '/api/v1/tenants/:tenantId/:collection', 'http.request.method': 'GET', 'http.response.status_code': 200, tenant_id: tenantId });
+  expect((duration[0]?.value as { count: number }).count).toBe(1);
+});
+
+test('a 403 for a random tenant id records a point without a tenant label and counts auth.denied', async () => {
+  const { spans, points } = observe();
+  const response = await get(transport(), `/api/v1/tenants/${randomTenant}/cases`);
+
+  expect(response.status).toBe(403);
+  const duration = await points('http.server.request.duration');
+  expect(duration.map((point) => point.attributes)).toEqual([{ 'http.route': '/api/v1/tenants/:tenantId/:collection', 'http.request.method': 'GET', 'http.response.status_code': 403 }]);
+  expect(spans.getFinishedSpans()[0]?.attributes).not.toHaveProperty('tenant_id');
+  expect((await points('auth.denied')).map((point) => ({ value: point.value, attributes: point.attributes }))).toEqual([{ value: 1, attributes: { reason: 'DENIED' } }]);
+  expect(events('auth.denied')).toEqual([expect.objectContaining({ route: '/api/v1/tenants/:tenantId/:collection', reason: 'DENIED' })]);
+});
+
+test('a missing bearer token counts auth.denied with the UNAUTHENTICATED reason', async () => {
+  const { points } = observe();
+  const response = await get(transport(), '/api/v1/session', { origin });
+
+  expect(response.status).toBe(401);
+  expect((await points('auth.denied')).map((point) => point.attributes)).toEqual([{ reason: 'UNAUTHENTICATED' }]);
+});
+
+test.each([
+  ['an unknown top-level path', '/api/v1/nothing', 404],
+  ['a path with a raw user-controlled segment', '/api/v1/tenants/not-a-uuid-at-all/whatever/else', 403],
+  ['an unknown tenant sub-route', `/api/v1/tenants/${tenantId}/nothing`, 404],
+])('labels %s as unmatched, never with the raw path', async (_name, path, status) => {
+  const { points } = observe();
+  const response = await get(transport(), path);
+
+  expect(response.status).toBe(status);
+  expect((await points('http.server.request.duration')).map((point) => point.attributes['http.route'])).toEqual(['unmatched']);
+});
+
+test.each([
+  ['/api/v1/session', '/api/v1/session'],
+  ['/api/v1/tenants', '/api/v1/tenants'],
+  ['/api/v1/groups', '/api/v1/groups'],
+  [`/api/v1/groups/${groupId}/members`, '/api/v1/groups/:groupId/:collection'],
+  [`/api/v1/tenants/${tenantId}/events`, '/api/v1/tenants/:tenantId/events'],
+])('labels %s with the template %s', async (path, template) => {
+  const { points } = observe();
+  await get(transport(groupProjections(), [userId]), path);
+
+  expect((await points('http.server.request.duration')).map((point) => point.attributes['http.route'])).toEqual([template]);
+});
+
+test('labels tenant and group commands and the connection route with their templates', async () => {
+  const { points } = observe();
+  const tenantHeaders = { ...commandHeaders, 'if-match': '0' };
+  const tenantBody = { messageId: correlation, contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: '2026-01-01T00:00:00.000Z', tenantId, correlationId: correlation, sender: 'platform-browser', classification: 'restricted-operational', payload: { expectedVersion: 0, arguments: {} } };
+  const browser = transport({ commands: {}, connections: () => Promise.resolve({}), groupCommands: { 'governance.add-tenant': () => Promise.resolve(okReceipt), 'governance.create-group': () => Promise.resolve(okReceipt) } }, [userId]);
+  await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenantId}/commands/workflow/check`, headers: tenantHeaders, body: new TextEncoder().encode(JSON.stringify(tenantBody)) });
+  await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenantId}/openrouter-connection`, headers: { authorization: `Bearer ${userId}`, origin, 'content-type': 'application/json', 'idempotency-key': commandHeaders['idempotency-key'] }, body: new TextEncoder().encode('{"action":"verify","expectedVersion":0}') });
+  await postGroup(browser, addTenantPath, commandBody(1, { tenantId: otherTenant }));
+  await postGroup(browser, '/api/v1/groups/commands/governance/create-group', commandBody(0, { name: 'Platform', tenantIds: [tenantId], billingTenantId: null }), { ...commandHeaders, 'if-match': '0' });
+
+  const routes = (await points('http.server.request.duration')).map((point) => point.attributes['http.route']).sort();
+  expect(routes).toEqual(['/api/v1/groups/:groupId/commands/governance/:name', '/api/v1/groups/commands/governance/create-group', '/api/v1/tenants/:tenantId/commands/:owner/:name', '/api/v1/tenants/:tenantId/openrouter-connection']);
+});
+
+test('a tenant command emits command.executed with the outcome, actor and object id', async () => {
+  observe();
+  const objectId = '88888888-8888-4888-8888-888888888888';
+  const body = { messageId: correlation, contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: '2026-01-01T00:00:00.000Z', tenantId, correlationId: correlation, sender: 'platform-browser', classification: 'restricted-operational', payload: { expectedVersion: 0, arguments: { id: objectId } } };
+  const browser = transport({ commands: { 'workflow.check': () => Promise.resolve({ objectId, revision: 1 }) } });
+  const response = await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenantId}/commands/workflow/check`, headers: { ...commandHeaders, 'if-match': '0' }, body: new TextEncoder().encode(JSON.stringify(body)) });
+
+  expect(response.status).toBe(200);
+  expect(events('command.executed')).toEqual([expect.objectContaining({ tenant_id: tenantId, owner: 'workflow', name: 'check', outcome: 'ok', actor_user_id: userId, object_id: objectId })]);
+});
+
+test('a failing tenant command emits command.executed with the error code', async () => {
+  observe();
+  const body = { messageId: correlation, contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: '2026-01-01T00:00:00.000Z', tenantId, correlationId: correlation, sender: 'platform-browser', classification: 'restricted-operational', payload: { expectedVersion: 0, arguments: { id: '88888888-8888-4888-8888-888888888888' } } };
+  const browser = transport({ commands: { 'workflow.check': () => Promise.reject(Object.assign(new Error('CONFLICT'), { code: 'CONFLICT' })) } });
+  const response = await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenantId}/commands/workflow/check`, headers: { ...commandHeaders, 'if-match': '0' }, body: new TextEncoder().encode(JSON.stringify(body)) });
+
+  expect(response.status).toBe(409);
+  expect(events('command.executed')).toEqual([expect.objectContaining({ owner: 'workflow', name: 'check', outcome: 'CONFLICT', actor_user_id: userId })]);
+});
+
+test('a group command emits command.executed and group.changed', async () => {
+  observe();
+  const browser = transport({ groupCommands: { 'governance.add-tenant': () => Promise.resolve(okReceipt) } }, [userId]);
+  const response = await postGroup(browser, addTenantPath, commandBody(1, { tenantId: otherTenant }));
+
+  expect(response.status).toBe(200);
+  expect(events('command.executed')).toEqual([expect.objectContaining({ owner: 'governance', name: 'add-tenant', outcome: 'ok', actor_user_id: userId, object_id: groupId })]);
+  expect(events('group.changed')).toEqual([expect.objectContaining({ group_id: groupId, action: 'add-tenant', actor_user_id: userId, subject_id: otherTenant })]);
+});
+
+test('a refused group command emits command.executed with the error code and no group.changed', async () => {
+  observe();
+  const browser = transport({ groupCommands: { 'governance.add-tenant': () => Promise.reject(Object.assign(new Error('STALE'), { code: 'STALE' })) } }, [userId]);
+  const response = await postGroup(browser, addTenantPath, commandBody(1, { tenantId: otherTenant }));
+
+  expect(response.status).toBe(409);
+  expect(events('command.executed')).toEqual([expect.objectContaining({ name: 'add-tenant', outcome: 'STALE' })]);
+  expect(events('group.changed')).toEqual([]);
+});
+
+test('passes tenantVerified to onError only after the tenant authenticated', async () => {
+  const seen: { tenantId?: string; tenantVerified?: boolean }[] = [];
+  const browser = transport({ onError: (_error, errorContext) => seen.push(errorContext), commands: { 'workflow.check': () => Promise.reject(new Error('boom')) } });
+  await get(browser, `/api/v1/tenants/${randomTenant}/cases`);
+  await get(browser, `/api/v1/tenants/${tenantId}/cases?pageSize=500`);
+  await get(browser, `/api/v1/tenants/${tenantId}/nothing`);
+  const body = { messageId: correlation, contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: '2026-01-01T00:00:00.000Z', tenantId, correlationId: correlation, sender: 'platform-browser', classification: 'restricted-operational', payload: { expectedVersion: 0, arguments: { id: '88888888-8888-4888-8888-888888888888' } } };
+  await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenantId}/commands/workflow/check`, headers: { ...commandHeaders, 'if-match': '0' }, body: new TextEncoder().encode(JSON.stringify(body)) });
+
+  expect(seen.map((item) => item.tenantVerified)).toEqual([undefined, undefined, undefined, true]);
+  expect(seen.map((item) => item.tenantId)).toEqual([randomTenant, tenantId, tenantId, tenantId]);
 });

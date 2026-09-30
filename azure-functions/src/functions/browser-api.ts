@@ -2,6 +2,7 @@ import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } 
 import * as df from 'durable-functions';
 import { browserResponse } from '../../../packages/browser/src/browser-response.js';
 import { withErrorBoundary } from '../../../packages/errors/src/boundary.js';
+import { withFlush } from '../../../packages/telemetry/src/index.js';
 import { durableScheduler } from './workflow-run.js';
 
 const allowedOrigins = () => new Set((process.env['CLERK_AUTHORIZED_PARTIES'] ?? '').split(',').map((origin) => origin.trim()).filter(Boolean));
@@ -13,12 +14,12 @@ const cors = (origin: string | null): Record<string, string> | undefined => orig
   vary: 'Origin',
 } : undefined;
 
-export const browserApi = withErrorBoundary(async (request: HttpRequest, context?: InvocationContext): Promise<HttpResponseInit> => {
+export const browserApi = withFlush(withErrorBoundary(async (request: HttpRequest, context?: InvocationContext): Promise<HttpResponseInit> => {
   const crossOrigin = cors(request.headers.get('origin'));
   if (request.method === 'OPTIONS') return crossOrigin === undefined ? { status: 403 } : { status: 204, headers: crossOrigin };
 
   const response = await browserResponse(new Request(request.url, { method: request.method, headers: request.headers, ...(request.method === 'POST' ? { body: await request.arrayBuffer() } : {}) }), process.env, undefined, context ? durableScheduler(context) : undefined);
   return { status: response.status, headers: { ...Object.fromEntries(response.headers.entries()), ...(crossOrigin ?? {}) }, body: await response.text() };
-}, { headers: (request) => cors(request.headers.get('origin')) });
+}, { headers: (request) => cors(request.headers.get('origin')) }));
 
 app.http('browserApi', { methods: ['GET', 'POST', 'OPTIONS'], authLevel: 'anonymous', route: 'v1/{*path}', extraInputs: [df.input.durableClient()], handler: browserApi });

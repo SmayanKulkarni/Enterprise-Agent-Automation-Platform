@@ -5,12 +5,13 @@ import { WorkflowWorker, type StepResult } from '../../../packages/workflow/src/
 import { HttpEmbeddingPort, HttpMcpPort, HttpModelPort, UpstashVectorMemoryPort } from '../../../packages/workflow/src/ports.js';
 import { OpenRouterConnectionCrypto } from '../../../packages/workflow/src/openrouter-connection.js';
 import { report } from '../../../packages/errors/src/report.js';
+import { withFlush } from '../../../packages/telemetry/src/index.js';
 
 interface Input { tenantId: string; runId: string; definitionId: string; }
 
-const logged = <I extends { tenantId: string; runId?: string }, O>(site: string, handler: (input: I) => Promise<O>) => async (input: I): Promise<O> => {
+const logged = <I extends { tenantId: string; runId?: string }, O>(site: string, handler: (input: I) => Promise<O>) => withFlush(async (input: I): Promise<O> => {
   try { return await handler(input); } catch (error) { report(error, { site, tenantId: input.tenantId, ...(input.runId ? { correlationId: input.runId } : {}) }); throw error; }
-};
+});
 
 const store = (): AzureSqlWorkflowStore => new AzureSqlWorkflowStore(process.env['AZURE_SQL_CONNECTION_STRING'] ?? '');
 const worker = (): WorkflowWorker => { const workflowStore = store(); const crypto = process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY'] && process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION'] ? OpenRouterConnectionCrypto.fromEnvironment(process.env) : undefined; return new WorkflowWorker(workflowStore, new HttpModelPort(process.env, workflowStore, crypto), new HttpMcpPort(), new UpstashVectorMemoryPort(process.env, new HttpEmbeddingPort(process.env, workflowStore, crypto))); };
@@ -50,11 +51,11 @@ df.app.orchestration('workflowRun', function* (context) {
   }
 });
 
-df.app.activity('workflowDefinitionStart', { handler: async (input: Input) => {
+df.app.activity('workflowDefinitionStart', { handler: withFlush(async (input: Input) => {
   const definition = await store().workerDefinition(input.tenantId, input.definitionId);
   if (!definition) throw new Error('NOT_FOUND');
   return { start: definition.definition.start };
-} });
+}) });
 
 export function durableScheduler(context: InvocationContext) {
   const client = df.getClient(context);

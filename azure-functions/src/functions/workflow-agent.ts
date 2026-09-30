@@ -6,12 +6,13 @@ import type { EffectData } from '../../../packages/workflow/src/runtime.js';
 import type { Installation } from '../../../packages/workflow/src/service.js';
 import { AppError } from '../../../packages/errors/src/app-error.js';
 import { withErrorBoundary } from '../../../packages/errors/src/boundary.js';
+import { withFlush } from '../../../packages/telemetry/src/index.js';
 import { durableScheduler } from './workflow-run.js';
 import * as df from 'durable-functions';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
-export const workflowAgent = withErrorBoundary(async (request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> => {
+export const workflowAgent = withFlush(withErrorBoundary(async (request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> => {
   const tenantId = request.params['tenantId']; const installationId = request.params['installationId']; const operation = request.params['operation'];
   if (!uuid.test(tenantId ?? '') || !uuid.test(installationId ?? '') || !['poll', 'result'].includes(operation ?? '')) throw new AppError('NOT_FOUND');
   const token = request.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9_-]{40,})$/u)?.[1];
@@ -42,6 +43,6 @@ export const workflowAgent = withErrorBoundary(async (request: HttpRequest, cont
     return { status: 200, jsonBody: { accepted: true } };
   }
   return { status: 405 };
-});
+}));
 
 app.http('workflowAgent', { methods: ['GET', 'POST'], authLevel: 'anonymous', route: 'workflow-agent/{tenantId}/{installationId}/{operation}', extraInputs: [df.input.durableClient()], handler: workflowAgent });
