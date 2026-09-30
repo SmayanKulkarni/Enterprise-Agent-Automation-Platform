@@ -4,6 +4,8 @@ import { digest } from '../../contracts/src/index.js';
 import { report } from '../../errors/src/report.js';
 import { reported } from '../../errors/src/swallow.js';
 import { logQueuedMcpCall, observeMcpCall } from './call-telemetry.js';
+import { approvalExpired, approvalRequested, circuitTransition, memoryRetrieved, nodeFailed, runFinished } from './run-telemetry.js';
+import { count, record } from '../../telemetry/src/instruments.js';
 import { pinFor, validateValue, type CapabilityPin, type CompiledNode, type JsonSchema, type NodePolicy, type WorkflowDefinition } from './graph.js';
 import type { Installation, RunEvent, RunUsage, WorkflowRun } from './service.js';
 import { memoryFingerprint, memoryItemId, namespace, resolveMemoryScope, validateMemoryProposal, type HostedMemoryPort, type MemoryImport, type MemoryItem } from './memory.js';
@@ -80,7 +82,7 @@ export class WorkflowWorker {
   constructor(private readonly store: WorkflowStore, private readonly model: ModelPort, private readonly mcp: McpPort, private readonly memory: HostedMemoryPort) {}
 
   step(tenantId: string, runId: string, definitionId: string, nodeId: string): Promise<StepResult> {
-    return tracer.startActiveSpan('workflow.step', { attributes: { 'workflow.tenant_id': tenantId, 'workflow.run_id': runId, 'workflow.node_id': nodeId } }, async (span) => {
+    return tracer.startActiveSpan('workflow.step', { attributes: { tenant_id: tenantId, 'workflow.tenant_id': tenantId, 'workflow.run_id': runId, 'workflow.node_id': nodeId } }, async (span) => {
       try {
         return await this.runStep(tenantId, runId, definitionId, nodeId);
       } catch (error) {
@@ -99,6 +101,19 @@ export class WorkflowWorker {
     const completed = current.data.history.findLast((item) => item.nodeId === node.id && item.kind === node.kind && item.state === 'completed');
     if (completed) return next(node, completed.detail === 'true');
     if (current.data.status === 'failed' || current.data.status === 'unknown-outcome') return { failed: true };
+    const started = performance.now();
+    const observed = (outcome: string): void => record('workflow.step.duration', (performance.now() - started) / 1000, { tenant_id: tenantId, node_kind: node.kind, outcome });
+    try {
+      const result = await this.runNode(tenantId, runId, published.definition, current, node);
+      observed(result.failed ? 'failed' : result.waiting ? 'waiting' : 'completed');
+      return result;
+    } catch (error) {
+      if (!isStale(error)) observed('error');
+      throw error;
+    }
+  }
+
+  private async runNode(tenantId: string, runId: string, definition: WorkflowDefinition, current: WorkflowRecord<WorkflowRun>, node: CompiledNode): Promise<StepResult> {
     try {
       if (node.tool === true) return fail('INVALID');
       if (node.kind === 'trigger') return await this.complete(tenantId, current, node);
@@ -109,9 +124,9 @@ export class WorkflowWorker {
         return await this.complete(tenantId, current, node, {}, value[String(node.config['field'])] === node.config['equals'] ? 'true' : 'false');
       }
       if (node.kind === 'memory') return await this.memoryStep(tenantId, current, node);
-      if (node.kind === 'agent') return await this.agentStep(tenantId, current, published.definition, node);
-      if (node.kind === 'approval') return await this.approvalStep(tenantId, current, published.definition, node);
-      if (node.kind === 'mcp') return await this.mcpStep(tenantId, current, published.definition, node);
+      if (node.kind === 'agent') return await this.agentStep(tenantId, current, definition, node);
+      if (node.kind === 'approval') return await this.approvalStep(tenantId, current, definition, node);
+      if (node.kind === 'mcp') return await this.mcpStep(tenantId, current, definition, node);
       return fail('INVALID');
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String(error.code) : 'NODE_FAILED';
@@ -149,7 +164,7 @@ export class WorkflowWorker {
       const until = current.state === 'probe' ? current.data.probeUntil : current.data.openedUntil;
       if (until && Date.parse(until) > Date.now()) return until;
       const probeUntil = new Date(Date.now() + 30000).toISOString();
-      try { await this.store.workerWrite<CircuitData>(tenantId, 'circuit', id, current.version, 'probe', { failures: current.data.failures, probeUntil }); return undefined; }
+      try { await this.store.workerWrite<CircuitData>(tenantId, 'circuit', id, current.version, 'probe', { failures: current.data.failures, probeUntil }); circuitTransition(tenantId, key, 'probe'); return undefined; }
       catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'STALE')) throw error; }
     }
     return fail('CIRCUIT_BUSY');
@@ -162,7 +177,7 @@ export class WorkflowWorker {
       const failures = failed ? (current?.data.failures ?? 0) + 1 : 0;
       const open = failed && (failures >= 3 || current?.state === 'probe');
       const data: CircuitData = { failures, ...(open ? { openedUntil: new Date(Date.now() + 60000).toISOString() } : {}) };
-      try { await this.store.workerWrite(tenantId, 'circuit', id, current?.version ?? 0, open ? 'open' : 'closed', data); return; }
+      try { await this.store.workerWrite(tenantId, 'circuit', id, current?.version ?? 0, open ? 'open' : 'closed', data); if ((current?.state ?? 'closed') !== (open ? 'open' : 'closed')) circuitTransition(tenantId, key, open ? 'open' : 'closed'); return; }
       catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'STALE')) throw error; }
     }
     fail('CIRCUIT_BUSY');
@@ -172,12 +187,15 @@ export class WorkflowWorker {
     const state = node.kind === 'end' || next(node, detail === 'true').completed === true ? 'completed' : 'running';
     const data: WorkflowRun = { ...current.data, status: state, outputs: { ...current.data.outputs, [node.id]: output }, history: [...current.data.history, event(node, 'completed', detail, receiptId)] };
     await this.store.workerWrite(tenantId, 'run', current.id, current.version, state, data);
+    if (state === 'completed') runFinished(tenantId, data, 'completed');
     return next(node, detail === 'true');
   }
 
   private async stop(tenantId: string, current: WorkflowRecord<WorkflowRun>, node: CompiledNode, reason: string, unknown = false): Promise<StepResult> {
     const status = unknown ? 'unknown-outcome' : 'failed';
-    await this.store.workerWrite(tenantId, 'run', current.id, current.version, status, { ...current.data, status, history: [...current.data.history, event(node, unknown ? 'unknown-outcome' : 'failed', reason)] });
+    const data: WorkflowRun = { ...current.data, status, history: [...current.data.history, event(node, unknown ? 'unknown-outcome' : 'failed', reason)] };
+    await this.store.workerWrite(tenantId, 'run', current.id, current.version, status, data);
+    nodeFailed(tenantId, current.id, node.id, node.kind, reason); runFinished(tenantId, data, status, reason);
     return { failed: true };
   }
 
@@ -215,7 +233,9 @@ export class WorkflowWorker {
 
   private async recordRetrieval(tenantId: string, current: WorkflowRecord<WorkflowRun>, node: CompiledNode, retrievalId: string, selection: MemorySelection): Promise<void> {
     const existing = await this.store.workerRead<{ runId: string; nodeId: string }>(tenantId, 'memory-retrieval', retrievalId);
-    if (!existing) await this.store.workerWrite(tenantId, 'memory-retrieval', retrievalId, 0, selection.status, { runId: current.id, nodeId: node.id, status: selection.status, itemIds: selection.items.map((item) => String(item['id'])), importIds: selection.importIds, ...(selection.failure ? { failure: selection.failure } : {}) });
+    if (existing) return;
+    await this.store.workerWrite(tenantId, 'memory-retrieval', retrievalId, 0, selection.status, { runId: current.id, nodeId: node.id, status: selection.status, itemIds: selection.items.map((item) => String(item['id'])), importIds: selection.importIds, ...(selection.failure ? { failure: selection.failure } : {}) });
+    memoryRetrieved(tenantId, current.id, node.id, selection.status, selection.items.length);
   }
 
   private agentTools(definition: WorkflowDefinition, node: CompiledNode): AgentTool[] {
@@ -380,6 +400,7 @@ export class WorkflowWorker {
     const expiresAt = new Date(Date.now() + TOOL_APPROVAL_MS).toISOString();
     const review = { revision, installationId: tool.pin.installationId, capability: tool.pin.capability, target: String(tool.node.config['target']), argumentsDigest, arguments: Object.entries(tool.pin.inputSchema.properties).map(([name, value]) => ({ name, type: value.type })) };
     await this.saveAgent(tenantId, run, node.id, { ...progress, pausedAt: new Date().toISOString() }, [event(node, 'waiting', bindingDigest)], { status: 'waiting-approval', waiting: { nodeId: node.id, bindingDigest, expiresAt, requestedAt: new Date().toISOString(), review } });
+    approvalRequested(tenantId, run.id, node.id, 'tool', review.capability, expiresAt);
     return { kind: 'done', step: { waiting: 'approval', deadline: expiresAt, bindingDigest } };
   }
 
@@ -390,7 +411,7 @@ export class WorkflowWorker {
       const checked = await validateMemoryProposal(value, run);
       if (!checked) {
         const fingerprint = await digest({ runId: run.id, nodeId, index, state: 'rejected' }); const id = memoryItemId(fingerprint);
-        if (!await this.store.workerRead<MemoryItem>(tenantId, 'memory-item', id)) await this.store.workerWrite<MemoryItem>(tenantId, 'memory-item', id, 0, 'rejected', { stableDefinitionId: run.stableDefinitionId, definitionId: run.definitionId, producingRevision: run.definitionRevision, type: 'task-fact', sourceId: `invalid:${run.id}:${nodeId}:${index}`, sourceDigest: fingerprint, sourceKind: 'event', fingerprint, failure: 'INVALID_PROPOSAL', vectorState: 'pending' });
+        if (!await this.store.workerRead<MemoryItem>(tenantId, 'memory-item', id)) { await this.store.workerWrite<MemoryItem>(tenantId, 'memory-item', id, 0, 'rejected', { stableDefinitionId: run.stableDefinitionId, definitionId: run.definitionId, producingRevision: run.definitionRevision, type: 'task-fact', sourceId: `invalid:${run.id}:${nodeId}:${index}`, sourceDigest: fingerprint, sourceKind: 'event', fingerprint, failure: 'INVALID_PROPOSAL', vectorState: 'pending' }); count('memory.proposals', { tenant_id: tenantId, state: 'rejected' }); }
         continue;
       }
       const fingerprint = await memoryFingerprint(resolveMemoryScope(run), checked.proposal); const id = memoryItemId(fingerprint); const previous = await this.store.workerRead<MemoryItem>(tenantId, 'memory-item', id);
@@ -398,6 +419,7 @@ export class WorkflowWorker {
         const expiresAt = new Date(Date.now() + 90 * 86400000).toISOString();
         const data: MemoryItem = { stableDefinitionId: run.stableDefinitionId, definitionId: run.definitionId, producingRevision: run.definitionRevision, type: checked.proposal.type, sourceId: checked.proposal.sourceId, sourceDigest: checked.proposal.sourceDigest, sourceKind: checked.sourceKind, fingerprint, ...(checked.ownerId ? { ownerId: checked.ownerId } : {}), ...(checked.proposal.predecessorId ? { predecessorId: checked.proposal.predecessorId } : {}), expiresAt, vectorState: 'pending' };
         await this.store.workerWrite(tenantId, 'memory-item', id, 0, 'pending', data);
+        count('memory.proposals', { tenant_id: tenantId, state: 'pending' });
         await this.memory.upsert(namespace(tenantId), { id, text: checked.proposal.text, metadata: { stableDefinitionId: data.stableDefinitionId, definitionId: data.definitionId, producingRevision: data.producingRevision, type: data.type, sourceId: data.sourceId, sourceDigest: data.sourceDigest, ...(data.ownerId ? { ownerId: data.ownerId } : {}), state: 'pending', expiresAt } });
       }
       ids.push(id);
@@ -415,6 +437,7 @@ export class WorkflowWorker {
     const expiresAt = new Date(Date.now() + Number(node.config['timeoutMs'])).toISOString();
     const data: WorkflowRun = { ...current.data, status: 'waiting-approval', waiting: { nodeId: node.id, bindingDigest, expiresAt, requestedAt: new Date().toISOString(), review: { revision: definition.revision, installationId: pin.installationId, capability: pin.capability, target: String(target.config['target']), argumentsDigest, arguments: Object.entries(pin.inputSchema.properties).map(([name, value]) => ({ name, type: value.type })) } }, history: [...current.data.history, event(node, 'waiting', bindingDigest)] };
     await this.store.workerWrite(tenantId, 'run', current.id, current.version, 'waiting-approval', data);
+    approvalRequested(tenantId, current.id, node.id, 'step', pin.capability, expiresAt);
     return { waiting: 'approval', deadline: expiresAt, bindingDigest };
   }
 
@@ -434,6 +457,12 @@ export class WorkflowWorker {
     return this.stop(tenantId, current, node, outcome.reason, outcome.unknown === true);
   }
 
+  private async writeEffect(tenantId: string, id: string, version: number, state: EffectData['state'], data: EffectData): Promise<WorkflowRecord<EffectData>> {
+    const written = await this.store.workerWrite<EffectData>(tenantId, 'effect', id, version, state, data);
+    count('workflow.effects', { tenant_id: tenantId, state });
+    return written;
+  }
+
   private async invokeCapability(tenantId: string, current: WorkflowRecord<WorkflowRun>, definition: WorkflowDefinition, installation: WorkflowRecord<Installation>, call: CapabilityCall): Promise<Invocation> {
     const { node, pin, args, argumentsDigest, deadline, effectId: id } = call;
     const observed = { tenantId, runId: current.id, nodeId: node.id, capability: pin.capability, effectId: id };
@@ -441,9 +470,9 @@ export class WorkflowWorker {
     if (effect?.state === 'succeeded') return validateValue(effect.data.output, pin.outputSchema) ? { state: 'succeeded', output: effect.data.output!, effectId: id } : { state: 'stopped', reason: 'INVALID_CAPABILITY_OUTPUT' };
     if (effect?.state === 'unknown-outcome' || effect?.state === 'possible-send') return { state: 'stopped', reason: 'RECONCILIATION_REQUIRED', unknown: true };
     if (effect?.state === 'failed') return { state: 'stopped', reason: 'CAPABILITY_FAILED' };
-    if (!effect) effect = await this.store.workerWrite<EffectData>(tenantId, 'effect', id, 0, 'prepared', { runId: current.id, nodeId: node.id, ...(call.agentId ? { agentId: call.agentId } : {}), installationId: pin.installationId, requestDigest: await digest({ definition: definition.digest, pin, args }), argumentsDigest, state: 'prepared' });
+    if (!effect) effect = await this.writeEffect(tenantId, id, 0, 'prepared', { runId: current.id, nodeId: node.id, ...(call.agentId ? { agentId: call.agentId } : {}), installationId: pin.installationId, requestDigest: await digest({ definition: definition.digest, pin, args }), argumentsDigest, state: 'prepared' });
     if (installation.data.route === 'private') {
-      if (effect.state === 'prepared') await this.store.workerWrite(tenantId, 'effect', id, effect.version, 'queued', { ...effect.data, state: 'queued', output: { capability: pin.capability, args, deadline } });
+      if (effect.state === 'prepared') await this.writeEffect(tenantId, id, effect.version, 'queued', { ...effect.data, state: 'queued', output: { capability: pin.capability, args, deadline } });
       await this.store.workerWrite(tenantId, 'run', current.id, current.version, 'waiting-connector', { ...current.data, status: 'waiting-connector', history: [...current.data.history, event(node, 'waiting', 'connector', id)] });
       logQueuedMcpCall(observed);
       return { state: 'waiting', step: { waiting: 'connector', deadline, effectId: id } };
@@ -451,20 +480,20 @@ export class WorkflowWorker {
     if (installation.state !== 'healthy') return { state: 'stopped', reason: 'CONNECTOR_OFFLINE' };
     const blocked = await this.beforeCircuit(tenantId, `connector:${pin.installationId}`);
     if (blocked) return { state: 'waiting', step: { waiting: 'circuit', deadline: new Date(Math.min(Date.parse(blocked), Date.parse(deadline))).toISOString() } };
-    effect = await this.store.workerWrite(tenantId, 'effect', id, effect.version, 'possible-send', { ...effect.data, state: 'possible-send' });
+    effect = await this.writeEffect(tenantId, id, effect.version, 'possible-send', { ...effect.data, state: 'possible-send' });
     const result = await observeMcpCall(observed, () => this.mcp.invoke(installation.data, pin.capability, args, id, deadline).catch(reported({ outcome: 'unknown-outcome' as const }, 'runtime.mcp')));
     if (result.outcome === 'unknown-outcome' || result.outcome === 'succeeded' && !result.output) return { state: 'stopped', reason: 'RECONCILIATION_REQUIRED', unknown: true };
     if (result.outcome === 'not-dispatched') await this.afterCircuit(tenantId, `connector:${pin.installationId}`, true);
     if (result.outcome === 'succeeded' && result.output && !validateValue(result.output, pin.outputSchema)) {
-      await this.store.workerWrite(tenantId, 'effect', id, effect.version, 'succeeded', { ...effect.data, state: 'succeeded', output: result.output });
+      await this.writeEffect(tenantId, id, effect.version, 'succeeded', { ...effect.data, state: 'succeeded', output: result.output });
       return { state: 'stopped', reason: 'INVALID_CAPABILITY_OUTPUT' };
     }
     if (result.outcome !== 'succeeded' || !result.output) {
-      await this.store.workerWrite(tenantId, 'effect', id, effect.version, 'failed', { ...effect.data, state: 'failed' });
+      await this.writeEffect(tenantId, id, effect.version, 'failed', { ...effect.data, state: 'failed' });
       return { state: 'stopped', reason: 'CAPABILITY_FAILED' };
     }
     await this.afterCircuit(tenantId, `connector:${pin.installationId}`, false);
-    await this.store.workerWrite(tenantId, 'effect', id, effect.version, 'succeeded', { ...effect.data, state: 'succeeded', output: result.output });
+    await this.writeEffect(tenantId, id, effect.version, 'succeeded', { ...effect.data, state: 'succeeded', output: result.output });
     return { state: 'succeeded', output: result.output, effectId: id };
   }
 
@@ -479,7 +508,9 @@ export class WorkflowWorker {
       if (effect?.state === 'succeeded') return this.step(tenantId, runId, current.data.definitionId, nodeId);
       return this.stop(tenantId, current, node, effect?.state === 'possible-send' ? 'RECONCILIATION_REQUIRED' : 'CONNECTOR_DEADLINE', effect?.state === 'possible-send');
     }
-    return this.stop(tenantId, current, node, 'APPROVAL_EXPIRED');
+    const stopped = await this.stop(tenantId, current, node, 'APPROVAL_EXPIRED');
+    approvalExpired(tenantId, runId, nodeId);
+    return stopped;
   }
 
   async summarize(tenantId: string, runId: string): Promise<void> {

@@ -11,6 +11,9 @@ import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrou
 import { DEFAULT_MODEL_SETTINGS, MODEL_SETTINGS_ID, parseModelSettings, type ModelSettings } from './model-settings.js';
 import type { OpenRouterCatalog, OpenRouterModel } from './openrouter-catalog.js';
 import { report } from '../../errors/src/report.js';
+import { logEvent } from '../../telemetry/src/events.js';
+import { count } from '../../telemetry/src/instruments.js';
+import { approvalDecided, runFinished, runStarted } from './run-telemetry.js';
 
 export interface CapabilityManifest { digest: string; version: string; certified: boolean; capabilities: readonly { name: string; risk: 'R1' | 'R2' | 'R3'; inputSchema: JsonSchema; outputSchema: JsonSchema }[]; }
 export interface Installation { id: string; route: 'public' | 'private'; endpoint?: string; tokenHash?: string; health: 'healthy' | 'offline' | 'revoked'; manifest: CapabilityManifest; }
@@ -49,7 +52,20 @@ const credentialSecrets = (credential: WorkflowRecord<WebhookCredential> | undef
   return [credential.data.secret, ...(credential.data.previousSecret && credential.data.previousExpiresAt && Date.parse(credential.data.previousExpiresAt) > now ? [credential.data.previousSecret] : [])];
 };
 
-export async function deliverWebhook(store: WorkflowStore, scheduler: Scheduler, request: { tenantId: string | undefined; definitionId: string | undefined; eventId: string | undefined; timestamp: string | undefined; signature: string | undefined; body: Uint8Array; fallbackSecret?: string; now?: number }): Promise<WebhookDelivery> {
+const TRUSTED_WEBHOOK_OUTCOMES: ReadonlySet<WebhookDeliveryOutcome> = new Set(['accepted', 'replay', 'signature', 'credential-state']);
+type WebhookRequest = { tenantId: string | undefined; definitionId: string | undefined; eventId: string | undefined; timestamp: string | undefined; signature: string | undefined; body: Uint8Array; fallbackSecret?: string; now?: number };
+
+export async function deliverWebhook(store: WorkflowStore, scheduler: Scheduler, request: WebhookRequest): Promise<WebhookDelivery> {
+  const delivery = await admitWebhook(store, scheduler, request);
+  const trusted = TRUSTED_WEBHOOK_OUTCOMES.has(delivery.outcome);
+  const tenantId = trusted ? request.tenantId : undefined; const definitionId = trusted ? request.definitionId : undefined;
+  count('workflow.webhook.deliveries', { tenant_id: tenantId ?? 'unknown', outcome: delivery.outcome });
+  logEvent('webhook.delivery', { tenant_id: tenantId, definition_id: definitionId, outcome: delivery.outcome });
+  if (delivery.outcome === 'accepted' && tenantId && definitionId && delivery.runId) runStarted(tenantId, delivery.runId, definitionId, 'webhook', `webhook:${definitionId}`);
+  return delivery;
+}
+
+async function admitWebhook(store: WorkflowStore, scheduler: Scheduler, request: WebhookRequest): Promise<WebhookDelivery> {
   const { tenantId, definitionId, eventId, timestamp, signature, body } = request;
   const now = request.now ?? Date.now();
   if (!uuid.test(tenantId ?? '') || !uuid.test(definitionId ?? '') || !uuid.test(eventId ?? '') || !timestamp || !signature || !/^sha256=[a-f0-9]{64}$/iu.test(signature)) return { outcome: 'invalid-shape' };
@@ -245,6 +261,7 @@ export class WorkflowService {
     const run: WorkflowRun = { id: runId, tenantId: String(context.tenantId), ownerId: context.userId, stableDefinitionId: published.draftId, definitionId: published.id, definitionRevision: published.draftRevision, definitionDigest: published.digest, inputDigest, input, status: 'queued', history: [], outputs: {}, summaryStatus: 'pending' };
     const receipt = { commandId: key, objectId: runId, revision: 1, state: 'queued', digest: published.digest, evidenceIds: [] };
     const result = await this.store.write(context, 'operator', 'run', runId, 0, 'queued', run, key, requestDigest, receipt);
+    if (!result.replayed) runStarted(String(context.tenantId), runId, published.id, 'manual', context.userId);
     await scheduler.start(runId, String(context.tenantId), published.id);
     return { runId, replayed: result.replayed, digest: published.digest };
   }
@@ -257,7 +274,10 @@ export class WorkflowService {
     if (!current || current.version !== expectedVersion || current.data.status !== 'waiting-approval' || !current.data.waiting || current.data.waiting.bindingDigest !== bindingDigest || Date.parse(current.data.waiting.expiresAt) <= Date.now()) throw Object.assign(new Error('STALE'), { code: 'STALE' });
     const updated = { ...current.data, history: [...current.data.history, { nodeId: current.data.waiting.nodeId, kind: 'approval', state: decision === 'approve' ? 'completed' : 'failed', at: new Date().toISOString(), detail: decision, bindingDigest } satisfies RunEvent] };
     delete updated.waiting;
-    await this.store.write(context, 'admin', 'run', runId, current.version, decision === 'approve' ? 'running' : 'failed', { ...updated, status: decision === 'approve' ? 'running' : 'failed' }, key, requestDigest, { commandId: key, objectId: runId, revision: current.version + 1, state: decision, digest: bindingDigest, evidenceIds: [] });
+    const settled: WorkflowRun = { ...updated, status: decision === 'approve' ? 'running' : 'failed' };
+    await this.store.write(context, 'admin', 'run', runId, current.version, settled.status, settled, key, requestDigest, { commandId: key, objectId: runId, revision: current.version + 1, state: decision, digest: bindingDigest, evidenceIds: [] });
+    approvalDecided(String(context.tenantId), runId, decision, context.userId, current.data.waiting.requestedAt);
+    if (decision === 'reject') runFinished(String(context.tenantId), settled, 'failed', 'REJECTED');
     await scheduler.raise(runId, 'approval', { bindingDigest, decision });
   }
 

@@ -95,6 +95,15 @@ test('an R2 tool call pauses for approval, resumes from the stored transcript an
   expect(await step()).toEqual({ next: 'end' }); expect(f.invocations).toHaveLength(1);
 });
 
+test('a tool approval counts one tool-kind request and repeats nothing while it waits', async () => {
+  const { points, events } = observe();
+  const f = await fixture({ risk: 'R2', script: (n) => n === 1 ? call('c1', 't0_lookup', { query: 'acme' }) : answer('done') });
+  const step = await start(f);
+  await step(); await step();
+  expect((await points('workflow.approvals.requested')).map((point) => ({ attributes: point.attributes, value: point.value }))).toEqual([{ attributes: { tenant_id: expect.any(String), kind: 'tool' }, value: 1 }]);
+  expect(events('approval.requested')).toEqual([expect.objectContaining({ kind: 'tool', capability: 'lookup', node_id: 'agent' })]);
+});
+
 test('a tool approval records when it was requested and every successful model call is counted', async () => {
   const f = await fixture({ risk: 'R2', script: (n) => n === 1 ? call('c1', 't0_lookup', { query: 'acme' }) : answer('done') });
   const step = await start(f);

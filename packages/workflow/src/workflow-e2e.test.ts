@@ -94,7 +94,7 @@ function graph(grantId: string, manifestDigest: string): GraphDraft {
 }
 
 test('authenticated browser journey saves, checks, publishes, waits, approves and records one effect', { repeats: Number(process.env['PROFILE_REPEAT'] ?? 0) }, async () => {
-  const { points, events } = observe(); const modelTelemetry: unknown[] = [];
+  const { points, events, everything } = observe(); const modelTelemetry: unknown[] = [];
   const identity = new IdentityStore(); for (const id of [tenant, otherTenant]) { identity.provision(id); identity.transition(id, 1, 'activate'); }
   for (const user of [editor, admin]) { identity.mapUser('https://clerk.example', user, user); identity.membership(tenant, user, [user === admin ? 'admin' : 'editor']); identity.setMembership(tenant, user, 1, 'current'); }
   const clerk = new ClerkSessionAdapter({ issuer: 'https://clerk.example', publishableKey: 'pk_test', audience: 'platform-browser-api', authorizedParties: ['https://app.example'] }, {
@@ -159,6 +159,19 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   expect(signals).toHaveLength(1);
   await worker.step(tenant, startKey, definitionId, 'approval'); await worker.step(tenant, startKey, definitionId, 'mcp'); await worker.step(tenant, startKey, definitionId, 'done');
   expect(invocations).toBe(1);
+  const total = async (name: string, match: Record<string, string> = {}): Promise<number> => (await points(name)).filter((point) => Object.entries(match).every(([key, value]) => point.attributes[key] === value)).reduce((sum, point) => sum + (typeof point.value === 'number' ? point.value : (point.value as { count: number }).count), 0);
+  expect(await total('workflow.runs.started', { trigger: 'manual', tenant_id: tenant })).toBe(1);
+  expect(await total('workflow.runs.finished', { status: 'completed', tenant_id: tenant })).toBe(1);
+  expect(await total('workflow.approvals.requested', { kind: 'step' })).toBe(1);
+  expect(await total('workflow.approvals.decided', { decision: 'approve' })).toBe(1);
+  expect(await total('workflow.approval.wait.duration', { decision: 'approve' })).toBe(1);
+  expect(await total('workflow.step.duration', { tenant_id: tenant })).toBe(6);
+  expect(await total('workflow.step.duration', { node_kind: 'approval', outcome: 'waiting' })).toBe(1);
+  expect(await total('workflow.effects', { state: 'succeeded' })).toBe(1);
+  for (const name of ['run.started', 'approval.requested', 'approval.decided', 'run.finished']) expect(events(name)).toHaveLength(1);
+  expect(events('run.finished')[0]).toMatchObject({ run_id: startKey, status: 'completed', tokens: 20, cost: 0.01 });
+  expect(events('approval.requested')[0]).toMatchObject({ kind: 'step', capability: 'write', node_id: 'approval' });
+  expect(await everything()).not.toContain('written');
   expect(modelTelemetry[0]).toEqual({ feature: 'workflow', runId: startKey, nodeId: 'agent', attempt: 1 });
   expect((await points('mcp.tool.call.duration')).map((point) => ({ attributes: point.attributes, count: (point.value as { count: number }).count }))).toEqual([{ attributes: { tenant_id: tenant, capability: 'write', outcome: 'succeeded', route: 'public' }, count: 1 }]);
   const effectId = (await store.workerRead<WorkflowRun>(tenant, 'run', startKey))?.data.history.find((item) => item.nodeId === 'mcp' && item.state === 'completed')?.receiptId;
@@ -173,6 +186,34 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   expect((await store.workerRead<WorkflowRun>(tenant, 'run', startKey))?.data).toMatchObject({ status: 'completed', summaryStatus: 'failed' });
   expect(await worker.step(tenant, startKey, definitionId, 'mcp')).toMatchObject({ next: 'done' });
   expect(invocations).toBe(1);
+  const toApproval = async (runId: ReturnType<typeof randomUUID>): Promise<WorkflowRecord<WorkflowRun>> => {
+    expect((await command(editor, 'workflow.start', 0, { id: definitionId, input: {} }, runId)).status).toBe(200);
+    for (const nodeId of ['trigger', 'agent', 'condition', 'approval']) await worker.step(tenant, runId, definitionId, nodeId);
+    return (await store.workerRead<WorkflowRun>(tenant, 'run', runId))!;
+  };
+  const rejectedId = randomUUID(); const rejecting = await toApproval(rejectedId);
+  expect((await command(admin, 'workflow.approve', rejecting.version, { id: rejectedId, bindingDigest: rejecting.data.waiting!.bindingDigest, decision: 'reject' })).status).toBe(200);
+  expect(await worker.step(tenant, rejectedId, definitionId, 'approval')).toMatchObject({ failed: true });
+  expect(await total('workflow.runs.finished', { status: 'failed', reason: 'REJECTED' })).toBe(1);
+  expect(await total('workflow.approvals.decided', { decision: 'reject' })).toBe(1);
+  expect(events('run.finished').filter((line) => line['run_id'] === rejectedId)).toHaveLength(1);
+  const expiringId = randomUUID(); await toApproval(expiringId);
+  expect(await worker.expire(tenant, expiringId, 'approval')).toMatchObject({ failed: true });
+  expect(await worker.expire(tenant, expiringId, 'approval')).toMatchObject({ failed: true });
+  expect(await total('workflow.approvals.expired')).toBe(1);
+  expect(await total('workflow.runs.finished', { status: 'failed', reason: 'APPROVAL_EXPIRED' })).toBe(1);
+  expect(events('approval.expired')).toEqual([expect.objectContaining({ run_id: expiringId, node_id: 'approval' })]);
+  expect(events('node.failed').filter((line) => line['run_id'] === expiringId)).toHaveLength(1);
+  const staleId = randomUUID(); const staleBefore = await total('workflow.approvals.requested');
+  expect((await command(editor, 'workflow.start', 0, { id: definitionId, input: {} }, staleId)).status).toBe(200);
+  for (const nodeId of ['trigger', 'agent', 'condition']) await worker.step(tenant, staleId, definitionId, nodeId);
+  const durations = await total('workflow.step.duration');
+  vi.spyOn(store, 'workerWrite').mockRejectedValueOnce(Object.assign(new Error('STALE'), { code: 'STALE' }));
+  await expect(worker.step(tenant, staleId, definitionId, 'approval')).rejects.toMatchObject({ code: 'STALE' });
+  expect(await total('workflow.approvals.requested')).toBe(staleBefore);
+  expect(await total('workflow.step.duration')).toBe(durations);
+  expect(await worker.step(tenant, staleId, definitionId, 'approval')).toMatchObject({ waiting: 'approval' });
+  expect(await total('workflow.approvals.requested')).toBe(staleBefore + 1);
   outcome = 'unknown-outcome';
   const uncertainId = randomUUID();
   expect((await command(editor, 'workflow.start', 0, { id: definitionId, input: {} }, uncertainId)).status).toBe(200);
@@ -207,6 +248,16 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   expect(modelCalls).toBe(3);
   expect(errorLog.mock.calls.filter(([line]) => String(line).includes('runtime.model'))).toHaveLength(modelCalls);
   errorLog.mockRestore();
+  expect(await total('workflow.circuit.transitions', { kind: 'model', state: 'open' })).toBe(1);
+  expect(events('circuit.transition')).toEqual([expect.objectContaining({ tenant_id: tenant, kind: 'model', state: 'open' })]);
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 61000);
+  const recoveredId = randomUUID();
+  expect((await command(editor, 'workflow.start', 0, { id: definitionId, input: {} }, recoveredId)).status).toBe(200);
+  await worker.step(tenant, recoveredId, definitionId, 'trigger'); await worker.step(tenant, recoveredId, definitionId, 'agent');
+  vi.useRealTimers();
+  expect(await total('workflow.circuit.transitions', { kind: 'model', state: 'probe' })).toBe(1);
+  expect(await total('workflow.circuit.transitions', { kind: 'model', state: 'closed' })).toBe(1);
+  expect(await total('workflow.circuit.transitions', { kind: 'model', state: 'open' })).toBe(1);
   const summaryWorker = new WorkflowWorker(store, { complete: async () => ({ output: {}, model: 'unused', tokens: 0, cost: 0 }), summarize: async () => ({ text: 'Source-linked summary.', sources: ['agent'] }) }, { invoke: async () => ({ outcome: 'not-dispatched' }) }, memory);
   await summaryWorker.summarize(tenant, startKey);
   const memoryDraftId = randomUUID();
