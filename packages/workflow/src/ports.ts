@@ -7,6 +7,7 @@ import { reported } from '../../errors/src/swallow.js';
 import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrouter-connection.js';
 import { DEFAULT_MODEL_SETTINGS, MODEL_SETTINGS_ID, embeddingProfile, validModel, type EmbeddingSettings, type ModelSettings } from './model-settings.js';
 import { tenantOfNamespace } from './memory.js';
+import { observeModelCall } from './call-telemetry.js';
 
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const required = (environment: Readonly<Record<string, string | undefined>>, key: string): string => environment[key]?.trim() || (() => { throw new Error(`Missing ${key}.`); })();
@@ -19,6 +20,7 @@ const responseJson = async (response: Response): Promise<Record<string, unknown>
   if (object(value['error'])) throw providerFailure(value['error']['code']);
   return value;
 };
+const tokenCount = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 const schema = (properties: JsonSchema['properties'], requiredFields: string[]): JsonSchema => ({ type: 'object', properties, required: requiredFields, additionalProperties: false });
 
 const transcriptMessages = (transcript: readonly TranscriptEntry[]): Record<string, unknown>[] => transcript.map((entry) => entry.role === 'assistant'
@@ -55,6 +57,9 @@ export class HttpModelPort implements ModelPort {
   constructor(private readonly environment: Readonly<Record<string, string | undefined>> = process.env, private readonly store?: WorkflowStore, private readonly crypto?: OpenRouterConnectionCrypto) {}
   async complete(request: ModelRequest): Promise<ModelResult> {
     if (request.provider === 'openrouter' && !validModel('openrouter', request.model)) throw new Error('DENIED');
+    return observeModelCall(request, () => this.chat(request));
+  }
+  private async chat(request: ModelRequest): Promise<ModelResult> {
     const url = request.provider === 'azure-openai' ? `${azureUrl(this.environment)}/chat/completions` : 'https://openrouter.ai/api/v1/chat/completions';
     const headers = request.provider === 'azure-openai' ? azureHeaders(this.environment) : { 'content-type': 'application/json', authorization: `Bearer ${await tenantOpenRouterKey(request.tenantId, this.store, this.crypto)}` };
     const body = { model: request.model, messages: [{ role: 'system', content: `${request.instructions}\nPrompt version: ${request.promptVersion}` }, { role: 'user', content: JSON.stringify({ input: request.input, context: request.context }) }, ...transcriptMessages(request.transcript ?? [])], response_format: { type: 'json_schema', json_schema: { name: 'workflow_result', strict: true, schema: request.responseSchema } }, max_completion_tokens: request.policy.tokens, ...toolBody(request), ...(request.provider === 'openrouter' ? { usage: { include: true } } : {}) };
@@ -65,7 +70,8 @@ export class HttpModelPort implements ModelPort {
     const toolCall = object(message) ? parseToolCall(message['tool_calls']) : undefined;
     const output = toolCall ? {} : parseOutput(object(message) ? message['content'] : undefined);
     const providerCost = request.provider === 'openrouter' && object(usage) && typeof usage['cost'] === 'number' && Number.isFinite(usage['cost']) && usage['cost'] >= 0 ? usage['cost'] : undefined;
-    const outcome = { output, model: request.model, tokens, ...(toolCall ? { toolCall } : {}) };
+    const promptTokens = object(usage) ? tokenCount(usage['prompt_tokens']) : undefined; const completionTokens = object(usage) ? tokenCount(usage['completion_tokens']) : undefined;
+    const outcome = { output, model: request.model, tokens, ...(promptTokens === undefined ? {} : { promptTokens }), ...(completionTokens === undefined ? {} : { completionTokens }), ...(toolCall ? { toolCall } : {}) };
     if (providerCost !== undefined) return { ...outcome, cost: providerCost };
     const rate = Number(required(this.environment, request.provider === 'openrouter' ? 'WORKFLOW_OPENROUTER_MAX_COST_PER_1K_TOKENS' : 'WORKFLOW_MAX_COST_PER_1K_TOKENS'));
     if (!Number.isFinite(rate) || rate <= 0) throw new Error('INVALID_COST_RATE');
@@ -76,7 +82,7 @@ export class HttpModelPort implements ModelPort {
     if (!sources.length) throw new Error('INVALID_SUMMARY');
     const selection = (await tenantModelSettings(run.tenantId, this.store)).summary;
     if (!selection) throw new Error('SUMMARY_NOT_CONFIGURED');
-    const attempt = (model: string): Promise<ModelResult> => this.complete({ tenantId: run.tenantId, provider: selection.provider, model, promptVersion: 'workflow-summary-v1', instructions: 'Summarize the workflow outcomes without adding facts. Keep the result brief.', input: { events: run.history.map((item) => ({ nodeId: item.nodeId, kind: item.kind, state: item.state })) }, context: {}, responseSchema: schema({ text: { type: 'string' } }, ['text']), policy: { milliseconds: 30000, attempts: 1, tokens: 500, cost: 1, toolRounds: 0, effects: 0 } });
+    const attempt = (model: string): Promise<ModelResult> => this.complete({ tenantId: run.tenantId, provider: selection.provider, model, promptVersion: 'workflow-summary-v1', telemetry: { feature: 'summary', runId: run.id }, instructions: 'Summarize the workflow outcomes without adding facts. Keep the result brief.', input: { events: run.history.map((item) => ({ nodeId: item.nodeId, kind: item.kind, state: item.state })) }, context: {}, responseSchema: schema({ text: { type: 'string' } }, ['text']), policy: { milliseconds: 30000, attempts: 1, tokens: 500, cost: 1, toolRounds: 0, effects: 0 } });
     let result: ModelResult;
     try { result = await attempt(selection.model); } catch (error) {
       if (!selection.fallback) throw error;

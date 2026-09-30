@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { afterEach, expect, test, vi } from 'vitest';
+import { observe, resetObservers } from '../../telemetry/src/observe.test-support.js';
 import type { HostedMemoryItem } from './memory.js';
 import type { ModelSettings } from './model-settings.js';
 import { OpenRouterConnectionCrypto } from './openrouter-connection.js';
@@ -17,7 +18,7 @@ const run = { tenantId: tenant, history: [{ nodeId: 'agent', kind: 'agent', stat
 const chatResponse = (usage: Record<string, unknown>) => Response.json({ choices: [{ message: { content: JSON.stringify({ text: 'summary' }) } }], usage });
 const item: HostedMemoryItem = { id: '11111111-1111-4111-8111-111111111112', text: 'prefers email', metadata: { stableDefinitionId: 's', definitionId: 'd', producingRevision: 1, type: 'task-fact', sourceId: 'x', sourceDigest: 'a'.repeat(64), state: 'promoted', expiresAt: '2099-01-01T00:00:00.000Z' } };
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); resetObservers(); });
 
 test('summary uses the tenant-selected OpenRouter model and its reported cost', async () => {
   const fetcher = vi.fn().mockResolvedValue(chatResponse({ total_tokens: 100, cost: 0.0042 }));
@@ -141,4 +142,141 @@ test('without tools no tool fields are sent', async () => {
   await new HttpModelPort({}, storeWith(), crypto).complete({ ...toolRequest, tools: [] });
   const body = JSON.parse((fetcher.mock.calls[0] as [string, RequestInit])[1].body as string) as Record<string, unknown>;
   expect(body).not.toHaveProperty('tools'); expect(body).not.toHaveProperty('parallel_tool_calls');
+});
+
+const telemetryRequest = { ...toolRequest, model: 'anthropic/claude-sonnet-5.5', telemetry: { feature: 'workflow' as const, runId: 'run-1', nodeId: 'node-1', attempt: 2 } };
+const usageResponse = (usage: Record<string, unknown>, text = 'ok') => Response.json({ choices: [{ message: { content: JSON.stringify({ result: text }) } }], usage });
+
+test('a successful call records one span, a duration point, input and output token points, the cost and one model.call event', async () => {
+  const { spans, points, events } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(usageResponse({ prompt_tokens: 60, completion_tokens: 40, total_tokens: 100, cost: 0.0042 })));
+  const result = await new HttpModelPort({}, storeWith(), crypto).complete(telemetryRequest);
+  const labels = { 'gen_ai.provider.name': 'openrouter', 'gen_ai.request.model': 'anthropic/claude-sonnet-5.5', tenant_id: tenant, feature: 'workflow' };
+  expect(result).toMatchObject({ tokens: 100, cost: 0.0042, promptTokens: 60, completionTokens: 40 });
+  expect((await spans()).map((span) => ({ name: span.name, attributes: span.attributes, status: span.status.code }))).toEqual([{ name: 'chat anthropic/claude-sonnet-5.5', attributes: { 'gen_ai.operation.name': 'chat', 'gen_ai.provider.name': 'openrouter', 'gen_ai.request.model': 'anthropic/claude-sonnet-5.5', tenant_id: tenant, feature: 'workflow', 'workflow.run_id': 'run-1', 'workflow.node_id': 'node-1' }, status: 0 }]);
+  const duration = await points('gen_ai.client.operation.duration');
+  expect(duration.map((point) => point.attributes)).toEqual([labels]);
+  expect((duration[0]?.value as { count: number }).count).toBe(1);
+  const tokens = await points('gen_ai.client.token.usage');
+  expect(tokens.map((point) => ({ type: point.attributes['gen_ai.token.type'], sum: (point.value as { sum: number }).sum, attributes: point.attributes })).sort((left, right) => String(left.type).localeCompare(String(right.type)))).toEqual([{ type: 'input', sum: 60, attributes: { ...labels, 'gen_ai.token.type': 'input' } }, { type: 'output', sum: 40, attributes: { ...labels, 'gen_ai.token.type': 'output' } }]);
+  expect((await points('gen_ai.client.cost')).map((point) => ({ value: point.value, attributes: point.attributes }))).toEqual([{ value: 0.0042, attributes: labels }]);
+  expect(events('model.call')).toEqual([{ event: 'model.call', level: 'info', at: expect.any(String) as string, tenant_id: tenant, run_id: 'run-1', node_id: 'node-1', provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5', attempt: 2, outcome: 'succeeded', tokens: 100, cost: 0.0042, duration_s: expect.any(Number) as number }]);
+});
+
+test('a provider that reports only total_tokens yields one total token point', async () => {
+  const { points } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(usageResponse({ total_tokens: 100, cost: 0.0042 })));
+  await new HttpModelPort({}, storeWith(), crypto).complete(telemetryRequest);
+  expect((await points('gen_ai.client.token.usage')).map((point) => ({ type: point.attributes['gen_ai.token.type'], sum: (point.value as { sum: number }).sum }))).toEqual([{ type: 'total', sum: 100 }]);
+});
+
+test('negative or non-numeric prompt and completion counts fall back to the total', async () => {
+  const { points } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(usageResponse({ prompt_tokens: -1, completion_tokens: '40', total_tokens: 100, cost: 0.0042 })));
+  const result = await new HttpModelPort({}, storeWith(), crypto).complete(telemetryRequest);
+  expect(result.promptTokens).toBeUndefined(); expect(result.completionTokens).toBeUndefined();
+  expect((await points('gen_ai.client.token.usage')).map((point) => point.attributes['gen_ai.token.type'])).toEqual(['total']);
+});
+
+test('a response without usage records no token point and no cost, and the event carries neither', async () => {
+  const { points, events } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(usageResponse({})));
+  const port = new HttpModelPort({ WORKFLOW_OPENROUTER_MAX_COST_PER_1K_TOKENS: '0.5' }, storeWith(), crypto);
+  const result = await port.complete(telemetryRequest);
+  expect(result.tokens).toBe(Infinity);
+  expect(await points('gen_ai.client.token.usage')).toEqual([]);
+  expect(await points('gen_ai.client.cost')).toEqual([]);
+  expect((await points('gen_ai.client.operation.duration')).length).toBe(1);
+  expect(events('model.call')).toEqual([expect.not.objectContaining({ tokens: expect.anything() as unknown })]);
+  expect(events('model.call')[0]).not.toHaveProperty('cost');
+  expect(events('model.call')[0]).toMatchObject({ outcome: 'succeeded' });
+});
+
+test('an Azure OpenAI call is labelled azure-openai and priced at the configured rate', async () => {
+  const { points } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(usageResponse({ total_tokens: 2000 })));
+  await new HttpModelPort({ ...environment, WORKFLOW_MAX_COST_PER_1K_TOKENS: '0.25' }, storeWith(), crypto).complete({ ...telemetryRequest, provider: 'azure-openai', model: 'gpt-4.1' });
+  expect((await points('gen_ai.client.cost')).map((point) => ({ value: point.value, provider: point.attributes['gen_ai.provider.name'], model: point.attributes['gen_ai.request.model'] }))).toEqual([{ value: 0.5, provider: 'azure-openai', model: 'gpt-4.1' }]);
+});
+
+test('an HTTP 500 records the duration with a fixed error type, marks the span as an error and rethrows the original error', async () => {
+  const { spans, points, events } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('boom', { status: 500 })));
+  await expect(new HttpModelPort({}, storeWith(), crypto).complete(telemetryRequest)).rejects.toMatchObject({ message: 'PROVIDER_FAILED', cause: { upstreamStatus: 500 } });
+  const duration = await points('gen_ai.client.operation.duration');
+  expect(duration.map((point) => point.attributes['error.type'])).toEqual(['PROVIDER_FAILED']);
+  const [span] = (await spans());
+  expect(span?.status).toEqual({ code: 2, message: 'PROVIDER_FAILED' });
+  expect(span?.attributes['error.type']).toBe('PROVIDER_FAILED');
+  expect(span?.events).toEqual([]);
+  expect(events('model.call')).toEqual([expect.objectContaining({ outcome: 'failed', model: 'anthropic/claude-sonnet-5.5' })]);
+  expect(await points('gen_ai.client.token.usage')).toEqual([]);
+  expect(await points('gen_ai.client.cost')).toEqual([]);
+});
+
+test.each([
+  [new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'timeout'],
+  [new DOMException('aborted', 'AbortError'), 'timeout'],
+  [new Error('sk-secret-provider-message'), 'other'],
+  ['not an error', 'other'],
+])('the error %# is mapped to the fixed error type %s and never used as a raw label', async (thrown, expected) => {
+  const { points, everything } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(thrown));
+  await expect(new HttpModelPort({}, storeWith(), crypto).complete(telemetryRequest)).rejects.toBe(thrown);
+  expect((await points('gen_ai.client.operation.duration')).map((point) => point.attributes['error.type'])).toEqual([expect.stringMatching(expected) as string]);
+  expect(await everything()).not.toContain('sk-secret-provider-message');
+});
+
+test('an invalid model output is reported with its own error type', async () => {
+  const { points } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ choices: [{ message: { content: 'not json' } }], usage: { total_tokens: 5, cost: 0.001 } })));
+  await expect(new HttpModelPort({}, storeWith(), crypto).complete(telemetryRequest)).rejects.toThrow('INVALID_MODEL_OUTPUT');
+  expect((await points('gen_ai.client.operation.duration')).map((point) => point.attributes['error.type'])).toEqual(['INVALID_MODEL_OUTPUT']);
+});
+
+test('a request without telemetry defaults the feature to workflow and omits run and node from the span', async () => {
+  const { spans, points } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(usageResponse({ total_tokens: 5, cost: 0.001 })));
+  await new HttpModelPort({}, storeWith(), crypto).complete({ ...toolRequest, model: 'a/tooling' });
+  expect((await spans())[0]?.attributes).toEqual({ 'gen_ai.operation.name': 'chat', 'gen_ai.provider.name': 'openrouter', 'gen_ai.request.model': 'a/tooling', tenant_id: tenant, feature: 'workflow' });
+  expect((await points('gen_ai.client.operation.duration')).map((point) => point.attributes['feature'])).toEqual(['workflow']);
+});
+
+test('run and node ids never become metric labels', async () => {
+  const { points } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(usageResponse({ total_tokens: 5, cost: 0.001 })));
+  await new HttpModelPort({}, storeWith(), crypto).complete(telemetryRequest);
+  for (const name of ['gen_ai.client.operation.duration', 'gen_ai.client.token.usage', 'gen_ai.client.cost']) for (const point of await points(name)) expect(Object.keys(point.attributes)).not.toEqual(expect.arrayContaining(['run_id']));
+  expect(JSON.stringify(await points('gen_ai.client.operation.duration'))).not.toContain('run-1');
+  expect(JSON.stringify(await points('gen_ai.client.cost'))).not.toContain('node-1');
+});
+
+test('a rejected OpenRouter model id records nothing', async () => {
+  const { spans, points, events } = observe();
+  const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
+  await expect(new HttpModelPort({}, storeWith(), crypto).complete({ ...telemetryRequest, model: 'not a model id; drop table' })).rejects.toThrow('DENIED');
+  expect(fetcher).not.toHaveBeenCalled(); expect((await spans())).toEqual([]);
+  expect(await points('gen_ai.client.operation.duration')).toEqual([]); expect(events('model.call')).toEqual([]);
+});
+
+test('the summary call is tagged with the summary feature and its run', async () => {
+  const { spans, points } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(chatResponse({ total_tokens: 100, cost: 0.0042 })));
+  const port = new HttpModelPort({}, storeWith({ summary: { provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5' }, embedding: { provider: 'upstash' } }), crypto);
+  await port.summarize({ ...run, id: 'run-9' });
+  expect((await spans())[0]?.attributes).toMatchObject({ feature: 'summary', 'workflow.run_id': 'run-9' });
+  expect((await points('gen_ai.client.operation.duration')).map((point) => point.attributes['feature'])).toEqual(['summary']);
+});
+
+test('no prompt, instruction, tool argument or model output reaches any span, metric, log record or stdout line', async () => {
+  const { everything } = observe();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(usageResponse({ total_tokens: 100, cost: 0.0042 }, 'MARKER_OUTPUT_9c1d')));
+  const transcript = [{ role: 'assistant' as const, call: { id: 'c', name: 't0_lookup', arguments: { query: 'MARKER_ARGUMENT_2b7e' } } }, { role: 'tool' as const, callId: 'c', name: 't0_lookup', content: 'MARKER_RESULT_5d40' }];
+  await new HttpModelPort({}, storeWith(), crypto).complete({ ...telemetryRequest, instructions: 'MARKER_PROMPT_7f3a', input: { text: 'MARKER_INPUT_a41c' }, context: { text: 'MARKER_CONTEXT_e803' }, transcript });
+  const serialized = await everything();
+  expect(serialized).toContain('gen_ai.client');
+  for (const marker of ['MARKER_OUTPUT_9c1d', 'MARKER_PROMPT_7f3a', 'MARKER_INPUT_a41c', 'MARKER_CONTEXT_e803', 'MARKER_ARGUMENT_2b7e', 'MARKER_RESULT_5d40']) expect(serialized).not.toContain(marker);
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('MARKER_ERROR_BODY_11aa', { status: 500 })));
+  await expect(new HttpModelPort({}, storeWith(), crypto).complete({ ...telemetryRequest, instructions: 'MARKER_PROMPT_7f3a' })).rejects.toThrow();
+  expect(await everything()).not.toContain('MARKER_');
 });

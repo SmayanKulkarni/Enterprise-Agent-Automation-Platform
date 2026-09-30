@@ -13,5 +13,5 @@
     "types": ["node"]
   },
   "include": ["api/**/*.ts", "azure-functions/**/*.ts", "packages/**/*.ts"],
-  "exclude": ["**/*.test.ts", "**/dist/**"]
+  "exclude": ["**/*.test.ts", "**/*.test-support.ts", "**/dist/**"]
 }

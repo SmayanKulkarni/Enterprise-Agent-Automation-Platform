@@ -1,4 +1,5 @@
-import { expect, test } from 'vitest';
+import { afterEach, expect, test } from 'vitest';
+import { observe, resetObservers } from '../../telemetry/src/observe.test-support.js';
 import { InMemoryHostedMemoryPort } from './memory.js';
 import { compileGraph, type CapabilityPin, type GraphDraft, type GraphNode, type WorkflowDefinition } from './graph.js';
 import { WorkflowWorker, type EffectData, type McpPort, type ModelPort, type ModelRequest, type ModelResult } from './runtime.js';
@@ -34,7 +35,7 @@ class Store {
 }
 
 interface Fixture { store: Store; worker: WorkflowWorker; memory: InMemoryHostedMemoryPort; runId: string; requests: ModelRequest[]; invocations: { capability: string; args: Record<string, unknown> }[]; run(): Promise<WorkflowRecord<WorkflowRun>>; approve(decision: 'approve' | 'reject'): Promise<void>; }
-interface Options { risk?: CapabilityPin['risk']; script: (call: number, request: ModelRequest) => ModelResult | Promise<ModelResult>; outcome?: 'succeeded' | 'unknown-outcome' | 'failed'; agentConfig?: Record<string, unknown>; graph?: (base: GraphDraft) => GraphDraft; pins?: CapabilityPin[]; input?: Record<string, unknown>; memoryTenants?: string[]; }
+interface Options { route?: 'public' | 'private'; risk?: CapabilityPin['risk']; script: (call: number, request: ModelRequest) => ModelResult | Promise<ModelResult>; outcome?: 'succeeded' | 'unknown-outcome' | 'failed'; agentConfig?: Record<string, unknown>; graph?: (base: GraphDraft) => GraphDraft; pins?: CapabilityPin[]; input?: Record<string, unknown>; memoryTenants?: string[]; }
 
 async function fixture(options: Options): Promise<Fixture> {
   const store = new Store(); const runId = '99999999-9999-4999-8999-999999999999';
@@ -42,7 +43,7 @@ async function fixture(options: Options): Promise<Fixture> {
   const draft = options.graph ? options.graph(base) : base;
   const definition = await compileGraph(definitionId, 1, draft, options.pins ?? [pin('crm', 'lookup', options.risk ?? 'R1')]);
   store.definition = { id: definitionId, draftId: definitionId, draftRevision: 1, digest: definition.digest, definition };
-  await store.workerWrite(tenant, 'installation', installationId, 0, 'healthy', { route: 'public', endpoint: 'https://example.com/mcp', health: 'healthy', manifest: { version: '1', certified: true, digest: manifestDigest, capabilities: [] } });
+  await store.workerWrite(tenant, 'installation', installationId, 0, 'healthy', { route: options.route ?? 'public', endpoint: 'https://example.com/mcp', health: 'healthy', manifest: { version: '1', certified: true, digest: manifestDigest, capabilities: [] } });
   await store.workerWrite(tenant, 'grant', grantId, 0, 'active', {});
   const run: WorkflowRun = { id: runId, tenantId: tenant, ownerId: tenant, stableDefinitionId: definitionId, definitionId, definitionRevision: 1, definitionDigest: definition.digest, inputDigest: 'b'.repeat(64), input: options.input ?? {}, status: 'running', history: [], outputs: {} };
   await store.workerWrite(tenant, 'run', runId, 0, 'running', run);
@@ -58,6 +59,8 @@ async function fixture(options: Options): Promise<Fixture> {
   };
   return { store, worker, memory, runId, requests, invocations, run: read, approve };
 }
+
+afterEach(resetObservers);
 
 const call = (id: string, name: string, args: Record<string, unknown>): ModelResult => ({ output: {}, model: 'gpt-4.1', tokens: 10, cost: 0.01, toolCall: { id, name, arguments: args } });
 const answer = (text: string): ModelResult => ({ output: { result: text }, model: 'gpt-4.1', tokens: 10, cost: 0.01 });
@@ -117,6 +120,49 @@ test('a failed model attempt adds nothing to the run usage', async () => {
   const step = await start(f);
   expect(await step()).toEqual({ failed: true });
   expect((await f.run()).data.usage).toBeUndefined();
+});
+
+test('every model request carries its feature, run, node and attempt number', async () => {
+  const f = await fixture({ script: (n) => n === 1 ? call('c1', 't0_lookup', { query: 'acme' }) : answer('done') });
+  const step = await start(f);
+  await step();
+  expect(f.requests.map((request) => request.telemetry)).toEqual([{ feature: 'workflow', runId: f.runId, nodeId: 'agent', attempt: 1 }, { feature: 'workflow', runId: f.runId, nodeId: 'agent', attempt: 1 }]);
+});
+
+test('a public tool call records its span, one duration point with the port outcome and one mcp.call event, and leaks no arguments or results', async () => {
+  const { spans, points, events, everything } = observe();
+  const f = await fixture({ script: (n) => n === 1 ? call('c1', 't0_lookup', { query: 'MARKER_ARGUMENT_2b7e' }) : answer('done') });
+  const step = await start(f);
+  await step();
+  const duration = await points('mcp.tool.call.duration');
+  expect(duration.map((point) => ({ attributes: point.attributes, count: (point.value as { count: number }).count }))).toEqual([{ attributes: { tenant_id: tenant, capability: 'lookup', outcome: 'succeeded', route: 'public' }, count: 1 }]);
+  const [effect] = await f.store.workerList<EffectData>(tenant, 'effect');
+  expect(events('mcp.call')).toEqual([{ event: 'mcp.call', level: 'info', at: expect.any(String) as string, tenant_id: tenant, run_id: f.runId, node_id: 'crm', capability: 'lookup', route: 'public', outcome: 'succeeded', duration_s: expect.any(Number) as number, effect_id: effect?.id }]);
+  expect((await spans()).filter((span) => span.name === 'mcp.call').map((span) => ({ attributes: span.attributes, status: span.status.code }))).toEqual([{ attributes: { tenant_id: tenant, capability: 'lookup', route: 'public', 'workflow.run_id': f.runId, 'workflow.node_id': 'crm' }, status: 0 }]);
+  const serialized = await everything();
+  expect(serialized).toContain('mcp.tool.call.duration');
+  expect(serialized).not.toContain('MARKER_ARGUMENT_2b7e'); expect(serialized).not.toContain('found:');
+});
+
+test('a failed public tool call records its outcome and marks the span as an error', async () => {
+  const { spans, points, events } = observe();
+  const f = await fixture({ outcome: 'failed', script: () => call('c1', 't0_lookup', { query: 'acme' }) });
+  const step = await start(f);
+  expect(await step()).toEqual({ failed: true });
+  expect((await points('mcp.tool.call.duration')).map((point) => point.attributes['outcome'])).toEqual(['failed']);
+  expect(events('mcp.call')).toEqual([expect.objectContaining({ outcome: 'failed' })]);
+  expect((await spans()).find((span) => span.name === 'mcp.call')?.status).toEqual({ code: 2, message: 'failed' });
+});
+
+test('a capability queued to a private connector emits a queued mcp.call event and no duration point', async () => {
+  const { points, events } = observe();
+  const f = await fixture({ route: 'private', script: (n) => n === 1 ? call('c1', 't0_lookup', { query: 'acme' }) : answer('done') });
+  const step = await start(f);
+  expect(await step()).toMatchObject({ waiting: 'connector' });
+  const [effect] = await f.store.workerList<EffectData>(tenant, 'effect');
+  expect(events('mcp.call')).toEqual([{ event: 'mcp.call', level: 'info', at: expect.any(String) as string, tenant_id: tenant, run_id: f.runId, node_id: 'crm', capability: 'lookup', route: 'private', outcome: 'queued', effect_id: effect?.id }]);
+  expect(await points('mcp.tool.call.duration')).toEqual([]);
+  expect(f.invocations).toHaveLength(0);
 });
 
 test('a rejected tool approval fails the run and never invokes the tool', async () => {

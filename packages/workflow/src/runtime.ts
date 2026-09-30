@@ -3,6 +3,7 @@ import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { digest } from '../../contracts/src/index.js';
 import { report } from '../../errors/src/report.js';
 import { reported } from '../../errors/src/swallow.js';
+import { logQueuedMcpCall, observeMcpCall } from './call-telemetry.js';
 import { pinFor, validateValue, type CapabilityPin, type CompiledNode, type JsonSchema, type NodePolicy, type WorkflowDefinition } from './graph.js';
 import type { Installation, RunEvent, RunUsage, WorkflowRun } from './service.js';
 import { memoryFingerprint, memoryItemId, namespace, resolveMemoryScope, validateMemoryProposal, type HostedMemoryPort, type MemoryImport, type MemoryItem } from './memory.js';
@@ -12,8 +13,9 @@ export interface ModelTool { name: string; description: string; parameters: Json
 export interface ModelToolCall { id: string; name: string; arguments: Record<string, unknown>; }
 export type TranscriptEntry = { role: 'assistant'; call: ModelToolCall } | { role: 'tool'; callId: string; name: string; content: string };
 export interface AgentProgress { transcript: TranscriptEntry[]; rounds: number; effects: number; tokens: number; cost: number; pausedAt?: string; }
-export interface ModelRequest { tenantId: string; provider: 'azure-openai' | 'openrouter'; model: string; promptVersion: string; instructions: string; input: Record<string, unknown>; context: Record<string, unknown>; responseSchema: JsonSchema; policy: NodePolicy; tools?: readonly ModelTool[]; toolChoice?: 'auto' | 'none'; transcript?: readonly TranscriptEntry[]; }
-export interface ModelResult { output: Record<string, unknown>; model: string; tokens: number; cost: number; toolCall?: ModelToolCall; }
+export interface ModelTelemetry { feature: 'workflow' | 'summary' | 'assistant'; runId?: string; nodeId?: string; attempt?: number; }
+export interface ModelRequest { tenantId: string; provider: 'azure-openai' | 'openrouter'; model: string; promptVersion: string; instructions: string; input: Record<string, unknown>; context: Record<string, unknown>; responseSchema: JsonSchema; policy: NodePolicy; tools?: readonly ModelTool[]; toolChoice?: 'auto' | 'none'; transcript?: readonly TranscriptEntry[]; telemetry?: ModelTelemetry; }
+export interface ModelResult { output: Record<string, unknown>; model: string; tokens: number; cost: number; promptTokens?: number; completionTokens?: number; toolCall?: ModelToolCall; }
 export interface ModelPort { complete(request: ModelRequest): Promise<ModelResult>; summarize?(run: WorkflowRun): Promise<{ text: string; sources: string[] }>; }
 export interface McpPort { invoke(installation: Installation, capability: string, args: Record<string, unknown>, effectId: string, deadline: string): Promise<{ outcome: 'succeeded' | 'not-dispatched' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown> }>; }
 export interface EffectData { runId: string; nodeId: string; agentId?: string; installationId: string; requestDigest: string; argumentsDigest: string; state: 'prepared' | 'queued' | 'possible-send' | 'succeeded' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown>; }
@@ -285,7 +287,7 @@ export class WorkflowWorker {
     const call = async (selectedModel: string, attempt: number): Promise<ModelResult | undefined> => {
       const remaining = Date.parse(deadline) - Date.now(); if (remaining <= 0) fail('NODE_DEADLINE');
       let output: ModelResult | undefined;
-      try { output = await this.model.complete({ ...request, model: selectedModel, policy: { ...limits, milliseconds: remaining } }); } catch (error) { report(error, { site: 'runtime.model', tenantId }); }
+      try { output = await this.model.complete({ ...request, model: selectedModel, policy: { ...limits, milliseconds: remaining }, telemetry: { feature: 'workflow', runId: run.id, nodeId: node.id, attempt } }); } catch (error) { report(error, { site: 'runtime.model', tenantId }); }
       await this.afterCircuit(tenantId, `model:${provider}`, output === undefined);
       run = await this.store.workerWrite(tenantId, 'run', run.id, run.version, run.state, { ...run.data, ...(output ? { usage: addUsage(run.data.usage, output) } : {}), history: [...run.data.history, event(node, 'attempted', `${provider}:${selectedModel}:${attempt}:${output ? 'succeeded' : 'failed'}`)] });
       return output;
@@ -434,6 +436,7 @@ export class WorkflowWorker {
 
   private async invokeCapability(tenantId: string, current: WorkflowRecord<WorkflowRun>, definition: WorkflowDefinition, installation: WorkflowRecord<Installation>, call: CapabilityCall): Promise<Invocation> {
     const { node, pin, args, argumentsDigest, deadline, effectId: id } = call;
+    const observed = { tenantId, runId: current.id, nodeId: node.id, capability: pin.capability, effectId: id };
     let effect = await this.store.workerRead<EffectData>(tenantId, 'effect', id);
     if (effect?.state === 'succeeded') return validateValue(effect.data.output, pin.outputSchema) ? { state: 'succeeded', output: effect.data.output!, effectId: id } : { state: 'stopped', reason: 'INVALID_CAPABILITY_OUTPUT' };
     if (effect?.state === 'unknown-outcome' || effect?.state === 'possible-send') return { state: 'stopped', reason: 'RECONCILIATION_REQUIRED', unknown: true };
@@ -442,13 +445,14 @@ export class WorkflowWorker {
     if (installation.data.route === 'private') {
       if (effect.state === 'prepared') await this.store.workerWrite(tenantId, 'effect', id, effect.version, 'queued', { ...effect.data, state: 'queued', output: { capability: pin.capability, args, deadline } });
       await this.store.workerWrite(tenantId, 'run', current.id, current.version, 'waiting-connector', { ...current.data, status: 'waiting-connector', history: [...current.data.history, event(node, 'waiting', 'connector', id)] });
+      logQueuedMcpCall(observed);
       return { state: 'waiting', step: { waiting: 'connector', deadline, effectId: id } };
     }
     if (installation.state !== 'healthy') return { state: 'stopped', reason: 'CONNECTOR_OFFLINE' };
     const blocked = await this.beforeCircuit(tenantId, `connector:${pin.installationId}`);
     if (blocked) return { state: 'waiting', step: { waiting: 'circuit', deadline: new Date(Math.min(Date.parse(blocked), Date.parse(deadline))).toISOString() } };
     effect = await this.store.workerWrite(tenantId, 'effect', id, effect.version, 'possible-send', { ...effect.data, state: 'possible-send' });
-    const result = await this.mcp.invoke(installation.data, pin.capability, args, id, deadline).catch(reported({ outcome: 'unknown-outcome' as const }, 'runtime.mcp'));
+    const result = await observeMcpCall(observed, () => this.mcp.invoke(installation.data, pin.capability, args, id, deadline).catch(reported({ outcome: 'unknown-outcome' as const }, 'runtime.mcp')));
     if (result.outcome === 'unknown-outcome' || result.outcome === 'succeeded' && !result.output) return { state: 'stopped', reason: 'RECONCILIATION_REQUIRED', unknown: true };
     if (result.outcome === 'not-dispatched') await this.afterCircuit(tenantId, `connector:${pin.installationId}`, true);
     if (result.outcome === 'succeeded' && result.output && !validateValue(result.output, pin.outputSchema)) {

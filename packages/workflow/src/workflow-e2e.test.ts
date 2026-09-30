@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { expect, test, vi } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
+import { observe, resetObservers } from '../../telemetry/src/observe.test-support.js';
 import { BrowserV1Transport, ClerkSessionAdapter, type BrowserCommand } from '../../browser/src/index.js';
 import { workflowCommandHandlers } from '../../browser/src/workflow-commands.js';
 import { decodeContract, descriptorFor, digest, tenantId, type ContractEnvelope } from '../../contracts/src/index.js';
@@ -23,6 +24,7 @@ const schema = { type: 'object' as const, properties: { result: { type: 'string'
 const empty = { type: 'object' as const, properties: {}, required: [], additionalProperties: false as const };
 const policy = { milliseconds: 30000, attempts: 1, tokens: 1000, cost: 1, toolRounds: 1, effects: 1 };
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
+afterEach(resetObservers);
 
 class MemoryStudio implements StudioStore {
   private readonly drafts = new Map<string, StudioStoredDraft<StudioDraft | GraphDraft>>();
@@ -92,6 +94,7 @@ function graph(grantId: string, manifestDigest: string): GraphDraft {
 }
 
 test('authenticated browser journey saves, checks, publishes, waits, approves and records one effect', { repeats: Number(process.env['PROFILE_REPEAT'] ?? 0) }, async () => {
+  const { points, events } = observe(); const modelTelemetry: unknown[] = [];
   const identity = new IdentityStore(); for (const id of [tenant, otherTenant]) { identity.provision(id); identity.transition(id, 1, 'activate'); }
   for (const user of [editor, admin]) { identity.mapUser('https://clerk.example', user, user); identity.membership(tenant, user, [user === admin ? 'admin' : 'editor']); identity.setMembership(tenant, user, 1, 'current'); }
   const clerk = new ClerkSessionAdapter({ issuer: 'https://clerk.example', publishableKey: 'pk_test', audience: 'platform-browser-api', authorizedParties: ['https://app.example'] }, {
@@ -102,7 +105,7 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   const service = new WorkflowService(studio, store, scheduler, [tenant]);
   let invocations = 0; let outcome: 'succeeded' | 'unknown-outcome' = 'succeeded';
   const memory = new InMemoryHostedMemoryPort([tenant]);
-  const worker = new WorkflowWorker(store, { complete: async (request) => ({ output: { result: 'approve' }, model: request.model, tokens: 20, cost: 0.01 }) }, { invoke: async () => { invocations += 1; return outcome === 'succeeded' ? { outcome, output: { result: 'written' } } : { outcome }; } }, memory);
+  const worker = new WorkflowWorker(store, { complete: async (request) => { modelTelemetry.push(request.telemetry); return { output: { result: 'approve' }, model: request.model, tokens: 20, cost: 0.01 }; } }, { invoke: async () => { invocations += 1; return outcome === 'succeeded' ? { outcome, output: { result: 'written' } } : { outcome }; } }, memory);
   const browser = new BrowserV1Transport({ allowedOrigins: ['https://app.example'], clerk, identity, commands: workflowCommandHandlers(studio, store, service), projections: (input) => service.projection(input.context, input.collection, input.id) });
   const command = async (user: string, name: string, version: number, values: Record<string, unknown>, key = randomUUID()) => {
     const [owner, action] = name.split('.'); const envelope: ContractEnvelope = { messageId: randomUUID() as ContractEnvelope['messageId'], contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: new Date().toISOString(), sender: 'test', tenantId: tenantId(tenant), classification: 'restricted-operational', payload: { expectedVersion: version, arguments: values } };
@@ -156,6 +159,10 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   expect(signals).toHaveLength(1);
   await worker.step(tenant, startKey, definitionId, 'approval'); await worker.step(tenant, startKey, definitionId, 'mcp'); await worker.step(tenant, startKey, definitionId, 'done');
   expect(invocations).toBe(1);
+  expect(modelTelemetry[0]).toEqual({ feature: 'workflow', runId: startKey, nodeId: 'agent', attempt: 1 });
+  expect((await points('mcp.tool.call.duration')).map((point) => ({ attributes: point.attributes, count: (point.value as { count: number }).count }))).toEqual([{ attributes: { tenant_id: tenant, capability: 'write', outcome: 'succeeded', route: 'public' }, count: 1 }]);
+  const effectId = (await store.workerRead<WorkflowRun>(tenant, 'run', startKey))?.data.history.find((item) => item.nodeId === 'mcp' && item.state === 'completed')?.receiptId;
+  expect(events('mcp.call')).toEqual([expect.objectContaining({ tenant_id: tenant, run_id: startKey, node_id: 'mcp', capability: 'write', route: 'public', outcome: 'succeeded', effect_id: effectId })]);
   expect((await projection(editor, 'workflow-runs')).payload['records']).toMatchObject([{ id: startKey, status: 'completed', definitionRevision: 2, history: expect.arrayContaining([expect.objectContaining({ nodeId: 'mcp', receiptId: expect.any(String) })]), effects: [expect.objectContaining({ nodeId: 'mcp', state: 'succeeded', argumentsDigest: expect.any(String) })] }]);
   expect((await projection(editor, 'workflow-runs', otherTenant)).payload['error']).toMatchObject({ category: 'denied' });
   const completed = await store.workerRead<WorkflowRun>(tenant, 'run', startKey);
