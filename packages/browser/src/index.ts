@@ -1,16 +1,18 @@
 import { Buffer } from 'node:buffer';
 import { createClerkClient, verifyToken } from '@clerk/backend';
-import { canonicalJson, correlationId, decodeContract, descriptorFor, digest, encodeContract, messageId, tenantId, type ContractEnvelope, type NormalizedError } from '../../contracts/src/index.js';
+import { canonicalJson, correlationId, decodeContract, descriptorFor, digest, encodeContract, messageId, tenantId, type ContractEnvelope, type CorrelationId, type NormalizedError } from '../../contracts/src/index.js';
 import { AppError } from '../../errors/src/app-error.js';
 import { correlationIdFrom } from '../../errors/src/boundary.js';
 import { classify } from '../../errors/src/classify.js';
 import type { ErrorContext } from '../../errors/src/report.js';
-import { type IdentityReadStore, type ExecutionContext, type Proof } from '../../identity/src/index.js';
+import { type IdentityReadStore, type ExecutionContext, type GroupContext, type Proof } from '../../identity/src/index.js';
 import { BROWSER_COLLECTIONS, decodeCommandArguments, hasCommandArgumentSchema } from './browser-contracts.js';
 
 export interface BrowserRequest { method: 'GET' | 'POST'; path: string; headers: Readonly<Record<string, string | undefined>>; body?: Uint8Array; }
 export interface BrowserResponse { status: number; headers: Record<string, string>; body: Uint8Array; }
 export interface BrowserCommand { context: ExecutionContext; tenantId: string; owner: string; name: string; idempotencyKey: string; correlationId: string; expectedVersion: number; digest: string; arguments: Record<string, unknown>; envelope: ContractEnvelope; }
+export interface GroupCommand { userId: string; group?: GroupContext; name: string; idempotencyKey: string; correlationId: CorrelationId; expectedVersion: number; digest: string; arguments: Record<string, unknown>; }
+export type GroupCommandHandler = (command: GroupCommand) => Promise<Record<string, unknown>>;
 export type BrowserCommandHandler = (command: BrowserCommand) => Promise<Record<string, unknown>> | Record<string, unknown>;
 export interface ClerkSessionClaims { issuer: string; subject: string; sessionId: string; audience: string; expiresAt: string; tokenUse: string; authorizedParty: string; }
 export interface ClerkSessionPort { verifySessionToken(token: string): Promise<ClerkSessionClaims> | ClerkSessionClaims; getSession(sessionId: string): Promise<{ subject: string; status: 'active' | 'ended' | 'revoked' }> | { subject: string; status: 'active' | 'ended' | 'revoked' }; }
@@ -44,7 +46,7 @@ export class ClerkSessionAdapter {
 export interface BrowserProjection { context: ExecutionContext; collection: string; id?: string; pageSize?: number; cursor?: string; }
 export type BrowserProjectionHandler = (projection: BrowserProjection) => Promise<Record<string, unknown>> | Record<string, unknown>;
 export type BrowserConnectionHandler = (input: { context: ExecutionContext; action: 'connect' | 'rotate' | 'verify' | 'disconnect'; expectedVersion: number; idempotencyKey: string; key?: string }) => Promise<Record<string, unknown>>;
-export interface BrowserTransportOptions { allowedOrigins: readonly string[]; commands?: Readonly<Record<string, BrowserCommandHandler>>; connections?: BrowserConnectionHandler; clerk?: ClerkSessionAdapter; identity?: IdentityReadStore; projections?: BrowserProjectionHandler; now?: () => string; onError?: (error: unknown, context: ErrorContext) => void; }
+export interface BrowserTransportOptions { allowedOrigins: readonly string[]; commands?: Readonly<Record<string, BrowserCommandHandler>>; groupCommands?: Readonly<Record<string, GroupCommandHandler>>; connections?: BrowserConnectionHandler; clerk?: ClerkSessionAdapter; identity?: IdentityReadStore; projections?: BrowserProjectionHandler; now?: () => string; onError?: (error: unknown, context: ErrorContext) => void; }
 export interface SafeCaseProjection { caseId: string; watermark: number; eventSequence: number; generation: number; version: number; classification: 'ordinary' | 'restricted-operational'; redacted: boolean; waiting?: string; approvalDigest?: string; unknownOutcome?: boolean; reconciliation?: string; }
 /** Browser-only Case state: a sequence gap refreshes only the affected Case. */
 export class CaseWorkbench {
@@ -142,6 +144,8 @@ export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
   { method: 'GET', path: '/api/v1/session', owner: 'identity', action: 'identity.session.read', ready: true },
   { method: 'GET', path: '/api/v1/tenants', owner: 'identity', action: 'identity.membership.list', ready: true },
   { method: 'GET', path: '/api/v1/groups', owner: 'governance', action: 'governance.group.list', ready: true },
+  { method: 'POST', path: '/api/v1/groups/commands/governance/create-group', owner: 'governance', action: 'governance.group.create', ready: false },
+  { method: 'POST', path: '/api/v1/groups/:groupId/commands/governance/:name', owner: 'governance', action: 'governance.group.command', ready: false },
   { method: 'GET', path: '/api/v1/tenants/:tenantId/{cases,interventions,capabilities,installations,memory,evaluations,improvements,packages,agent-teams,workflows,skills,test-runs,reviews,versions,operations,deployments,readiness,vendor-assessments,access-grants}[/:id]', owner: 'projection', action: 'projection.read', ready: false },
   { method: 'POST', path: '/api/v1/tenants/:tenantId/commands/:owner/:name', owner: 'named registry', action: 'owner.command', ready: false },
   { method: 'GET', path: '/api/v1/tenants/:tenantId/events', owner: 'operations', action: 'operations.events.read', ready: false },
@@ -159,6 +163,8 @@ export class BrowserV1Transport {
       if (path === '/api/v1/session') return await this.session(request);
       if (path === '/api/v1/tenants') return await this.tenants(request);
       if (path === '/api/v1/groups' && request.method === 'GET') return await this.groups(request);
+      const groupCommand = request.method === 'POST' ? /^\/api\/v1\/groups\/(?:commands\/governance\/(create-group)|([^/]+)\/commands\/governance\/(?!create-group$)([a-z][a-z0-9-]*))$/u.exec(path) : null;
+      if (groupCommand !== null) return await this.groupCommand(request, groupCommand[2] === undefined ? undefined : this.decodeSegment(groupCommand[2]), groupCommand[1] ?? groupCommand[3] ?? '');
       const match = /^\/api\/v1\/tenants\/([^/]+)(?:\/(.*))?$/u.exec(path); if (match === null) throw new AppError('NOT_FOUND');
       const routeTenant = tenantId(this.decodeSegment(match[1] ?? ''));
       const tail = match[2] ?? ''; const query = this.validateQuery(url, routeTenant);
@@ -173,14 +179,34 @@ export class BrowserV1Transport {
 
   private decodeSegment(segment: string): string { try { return decodeURIComponent(segment); } catch (error) { throw new AppError('INVALID_IDENTIFIER', { cause: error }); } }
   private collectionRoute(tail: string): boolean { const [collection, id, extra] = tail.split('/'); return collection !== undefined && collections.has(collection) && extra === undefined && (id === undefined || UUID.test(id)); }
-  private async context(request: BrowserRequest, selectedTenant: string): Promise<ExecutionContext | undefined> { if (this.options.clerk === undefined || this.options.identity === undefined) return undefined; const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ') || authorization.length < 8) throw new AppError('UNAUTHENTICATED'); return this.options.identity.authenticate(await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')), selectedTenant, 'platform-browser-api', this.#now()); }
+  private async proof(request: BrowserRequest): Promise<Proof | undefined> { if (this.options.clerk === undefined || this.options.identity === undefined) return undefined; const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ') || authorization.length < 8) throw new AppError('UNAUTHENTICATED'); return this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); }
+  private async context(request: BrowserRequest, selectedTenant: string): Promise<ExecutionContext | undefined> { const proof = await this.proof(request); return proof === undefined || this.options.identity === undefined ? undefined : this.options.identity.authenticate(proof, selectedTenant, 'platform-browser-api', this.#now()); }
   private async session(request: BrowserRequest): Promise<BrowserResponse> { if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined); const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED'); const proof = await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); const user = await this.options.identity.authenticate(proof, header(request, 'x-platform-tenant') ?? await this.firstTenant(proof), 'platform-browser-api', this.#now()); return this.success(request, String(user.tenantId), { user: { id: user.userId }, tenant: { id: user.tenantId, epoch: user.tenantEpoch }, actionHints: [] }); }
   private async tenants(request: BrowserRequest): Promise<BrowserResponse> { if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined); const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED'); const proof = await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); const memberships = await this.options.identity.membershipsForProof(proof); const selected = String(memberships[0]?.tenantId ?? ''); const context = await this.options.identity.authenticate(proof, selected, 'platform-browser-api', this.#now()); return this.success(request, String(context.tenantId), { tenants: memberships.map((membership) => ({ id: membership.tenantId, profiles: membership.profiles, epoch: membership.epoch })) }); }
   private async groups(request: BrowserRequest): Promise<BrowserResponse> {
-    if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined);
-    const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED');
-    const groups = await this.options.identity.groupsForProof(await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')));
+    const proof = await this.proof(request); if (proof === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined);
+    const groups = await this.options.identity.groupsForProof(proof);
     return this.success(request, undefined, { groups: groups.map((group) => ({ id: group.id, name: group.name, epoch: group.epoch, adminEpoch: group.adminEpoch, tenantIds: group.tenantIds, ...(group.billingTenantId === undefined ? {} : { billingTenantId: group.billingTenantId }) })), completeness: 'full' });
+  }
+  private async groupCommand(request: BrowserRequest, groupId: string | undefined, name: string): Promise<BrowserResponse> {
+    const authorization = header(request, 'authorization'); const key = header(request, 'idempotency-key'); const correlation = header(request, 'x-correlation-id'); const contentType = header(request, 'content-type');
+    if (!authorization?.startsWith('Bearer ') || authorization.length < 8) throw new AppError('UNAUTHENTICATED');
+    if (key === undefined || !UUID.test(key) || !UUID.test(correlation ?? '') || contentType !== MEDIA_TYPE || request.body === undefined) throw new Error('DENIED');
+    const identity = this.options.identity; if (this.options.clerk === undefined || identity === undefined) return this.featureNotReady(request, undefined);
+    const payload = decodeContract(descriptorFor('governance.v1'), request.body).payload; const expectedVersion = payload['expectedVersion']; const argumentsValue = payload['arguments']; const ifMatch = header(request, 'if-match');
+    if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0 || ifMatch !== String(expectedVersion) || argumentsValue === null || Array.isArray(argumentsValue) || typeof argumentsValue !== 'object' || Buffer.byteLength(canonicalJson(argumentsValue)) > 65536) throw new Error('STALE');
+    const handler = this.options.groupCommands?.[`governance.${name}`]; if (handler === undefined) return this.featureNotReady(request, undefined);
+    const validatedArguments = decodeCommandArguments('governance', name, argumentsValue); const proof = await this.proof(request); if (proof === undefined) return this.featureNotReady(request, undefined);
+    const command: GroupCommand = { userId: '', name, idempotencyKey: key, correlationId: correlationId(correlation), expectedVersion, digest: await digest(validatedArguments), arguments: validatedArguments };
+    if (groupId === undefined) {
+      if (expectedVersion !== 0) throw new Error('STALE');
+      const actor = await identity.authenticate(proof, String((validatedArguments['tenantIds'] as string[])[0]), 'platform-browser-api', this.#now());
+      return this.success(request, undefined, await handler({ ...command, userId: actor.userId }));
+    }
+    const session = await identity.authenticateGroup(proof, groupId, 'platform-browser-api', this.#now());
+    const current = await identity.authenticateGroup(proof, groupId, 'platform-browser-api', this.#now());
+    if (current.groupEpoch !== session.groupEpoch || current.adminEpoch !== session.adminEpoch) throw new Error('STALE');
+    return this.success(request, undefined, await handler({ ...command, userId: current.userId, group: current }));
   }
   private async firstTenant(proof: Proof): Promise<string> { if (this.options.identity === undefined) throw new Error('DENIED'); const membership = (await this.options.identity.membershipsForProof(proof))[0]; if (membership === undefined) throw new Error('DENIED'); return String(membership.tenantId); }
   private async projection(request: BrowserRequest, routeTenant: string, tail: string, query: { pageSize?: number; cursor?: string }): Promise<BrowserResponse> { const [collection, id] = tail.split('/'); const context = await this.context(request, routeTenant); if (context === undefined || collection === undefined || this.options.projections === undefined) return this.featureNotReady(request, routeTenant); return this.success(request, routeTenant, await this.options.projections({ context, collection, ...(id === undefined ? {} : { id }), ...query })); }

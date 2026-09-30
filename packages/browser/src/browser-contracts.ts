@@ -14,6 +14,7 @@ export const COMMANDS = {
   portfolio: ['start-run', 'reset-run', 'publish-evidence', 'score-run'],
   vendor: ['start-assessment', 'decide-assessment', 'supersede-assessment', 'request-grant', 'approve-grant', 'provision-grant', 'revoke-grant', 'expire-grant', 'reconcile-grant'],
   workflow: ['check', 'publish', 'start', 'approve', 'grant', 'certify', 'reconcile', 'enroll', 'rotate', 'revoke', 'provision-webhook-credential', 'rotate-webhook-credential', 'disable-webhook-credential', 'test-webhook', 'import-memory', 'revoke-memory-import', 'withdraw-memory', 'hold-memory', 'release-memory-hold', 'set-memory-expiry', 'delete-memory', 'correct-memory', 'invalidate-memory-source', 'configure-model-settings'],
+  governance: ['create-group', 'add-tenant', 'remove-tenant', 'add-admin', 'remove-admin', 'set-billing-tenant'],
 } as const;
 export type CommandOwner = keyof typeof COMMANDS;
 export type CommandName<Owner extends CommandOwner = CommandOwner> = typeof COMMANDS[Owner][number];
@@ -25,6 +26,7 @@ export interface BrowserSession { tenantId: string; actionHints: readonly Action
 export interface BrowserTenant { id: string; profiles: readonly string[]; }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const MAX_GROUP_TENANTS = 50;
 const DIGEST = /^[a-f0-9]{64}$/iu;
 const forbidden = /(?:token|secret|password|credential|payload|api.?key|private.?key|authorization|connection.?string|cookie|bearer)/iu;
 const argumentKeys: Readonly<Record<string, readonly string[]>> = Object.freeze({
@@ -38,6 +40,7 @@ const argumentKeys: Readonly<Record<string, readonly string[]>> = Object.freeze(
   'workflow.import-memory': ['id', 'sourceDefinitionId'], 'workflow.revoke-memory-import': ['id', 'reason'],
   'workflow.withdraw-memory': ['id', 'reason'], 'workflow.hold-memory': ['id', 'reason'], 'workflow.release-memory-hold': ['id', 'reason'], 'workflow.set-memory-expiry': ['id', 'expiresAt'], 'workflow.delete-memory': ['id', 'reason'],
   'workflow.correct-memory': ['id', 'text'], 'workflow.invalidate-memory-source': ['sourceId'], 'workflow.configure-model-settings': ['id', 'settings'],
+  'governance.create-group': ['name', 'tenantIds', 'billingTenantId'], 'governance.add-tenant': ['tenantId'], 'governance.remove-tenant': ['tenantId'],
 });
 export const hasCommandArgumentSchema = (owner: string, name: string): boolean => Object.hasOwn(argumentKeys, `${owner}.${name}`);
 
@@ -72,6 +75,10 @@ export function decodeCommandArguments(owner: string, name: string, value: unkno
   if ('expiresAt' in parsed && (typeof parsed['expiresAt'] !== 'string' || Number.isNaN(Date.parse(parsed['expiresAt'])))) fail();
   if ('reviewDigest' in parsed && (typeof parsed['reviewDigest'] !== 'string' || !DIGEST.test(parsed['reviewDigest']))) fail();
   if ('bindingDigest' in parsed && (typeof parsed['bindingDigest'] !== 'string' || !DIGEST.test(parsed['bindingDigest']))) fail();
+  if ('tenantId' in parsed) id(parsed['tenantId']);
+  if ('tenantIds' in parsed) { const ids = parsed['tenantIds']; if (!Array.isArray(ids) || ids.length < 1 || ids.length > MAX_GROUP_TENANTS || new Set(ids.map((value) => id(value))).size !== ids.length) fail(); }
+  if ('billingTenantId' in parsed && parsed['billingTenantId'] !== null) id(parsed['billingTenantId']);
+  if ('name' in parsed && (typeof parsed['name'] !== 'string' || parsed['name'].trim().length === 0 || parsed['name'].length > 128)) fail();
   if ('nodeId' in parsed) string(parsed['nodeId']);
   if ('capability' in parsed) string(parsed['capability']);
   if ('disposition' in parsed) oneOf(parsed['disposition'], ['adopt', 'no-effect']);

@@ -26,3 +26,33 @@ describe('browser contracts', () => {
     expect(() => decodeReceipt({ commandId: objectId, objectId, owner: 'studio', name: 'submit', state: 'committed', version: -1, watermark: 2, affectedCollections: ['cases'], evidenceIds: [], digest: 'a'.repeat(64) })).toThrow(BrowserContractError);
   });
 });
+
+describe('governance command arguments', () => {
+  const create = { name: 'Platform', tenantIds: [tenantId], billingTenantId: null };
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+
+  test('accepts a valid create-group with a null billing workspace', () => {
+    expect(decodeCommandArguments('governance', 'create-group', create)).toEqual(create);
+    expect(decodeCommandArguments('governance', 'create-group', { ...create, tenantIds: ids(50), billingTenantId: ids(50)[0] })).toMatchObject({ name: 'Platform' });
+    expect(decodeCommandArguments('governance', 'add-tenant', { tenantId })).toEqual({ tenantId });
+    expect(decodeCommandArguments('governance', 'remove-tenant', { tenantId })).toEqual({ tenantId });
+  });
+
+  test.each([
+    ['no workspaces', { ...create, tenantIds: [] }],
+    ['51 workspaces', { ...create, tenantIds: ids(51) }],
+    ['a duplicate workspace', { ...create, tenantIds: [tenantId, tenantId] }],
+    ['a non-UUID workspace', { ...create, tenantIds: ['nope'] }],
+    ['an empty name', { ...create, name: '' }],
+    ['a 129-char name', { ...create, name: 'x'.repeat(129) }],
+    ['an omitted billing workspace', { name: 'Platform', tenantIds: [tenantId] }],
+    ['a non-UUID billing workspace', { ...create, billingTenantId: 'nope' }],
+  ])('rejects create-group with %s', (_name, value) => {
+    expect(() => decodeCommandArguments('governance', 'create-group', value)).toThrow(BrowserContractError);
+  });
+
+  test('rejects a non-UUID workspace on add-tenant', () => {
+    expect(() => decodeCommandArguments('governance', 'add-tenant', { tenantId: 'nope' })).toThrow(BrowserContractError);
+  });
+});
+

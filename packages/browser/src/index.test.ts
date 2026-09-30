@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { expect, test } from 'vitest';
 import { BROWSER_COLLECTIONS } from './browser-contracts.js';
-import { BrowserV1Transport, ClerkSessionAdapter, liveClerkSessionAdapter, type BrowserTransportOptions, type ClerkBackend } from './index.js';
+import { BrowserV1Transport, ClerkSessionAdapter, liveClerkSessionAdapter, type BrowserTransportOptions, type ClerkBackend, type GroupCommand } from './index.js';
 import { decodeContract, descriptorFor } from '../../contracts/src/index.js';
 import { IdentityStore } from '../../identity/src/index.js';
 
@@ -11,14 +11,19 @@ const origin = 'https://app.example';
 
 const groupId = 'a0000000-0000-4000-8000-000000000001';
 
-function transport(extra: Partial<BrowserTransportOptions> = {}, withGroup = false): BrowserV1Transport {
+function identityStore(groupAdmins?: readonly string[]): IdentityStore {
   const identity = new IdentityStore();
   identity.provision(tenantId);
   identity.transition(tenantId, 1, 'activate');
   identity.mapUser('https://clerk.example', userId, userId);
   identity.membership(tenantId, userId, ['admin']);
   identity.setMembership(tenantId, userId, 1, 'current');
-  if (withGroup) identity.group(groupId, 'Local group', [tenantId], [userId]);
+  if (groupAdmins !== undefined) identity.group(groupId, 'Local group', [tenantId], groupAdmins);
+  return identity;
+}
+
+function transport(extra: Partial<BrowserTransportOptions> = {}, groupAdmins?: readonly string[]): BrowserV1Transport {
+  const identity = identityStore(groupAdmins);
   const clerk = new ClerkSessionAdapter({ issuer: 'https://clerk.example', publishableKey: 'pk_test', audience: 'platform-browser-api', authorizedParties: [origin] }, {
     verifySessionToken: () => ({ issuer: 'https://clerk.example', subject: userId, sessionId: userId, audience: 'platform-browser-api', expiresAt: '2099-01-01T00:00:00.000Z', tokenUse: 'session', authorizedParty: origin }),
     getSession: () => ({ subject: userId, status: 'active' }),
@@ -104,7 +109,7 @@ test.each([
 const payloadOf = (response: { body: Uint8Array }): Record<string, unknown> => (JSON.parse(new TextDecoder().decode(response.body)) as { payload: Record<string, unknown> }).payload;
 
 test('lists the groups a user administers in a governance.v1 envelope without a tenant id', async () => {
-  const response = await get(transport({}, true), '/api/v1/groups');
+  const response = await get(transport({}, [userId]), '/api/v1/groups');
   const envelope = decodeContract(descriptorFor('governance.v1'), response.body);
 
   expect(response.status).toBe(200);
@@ -121,14 +126,103 @@ test('answers 200 with an empty list for a user in no group', async () => {
 });
 
 test('answers 401 without a bearer token on group routes in a governance.v1 envelope', async () => {
-  const response = await get(transport({}, true), '/api/v1/groups', { origin });
+  const response = await get(transport({}, [userId]), '/api/v1/groups', { origin });
 
   expect(response.status).toBe(401);
   expect(decodeContract(descriptorFor('governance.v1'), response.body).tenantId).toBeUndefined();
 });
 
 test('keeps browser.v1 envelopes on tenant routes', async () => {
-  const response = await get(transport({}, true), '/api/v1/tenants');
+  const response = await get(transport({}, [userId]), '/api/v1/tenants');
 
   expect(decodeContract(descriptorFor('browser.v1'), response.body, tenantId).contract).toBe('browser.v1');
+});
+
+const commandBody = (expectedVersion: number, args: Record<string, unknown>) => ({ messageId: correlation, contract: 'governance.v1', contractVersion: '1.0.0', occurredAt: '2026-01-01T00:00:00.000Z', correlationId: correlation, sender: 'platform-browser', classification: 'restricted-operational', payload: { expectedVersion, arguments: args } });
+const commandHeaders = { authorization: `Bearer ${userId}`, origin, 'content-type': 'application/vnd.platform.browser.v1+json', 'idempotency-key': '33333333-3333-4333-8333-333333333333', 'x-correlation-id': correlation, 'if-match': '1' };
+const postGroup = (browser: BrowserV1Transport, path: string, body: unknown, headers: Record<string, string | undefined> = commandHeaders) => browser.handle({ method: 'POST', path, headers, body: new TextEncoder().encode(JSON.stringify(body)) });
+const addTenantPath = `/api/v1/groups/${groupId}/commands/governance/add-tenant`;
+const otherTenant = '55555555-5555-4555-8555-555555555555';
+const okReceipt = { commandId: 'c', objectId: groupId, revision: 2, state: 'tenant-added', digest: 'd', evidenceIds: [] };
+
+test('runs a group command with validated arguments, the group session and the unchanged expected version', async () => {
+  const seen: GroupCommand[] = [];
+  const browser = transport({ groupCommands: { 'governance.add-tenant': (command) => { seen.push(command); return Promise.resolve(okReceipt); } } }, [userId]);
+  const response = await postGroup(browser, addTenantPath, commandBody(1, { tenantId: otherTenant }));
+
+  expect(response.status).toBe(200);
+  expect(decodeContract(descriptorFor('governance.v1'), response.body).tenantId).toBeUndefined();
+  expect(seen).toHaveLength(1);
+  expect(seen[0]).toMatchObject({ userId, name: 'add-tenant', expectedVersion: 1, arguments: { tenantId: otherTenant }, group: { groupId, groupEpoch: 1, adminEpoch: 1 } });
+});
+
+test.each([
+  ['a non-admin of the group', [], addTenantPath],
+  ['a foreign group id', [userId], `/api/v1/groups/66666666-6666-4666-8666-666666666666/commands/governance/add-tenant`],
+])('refuses a group command from %s with 403', async (_name, admins, path) => {
+  const browser = transport({ groupCommands: { 'governance.add-tenant': () => Promise.resolve(okReceipt) } }, admins);
+  const response = await postGroup(browser, path, commandBody(1, { tenantId: otherTenant }));
+
+  expect(response.status).toBe(403);
+});
+
+test.each([
+  ['a missing origin', { ...commandHeaders, origin: undefined }],
+  ['a missing idempotency key', { ...commandHeaders, 'idempotency-key': undefined }],
+  ['a non-UUID correlation id', { ...commandHeaders, 'x-correlation-id': 'nope' }],
+  ['a wrong content type', { ...commandHeaders, 'content-type': 'application/json' }],
+])('refuses a group command with %s', async (_name, headers) => {
+  const browser = transport({ groupCommands: { 'governance.add-tenant': () => Promise.resolve(okReceipt) } }, [userId]);
+  const response = await postGroup(browser, addTenantPath, commandBody(1, { tenantId: otherTenant }), headers);
+
+  expect(response.status).toBe(403);
+});
+
+test('refuses a group command without a bearer token with 401', async () => {
+  const browser = transport({ groupCommands: { 'governance.add-tenant': () => Promise.resolve(okReceipt) } }, [userId]);
+
+  expect((await postGroup(browser, addTenantPath, commandBody(1, { tenantId: otherTenant }), { ...commandHeaders, authorization: undefined })).status).toBe(401);
+});
+
+test('answers 409 when if-match differs from the expected version', async () => {
+  const browser = transport({ groupCommands: { 'governance.add-tenant': () => Promise.resolve(okReceipt) } }, [userId]);
+
+  expect((await postGroup(browser, addTenantPath, commandBody(1, { tenantId: otherTenant }), { ...commandHeaders, 'if-match': '5' })).status).toBe(409);
+});
+
+test('answers 409 when the group epoch changes between the two session reads', async () => {
+  const base = identityStore([userId]); let reads = 0;
+  const identity = Object.assign(Object.create(base) as IdentityStore, { authenticateGroup: (...input: Parameters<IdentityStore['authenticateGroup']>) => { const context = base.authenticateGroup(...input); reads += 1; return reads > 1 ? { ...context, groupEpoch: context.groupEpoch + 1 } : context; } });
+  const browser = transport({ identity, groupCommands: { 'governance.add-tenant': () => Promise.resolve(okReceipt) } }, [userId]);
+
+  expect((await postGroup(browser, addTenantPath, commandBody(1, { tenantId: otherTenant }))).status).toBe(409);
+});
+
+test('answers 501 for a group command when no handlers are registered', async () => {
+  expect((await postGroup(transport({}, [userId]), addTenantPath, commandBody(1, { tenantId: otherTenant }))).status).toBe(501);
+});
+
+test('rejects invalid group command arguments with 422', async () => {
+  const browser = transport({ groupCommands: { 'governance.add-tenant': () => Promise.resolve(okReceipt) } }, [userId]);
+
+  expect((await postGroup(browser, addTenantPath, commandBody(1, { tenantId: 'nope' }))).status).toBe(422);
+});
+
+test('creates a group as the caller authenticated against the first listed workspace', async () => {
+  const seen: GroupCommand[] = [];
+  const browser = transport({ groupCommands: { 'governance.create-group': (command) => { seen.push(command); return Promise.resolve(okReceipt); } } });
+  const args = { name: 'Platform', tenantIds: [tenantId], billingTenantId: null };
+  const created = await postGroup(browser, '/api/v1/groups/commands/governance/create-group', commandBody(0, args), { ...commandHeaders, 'if-match': '0' });
+
+  expect(created.status).toBe(200);
+  expect(seen[0]).toMatchObject({ userId, name: 'create-group', expectedVersion: 0, arguments: args });
+  expect(seen[0]?.group).toBeUndefined();
+  expect((await postGroup(browser, '/api/v1/groups/commands/governance/create-group', commandBody(1, args))).status).toBe(409);
+});
+
+test('refuses to create a group in a workspace the caller is not a member of', async () => {
+  const browser = transport({ groupCommands: { 'governance.create-group': () => Promise.resolve(okReceipt) } });
+  const response = await postGroup(browser, '/api/v1/groups/commands/governance/create-group', commandBody(0, { name: 'Platform', tenantIds: [otherTenant], billingTenantId: null }), { ...commandHeaders, 'if-match': '0' });
+
+  expect(response.status).toBe(403);
 });

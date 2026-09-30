@@ -32,7 +32,7 @@ export interface WorkflowStore {
 }
 
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
-const mapError = (error: unknown): never => {
+export const mapError = (error: unknown): never => {
   const number = error !== null && typeof error === 'object' && 'number' in error ? error.number : undefined;
   if (number === 50001) fail('DENIED');
   if (number === 50002) fail('INVALID');
