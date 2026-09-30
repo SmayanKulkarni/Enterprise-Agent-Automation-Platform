@@ -8,6 +8,7 @@ import { BROWSER_COLLECTIONS } from './browser-contracts.js';
 import { BrowserV1Transport, ClerkSessionAdapter, liveClerkSessionAdapter, type BrowserTransportOptions, type ClerkBackend, type GroupCommand, type GroupProjection } from './index.js';
 import { decodeContract, descriptorFor } from '../../contracts/src/index.js';
 import { IdentityStore } from '../../identity/src/index.js';
+import { GovernanceService } from '../../governance/src/service.js';
 
 let stdout: { mock: { calls: unknown[][] } };
 beforeEach(() => { stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined); });
@@ -248,6 +249,26 @@ test('serves the members collection to a group admin in a governance.v1 envelope
   expect(envelope.tenantId).toBeUndefined();
   expect(envelope.payload).toMatchObject({ groupId, collection: 'members', ...membersPayload });
   expect(seen[0]).toMatchObject({ collection: 'members', query: {}, context: { userId, groupId, groupEpoch: 1, adminEpoch: 1 } });
+});
+
+const governedReads = () => {
+  const calls: string[] = [];
+  const window = { runs: 0, completed: 0, failed: 0, unknownOutcome: 0, p95Ms: null, tokens: 0, cost: 0, estimatedRuns: 0 };
+  const store = { members: () => Promise.resolve(membersPayload), overview: () => { calls.push('overview'); return Promise.resolve({ workspaces: [{ tenantId, name: 'one', window: 'current' as const, ...window }, { tenantId, name: 'one', window: 'previous' as const, ...window }], totals: [{ window: 'current' as const, ...window }, { window: 'previous' as const, ...window }], pending: [] }); }, runSeries: () => Promise.resolve([]), workflows: () => Promise.resolve([]) };
+  const service = new GovernanceService(store);
+  return { calls, options: { groupProjections: (projection: GroupProjection) => service.read(projection.context, projection.collection, projection.query) } };
+};
+
+test('serves the overview to a group admin, refuses a bad range with 422 and a workspace outside the group with 403', async () => {
+  const { calls, options } = governedReads();
+  const ok = await get(transport(options, [userId]), `/api/v1/groups/${groupId}/overview?range=7d`);
+
+  expect(ok.status).toBe(200);
+  expect(decodeContract(descriptorFor('governance.v1'), ok.body).payload).toMatchObject({ groupId, collection: 'overview', range: '7d', classification: 'restricted-operational', workspaces: [{ tenantId, runs: 0 }] });
+  expect((await get(transport(options, [userId]), `/api/v1/groups/${groupId}/overview?range=2y`)).status).toBe(422);
+  expect((await get(transport(options, [userId]), `/api/v1/groups/${groupId}/overview?range=7d&tenant=66666666-6666-4666-8666-666666666666`)).status).toBe(403);
+  expect((await get(transport(options, []), `/api/v1/groups/${groupId}/overview?range=7d`)).status).toBe(403);
+  expect(calls).toEqual(['overview']);
 });
 
 test.each([

@@ -2,7 +2,7 @@ import { expect, test, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ recordsets: [] as unknown[], error: undefined as Error | undefined, calls: [] as { procedure: string; inputs: Record<string, unknown> }[] }));
 vi.mock('mssql', () => ({ default: {
-  UniqueIdentifier: 'uuid', BigInt: 'bigint', NVarChar: () => 'nvarchar', Char: () => 'char', MAX: 'max',
+  UniqueIdentifier: 'uuid', BigInt: 'bigint', Int: 'int', DateTime2: () => 'datetime2', NVarChar: () => 'nvarchar', Char: () => 'char', MAX: 'max',
   ConnectionPool: class {
     connect() { return Promise.resolve(this); }
     on() { return this; }
@@ -58,4 +58,45 @@ test.each([
 
   expect(await new AzureSqlGovernanceStore('command-test').command(name, context, 4, args, key, 'd'.repeat(64), receipt)).toEqual({ receipt, replayed: false });
   expect(state.calls.at(-1)).toMatchObject({ procedure, inputs: { group_id: context.groupId, user_id: context.userId, group_epoch: 4, admin_epoch: 2, [parameter]: expected, idempotency_key: key } });
+});
+
+const from = new Date('2026-09-23T12:00:00.000Z'); const to = new Date('2026-09-30T12:00:00.000Z');
+const row = { runs: '12', completed: 9, failed: 2, unknown_outcome: 1, p95_ms: 2500, tokens: '3000', cost: 1.25, estimated_runs: 0 };
+
+test('binds the window and tenant, and maps the three read_overview recordsets with bigint counts kept as strings', async () => {
+  state.error = undefined;
+  state.recordsets = [
+    [{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', slug: 'alpha', window: 'current', ...row }],
+    [{ window: 'previous', ...row, p95_ms: null }],
+    [{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', pending_approvals: 3 }],
+  ];
+
+  const result = await new AzureSqlGovernanceStore('overview-test').overview(context, from, to, 'aaaaaaaa-1111-4111-8111-111111111111');
+
+  expect(result.workspaces).toEqual([{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', name: 'alpha', window: 'current', runs: '12', completed: 9, failed: 2, unknownOutcome: 1, p95Ms: 2500, tokens: '3000', cost: 1.25, estimatedRuns: 0 }]);
+  expect(result.totals[0]).toMatchObject({ window: 'previous', p95Ms: null });
+  expect(result.pending).toEqual([{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', pendingApprovals: 3 }]);
+  expect(state.calls.at(-1)).toEqual({ procedure: 'governance.read_overview', inputs: { group_id: context.groupId, user_id: context.userId, group_epoch: 4, admin_epoch: 2, from, to, tenant_id: 'aaaaaaaa-1111-4111-8111-111111111111' } });
+});
+
+test('passes a null tenant and the bucket size to read_run_series and read_workflows', async () => {
+  state.error = undefined;
+  state.recordsets = [[{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', slug: 'alpha', bucket_start: from, completed: 1, failed: 0, unknown_outcome: 0, cost: 0.5, tokens: '10', estimated_runs: 0 }]];
+  const store = new AzureSqlGovernanceStore('series-test');
+
+  expect(await store.runSeries(context, from, to, 60)).toEqual([{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', name: 'alpha', bucketStart: from, completed: 1, failed: 0, unknownOutcome: 0, cost: 0.5, tokens: '10', estimatedRuns: 0 }]);
+  expect(state.calls.at(-1)?.inputs).toMatchObject({ bucket_minutes: 60, tenant_id: null });
+
+  state.recordsets = [[{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', slug: 'alpha', stable_definition_id: 'BBBBBBBB-2222-4222-8222-222222222222', name: null, runs: 4, completed: 3, p95_ms: null, cost: 2, estimated_runs: 0 }]];
+  expect(await store.workflows(context, from, to)).toEqual([{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', workspace: 'alpha', definitionId: 'bbbbbbbb-2222-4222-8222-222222222222', name: null, runs: 4, completed: 3, p95Ms: null, cost: 2, estimatedRuns: 0 }]);
+  expect(state.calls.at(-1)).toMatchObject({ procedure: 'governance.read_workflows', inputs: { tenant_id: null } });
+});
+
+test.each([
+  ['a window name outside current and previous', [[{ tenant_id: 'a', slug: 'x', window: 'older', ...row }], [], []]],
+  ['a non-numeric count', [[{ tenant_id: 'a', slug: 'x', window: 'current', ...row, runs: {} }], [], []]],
+])('refuses read_overview with %s as INVALID', async (_name, recordsets) => {
+  state.error = undefined; state.recordsets = recordsets;
+
+  await expect(new AzureSqlGovernanceStore('overview-test').overview(context, from, to)).rejects.toMatchObject({ code: 'INVALID' });
 });

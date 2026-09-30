@@ -1,6 +1,6 @@
 export const BROWSER_COLLECTIONS = ['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'agent-teams', 'workflows', 'skills', 'test-runs', 'reviews', 'versions', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants', 'workflow-drafts', 'workflow-revisions', 'workflow-definitions', 'workflow-runs', 'workflow-grants', 'workflow-webhook-credentials', 'workflow-memory-imports', 'workflow-memory-items', 'workflow-memory-readiness', 'workflow-model-settings', 'connector-installations', 'openrouter-connections', 'openrouter-models'] as const;
 export type BrowserCollection = typeof BROWSER_COLLECTIONS[number];
-export const GROUP_COLLECTIONS = ['members'] as const;
+export const GROUP_COLLECTIONS = ['members', 'overview', 'series', 'workflows'] as const;
 export const GROUP_QUERY_KEYS = ['range', 'tenant', 'panel', 'level', 'event', 'run', 'cursor'] as const;
 
 export const COMMANDS = {
