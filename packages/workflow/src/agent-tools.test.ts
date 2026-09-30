@@ -92,6 +92,33 @@ test('an R2 tool call pauses for approval, resumes from the stored transcript an
   expect(await step()).toEqual({ next: 'end' }); expect(f.invocations).toHaveLength(1);
 });
 
+test('a tool approval records when it was requested and every successful model call is counted', async () => {
+  const f = await fixture({ risk: 'R2', script: (n) => n === 1 ? call('c1', 't0_lookup', { query: 'acme' }) : answer('done') });
+  const step = await start(f);
+  await step();
+  const waiting = (await f.run()).data;
+  expect(Date.parse(waiting.waiting?.requestedAt ?? '')).toBeLessThanOrEqual(Date.parse(waiting.waiting?.expiresAt ?? ''));
+  expect(waiting.usage).toEqual({ tokens: 10, cost: 0.01, modelCalls: 1 });
+  await f.approve('approve'); await step();
+  expect((await f.run()).data.usage).toEqual({ tokens: 20, cost: 0.02, modelCalls: 2 });
+});
+
+test('a model that reports no usage cannot poison the run usage or fail the attempt write', async () => {
+  const f = await fixture({ script: () => ({ ...answer('done'), tokens: Infinity, cost: Infinity }) });
+  const step = await start(f);
+  expect(await step()).toEqual({ failed: true });
+  const run = await f.run();
+  expect(run.data.usage).toEqual({ tokens: 0, cost: 0, modelCalls: 1 });
+  expect(run.data.history.some((item) => item.state === 'attempted' && item.detail?.endsWith(':succeeded'))).toBe(true);
+});
+
+test('a failed model attempt adds nothing to the run usage', async () => {
+  const f = await fixture({ script: () => { throw new Error('unavailable'); } });
+  const step = await start(f);
+  expect(await step()).toEqual({ failed: true });
+  expect((await f.run()).data.usage).toBeUndefined();
+});
+
 test('a rejected tool approval fails the run and never invokes the tool', async () => {
   const f = await fixture({ risk: 'R2', script: () => call('c1', 't0_lookup', { query: 'acme' }) });
   const step = await start(f); await step(); await f.approve('reject');

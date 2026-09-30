@@ -31,6 +31,18 @@ test('projects one bounded Run History page with its redacted child evidence', a
   expect(JSON.stringify(projection)).not.toContain('raw arguments must not be projected');
 });
 
+test('projects run usage and the approval request time next to the existing run fields', async () => {
+  const waiting = { nodeId: 'approval', bindingDigest: 'e'.repeat(64), expiresAt: '2026-01-01T01:00:00.000Z', requestedAt: '2026-01-01T00:00:00.000Z' };
+  const data: WorkflowRun = { ...run(runId), status: 'waiting-approval', waiting, usage: { tokens: 20, cost: 0.01, modelCalls: 1 } };
+  const runHistory = (): Promise<RunHistoryPage> => Promise.resolve({ runs: [{ id: runId, kind: 'run', version: 1, state: 'waiting-approval', data, createdAt: '2026-01-01T00:00:00.0000000' }], effects: [], retrievals: [], hasMore: false });
+  const service = new WorkflowService(undefined as never, { runHistory } as never);
+
+  const [projected] = (await service.projection(context, 'workflow-runs'))['records'] as Record<string, unknown>[];
+
+  expect(Object.keys(projected ?? {}).sort()).toEqual(['definitionDigest', 'definitionId', 'definitionRevision', 'effects', 'history', 'id', 'inputDigest', 'inputSummary', 'retrievals', 'stableDefinitionId', 'status', 'usage', 'version', 'waiting']);
+  expect(projected).toMatchObject({ usage: { tokens: 20, cost: 0.01, modelCalls: 1 }, waiting });
+});
+
 test('rejects a Run History cursor from another tenant', async () => {
   const service = new WorkflowService(undefined as never, { runHistory: () => Promise.resolve({ runs: [], effects: [], retrievals: [], hasMore: false }) } as never);
   const cursor = Buffer.from(`${otherTenant}.${JSON.stringify({ createdAt: '2026-01-01T00:00:00.0000000', id: otherRunId })}`).toString('base64url');

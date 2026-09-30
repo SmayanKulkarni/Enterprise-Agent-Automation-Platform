@@ -150,6 +150,8 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   const waiting = (await store.workerRead<WorkflowRun>(tenant, 'run', startKey))!;
   expect(waiting.data.waiting?.review).toMatchObject({ revision: 2, installationId, capability: 'write', target: 'account', arguments: [{ name: 'result', type: 'string' }] });
   expect(JSON.stringify(waiting.data.waiting?.review)).not.toContain('approve');
+  expect(waiting.data.usage).toEqual({ tokens: 20, cost: 0.01, modelCalls: 1 });
+  expect(Date.parse(waiting.data.waiting?.requestedAt ?? '')).toBeLessThanOrEqual(Date.parse(waiting.data.waiting?.expiresAt ?? ''));
   expect((await command(admin, 'workflow.approve', waiting.version, { id: startKey, bindingDigest: waiting.data.waiting!.bindingDigest, decision: 'approve' })).status).toBe(200);
   expect(signals).toHaveLength(1);
   await worker.step(tenant, startKey, definitionId, 'approval'); await worker.step(tenant, startKey, definitionId, 'mcp'); await worker.step(tenant, startKey, definitionId, 'done');

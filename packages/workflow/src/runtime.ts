@@ -4,7 +4,7 @@ import { digest } from '../../contracts/src/index.js';
 import { report } from '../../errors/src/report.js';
 import { reported } from '../../errors/src/swallow.js';
 import { pinFor, validateValue, type CapabilityPin, type CompiledNode, type JsonSchema, type NodePolicy, type WorkflowDefinition } from './graph.js';
-import type { Installation, RunEvent, WorkflowRun } from './service.js';
+import type { Installation, RunEvent, RunUsage, WorkflowRun } from './service.js';
 import { memoryFingerprint, memoryItemId, namespace, resolveMemoryScope, validateMemoryProposal, type HostedMemoryPort, type MemoryImport, type MemoryItem } from './memory.js';
 import type { WorkflowRecord, WorkflowStore } from './sql.js';
 
@@ -48,6 +48,8 @@ const effectId = (runId: string, nodeId: string): string => {
   const bytes = createHash('sha256').update(`${runId}:${nodeId}`).digest(); bytes[6] = (bytes[6]! & 0x0f) | 0x50; bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   return `${bytes.subarray(0, 4).toString('hex')}-${bytes.subarray(4, 6).toString('hex')}-${bytes.subarray(6, 8).toString('hex')}-${bytes.subarray(8, 10).toString('hex')}-${bytes.subarray(10, 16).toString('hex')}`;
 };
+const finiteOrZero = (value: number): number => Number.isFinite(value) && value > 0 ? value : 0;
+const addUsage = (usage: RunUsage | undefined, result: ModelResult): RunUsage => ({ tokens: (usage?.tokens ?? 0) + finiteOrZero(result.tokens), cost: (usage?.cost ?? 0) + finiteOrZero(result.cost), modelCalls: (usage?.modelCalls ?? 0) + 1 });
 const policy = (node: CompiledNode): NodePolicy => node.config['policy'] as NodePolicy;
 const next = (node: CompiledNode, branch?: boolean): StepResult => {
   if (node.next === null) return { completed: true };
@@ -285,7 +287,7 @@ export class WorkflowWorker {
       let output: ModelResult | undefined;
       try { output = await this.model.complete({ ...request, model: selectedModel, policy: { ...limits, milliseconds: remaining } }); } catch (error) { report(error, { site: 'runtime.model', tenantId }); }
       await this.afterCircuit(tenantId, `model:${provider}`, output === undefined);
-      run = await this.store.workerWrite(tenantId, 'run', run.id, run.version, run.state, { ...run.data, history: [...run.data.history, event(node, 'attempted', `${provider}:${selectedModel}:${attempt}:${output ? 'succeeded' : 'failed'}`)] });
+      run = await this.store.workerWrite(tenantId, 'run', run.id, run.version, run.state, { ...run.data, ...(output ? { usage: addUsage(run.data.usage, output) } : {}), history: [...run.data.history, event(node, 'attempted', `${provider}:${selectedModel}:${attempt}:${output ? 'succeeded' : 'failed'}`)] });
       return output;
     };
     const blockedUntil = async (): Promise<StepResult | undefined> => { const blocked = await this.beforeCircuit(tenantId, `model:${provider}`); return blocked ? { waiting: 'circuit', deadline: new Date(Math.min(Date.parse(blocked), Date.parse(deadline))).toISOString() } : undefined; };
@@ -375,7 +377,7 @@ export class WorkflowWorker {
   private async awaitToolApproval(tenantId: string, run: WorkflowRecord<WorkflowRun>, node: CompiledNode, tool: CapabilityTool, progress: AgentProgress, argumentsDigest: string, bindingDigest: string, revision: number): Promise<AgentTurn> {
     const expiresAt = new Date(Date.now() + TOOL_APPROVAL_MS).toISOString();
     const review = { revision, installationId: tool.pin.installationId, capability: tool.pin.capability, target: String(tool.node.config['target']), argumentsDigest, arguments: Object.entries(tool.pin.inputSchema.properties).map(([name, value]) => ({ name, type: value.type })) };
-    await this.saveAgent(tenantId, run, node.id, { ...progress, pausedAt: new Date().toISOString() }, [event(node, 'waiting', bindingDigest)], { status: 'waiting-approval', waiting: { nodeId: node.id, bindingDigest, expiresAt, review } });
+    await this.saveAgent(tenantId, run, node.id, { ...progress, pausedAt: new Date().toISOString() }, [event(node, 'waiting', bindingDigest)], { status: 'waiting-approval', waiting: { nodeId: node.id, bindingDigest, expiresAt, requestedAt: new Date().toISOString(), review } });
     return { kind: 'done', step: { waiting: 'approval', deadline: expiresAt, bindingDigest } };
   }
 
@@ -409,7 +411,7 @@ export class WorkflowWorker {
     const argumentsDigest = await digest(args);
     const bindingDigest = await digest({ runId: current.id, definitionDigest: definition.digest, capability: target.config['capability'], installationId: target.config['installationId'], target: target.config['target'], argumentsDigest });
     const expiresAt = new Date(Date.now() + Number(node.config['timeoutMs'])).toISOString();
-    const data: WorkflowRun = { ...current.data, status: 'waiting-approval', waiting: { nodeId: node.id, bindingDigest, expiresAt, review: { revision: definition.revision, installationId: pin.installationId, capability: pin.capability, target: String(target.config['target']), argumentsDigest, arguments: Object.entries(pin.inputSchema.properties).map(([name, value]) => ({ name, type: value.type })) } }, history: [...current.data.history, event(node, 'waiting', bindingDigest)] };
+    const data: WorkflowRun = { ...current.data, status: 'waiting-approval', waiting: { nodeId: node.id, bindingDigest, expiresAt, requestedAt: new Date().toISOString(), review: { revision: definition.revision, installationId: pin.installationId, capability: pin.capability, target: String(target.config['target']), argumentsDigest, arguments: Object.entries(pin.inputSchema.properties).map(([name, value]) => ({ name, type: value.type })) } }, history: [...current.data.history, event(node, 'waiting', bindingDigest)] };
     await this.store.workerWrite(tenantId, 'run', current.id, current.version, 'waiting-approval', data);
     return { waiting: 'approval', deadline: expiresAt, bindingDigest };
   }
