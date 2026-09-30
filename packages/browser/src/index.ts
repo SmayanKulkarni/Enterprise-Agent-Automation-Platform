@@ -153,7 +153,7 @@ export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
   { method: 'GET', path: '/api/v1/session', owner: 'identity', action: 'identity.session.read', ready: true },
   { method: 'GET', path: '/api/v1/tenants', owner: 'identity', action: 'identity.membership.list', ready: true },
   { method: 'GET', path: '/api/v1/groups', owner: 'governance', action: 'governance.group.list', ready: true },
-  { method: 'GET', path: '/api/v1/groups/:groupId/{members,overview,series,workflows}', owner: 'governance', action: 'governance.group.read', ready: false },
+  { method: 'GET', path: '/api/v1/groups/:groupId/{members,overview,series,workflows,approvals,health}', owner: 'governance', action: 'governance.group.read', ready: false },
   { method: 'POST', path: '/api/v1/groups/commands/governance/create-group', owner: 'governance', action: 'governance.group.create', ready: false },
   { method: 'POST', path: '/api/v1/groups/:groupId/commands/governance/:name', owner: 'governance', action: 'governance.group.command', ready: false },
   { method: 'GET', path: '/api/v1/tenants/:tenantId/{cases,interventions,capabilities,installations,memory,evaluations,improvements,packages,agent-teams,workflows,skills,test-runs,reviews,versions,operations,deployments,readiness,vendor-assessments,access-grants}[/:id]', owner: 'projection', action: 'projection.read', ready: false },

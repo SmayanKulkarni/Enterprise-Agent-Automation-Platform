@@ -248,6 +248,7 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   expect(modelCalls).toBe(3);
   expect(errorLog.mock.calls.filter(([line]) => String(line).includes('runtime.model'))).toHaveLength(modelCalls);
   errorLog.mockRestore();
+  expect((await store.workerList<{ key?: string }>(tenant, 'circuit')).map((circuit) => circuit.data.key)).toContain('model:azure-openai');
   expect(await total('workflow.circuit.transitions', { kind: 'model', state: 'open' })).toBe(1);
   expect(events('circuit.transition')).toEqual([expect.objectContaining({ tenant_id: tenant, kind: 'model', state: 'open' })]);
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 61000);

@@ -3,6 +3,7 @@ import { canonicalJson } from '../../contracts/src/index.js';
 import type { GroupContext } from '../../identity/src/index.js';
 import { sqlPool } from '../../identity/src/sql-pool.js';
 import { mapError } from '../../workflow/src/sql.js';
+import type { HealthRows, PendingApprovalRow } from './attention.js';
 import type { Numeric, OverviewRows, SeriesRow, WindowRow, WorkflowRow } from './reads.js';
 
 const COMMANDS = {
@@ -25,6 +26,8 @@ const text = (value: unknown): string => typeof value === 'string' ? value : inv
 const id = (value: unknown): string => text(value).toLowerCase();
 const timestamp = (value: unknown): string => value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString() : invalid();
 const rows = (recordset: unknown): Record<string, unknown>[] => Array.isArray(recordset) ? recordset as Record<string, unknown>[] : invalid();
+const optionalText = (value: unknown): string | null => value === null || value === undefined ? null : text(value);
+const date = (value: unknown): Date => value instanceof Date ? value : invalid();
 const numeric = (value: unknown): Numeric => value === null || value === undefined ? null : typeof value === 'number' || typeof value === 'string' ? value : invalid();
 const windowName = (value: unknown): WindowRow['window'] => value === 'current' || value === 'previous' ? value : invalid();
 const windowRow = (row: Record<string, unknown>): WindowRow => ({ window: windowName(row['window']), runs: numeric(row['runs']), completed: numeric(row['completed']), failed: numeric(row['failed']), unknownOutcome: numeric(row['unknown_outcome']), p95Ms: numeric(row['p95_ms']), tokens: numeric(row['tokens']), cost: numeric(row['cost']), estimatedRuns: numeric(row['estimated_runs']) });
@@ -57,12 +60,26 @@ export class AzureSqlGovernanceStore {
 
   async runSeries(context: GroupContext, from: Date, to: Date, bucketMinutes: number, tenantId?: string): Promise<SeriesRow[]> {
     const [buckets] = await this.read('governance.read_run_series', context, (request) => request.input('from', sql.DateTime2(7), from).input('to', sql.DateTime2(7), to).input('bucket_minutes', sql.Int, bucketMinutes).input('tenant_id', sql.UniqueIdentifier, tenantId ?? null));
-    return rows(buckets).map((row) => ({ tenantId: id(row['tenant_id']), name: text(row['slug']), bucketStart: row['bucket_start'] instanceof Date ? row['bucket_start'] : invalid(), completed: numeric(row['completed']), failed: numeric(row['failed']), unknownOutcome: numeric(row['unknown_outcome']), cost: numeric(row['cost']), tokens: numeric(row['tokens']), estimatedRuns: numeric(row['estimated_runs']) }));
+    return rows(buckets).map((row) => ({ tenantId: id(row['tenant_id']), name: text(row['slug']), bucketStart: date(row['bucket_start']), completed: numeric(row['completed']), failed: numeric(row['failed']), unknownOutcome: numeric(row['unknown_outcome']), cost: numeric(row['cost']), tokens: numeric(row['tokens']), estimatedRuns: numeric(row['estimated_runs']) }));
   }
 
   async workflows(context: GroupContext, from: Date, to: Date, tenantId?: string): Promise<WorkflowRow[]> {
     const [portfolio] = await this.read('governance.read_workflows', context, (request) => request.input('from', sql.DateTime2(7), from).input('to', sql.DateTime2(7), to).input('tenant_id', sql.UniqueIdentifier, tenantId ?? null));
-    return rows(portfolio).map((row) => ({ tenantId: id(row['tenant_id']), workspace: text(row['slug']), definitionId: id(row['stable_definition_id']), name: row['name'] === null || row['name'] === undefined ? null : text(row['name']), runs: numeric(row['runs']), completed: numeric(row['completed']), p95Ms: numeric(row['p95_ms']), cost: numeric(row['cost']), estimatedRuns: numeric(row['estimated_runs']) }));
+    return rows(portfolio).map((row) => ({ tenantId: id(row['tenant_id']), workspace: text(row['slug']), definitionId: id(row['stable_definition_id']), name: optionalText(row['name']), runs: numeric(row['runs']), completed: numeric(row['completed']), p95Ms: numeric(row['p95_ms']), cost: numeric(row['cost']), estimatedRuns: numeric(row['estimated_runs']) }));
+  }
+
+  async pendingApprovals(context: GroupContext): Promise<PendingApprovalRow[]> {
+    const [pending] = await this.read('governance.read_pending_approvals', context);
+    return rows(pending).map((row) => ({ tenantId: id(row['tenant_id']), workspace: text(row['slug']), runId: id(row['run_id']), runVersion: numeric(row['run_version']), definitionRevision: numeric(row['definition_revision']), workflowName: optionalText(row['workflow_name']), waitingJson: optionalText(row['waiting_json']), waitingKind: optionalText(row['waiting_kind']) }));
+  }
+
+  async health(context: GroupContext): Promise<HealthRows> {
+    const [connectors, circuits, reconciliation] = await this.read('governance.read_health', context);
+    return {
+      connectors: rows(connectors).map((row) => ({ tenantId: id(row['tenant_id']), workspace: text(row['slug']), state: text(row['state']), installations: numeric(row['installations']) })),
+      circuits: rows(circuits).map((row) => ({ tenantId: id(row['tenant_id']), workspace: text(row['slug']), key: optionalText(row['circuit_key']), state: text(row['state']), since: date(row['updated_at']) })),
+      reconciliation: rows(reconciliation).map((row) => ({ tenantId: id(row['tenant_id']), workspace: text(row['slug']), runId: id(row['run_id']), since: date(row['finished_at']) })),
+    };
   }
 
   async members(context: GroupContext): Promise<GroupMembers> {

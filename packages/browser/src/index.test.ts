@@ -254,10 +254,19 @@ test('serves the members collection to a group admin in a governance.v1 envelope
 const governedReads = () => {
   const calls: string[] = [];
   const window = { runs: 0, completed: 0, failed: 0, unknownOutcome: 0, p95Ms: null, tokens: 0, cost: 0, estimatedRuns: 0 };
-  const store = { members: () => Promise.resolve(membersPayload), overview: () => { calls.push('overview'); return Promise.resolve({ workspaces: [{ tenantId, name: 'one', window: 'current' as const, ...window }, { tenantId, name: 'one', window: 'previous' as const, ...window }], totals: [{ window: 'current' as const, ...window }, { window: 'previous' as const, ...window }], pending: [] }); }, runSeries: () => Promise.resolve([]), workflows: () => Promise.resolve([]) };
+  const store = { members: () => Promise.resolve(membersPayload), overview: () => { calls.push('overview'); return Promise.resolve({ workspaces: [{ tenantId, name: 'one', window: 'current' as const, ...window }, { tenantId, name: 'one', window: 'previous' as const, ...window }], totals: [{ window: 'current' as const, ...window }, { window: 'previous' as const, ...window }], pending: [] }); }, runSeries: () => Promise.resolve([]), workflows: () => Promise.resolve([]), pendingApprovals: () => Promise.resolve([]), health: () => Promise.resolve({ connectors: [], circuits: [], reconciliation: [] }) };
   const service = new GovernanceService(store);
   return { calls, options: { groupProjections: (projection: GroupProjection) => service.read(projection.context, projection.collection, projection.query) } };
 };
+
+test.each([['approvals', 'approvals'], ['health', 'connectors']])('serves %s to a group admin and refuses a non-admin with 403', async (collection, field) => {
+  const { options } = governedReads();
+  const ok = await get(transport(options, [userId]), `/api/v1/groups/${groupId}/${collection}`);
+
+  expect(ok.status).toBe(200);
+  expect(decodeContract(descriptorFor('governance.v1'), ok.body).payload).toMatchObject({ groupId, collection, classification: 'restricted-operational', [field]: [] });
+  expect((await get(transport(options, []), `/api/v1/groups/${groupId}/${collection}`)).status).toBe(403);
+});
 
 test('serves the overview to a group admin, refuses a bad range with 422 and a workspace outside the group with 403', async () => {
   const { calls, options } = governedReads();

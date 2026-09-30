@@ -100,3 +100,30 @@ test.each([
 
   await expect(new AzureSqlGovernanceStore('overview-test').overview(context, from, to)).rejects.toMatchObject({ code: 'INVALID' });
 });
+
+test('maps read_pending_approvals rows without touching the stored waiting text', async () => {
+  state.error = undefined;
+  state.recordsets = [[{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', slug: 'alpha', run_id: 'BBBBBBBB-2222-4222-8222-222222222222', run_version: '5', definition_revision: '2', workflow_name: null, waiting_json: '{"nodeId":"agent"}', waiting_kind: 'agent' }]];
+
+  expect(await new AzureSqlGovernanceStore('pending-test').pendingApprovals(context)).toEqual([{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', workspace: 'alpha', runId: 'bbbbbbbb-2222-4222-8222-222222222222', runVersion: '5', definitionRevision: '2', workflowName: null, waitingJson: '{"nodeId":"agent"}', waitingKind: 'agent' }]);
+  expect(state.calls.at(-1)).toEqual({ procedure: 'governance.read_pending_approvals', inputs: { group_id: context.groupId, user_id: context.userId, group_epoch: 4, admin_epoch: 2 } });
+});
+
+test('maps the three read_health recordsets and refuses a circuit without a timestamp', async () => {
+  const at = new Date('2026-09-30T11:00:00.000Z');
+  state.error = undefined;
+  state.recordsets = [
+    [{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', slug: 'alpha', state: 'healthy', installations: 2 }],
+    [{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', slug: 'alpha', circuit_key: null, state: 'open', updated_at: at }],
+    [{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', slug: 'alpha', run_id: 'BBBBBBBB-2222-4222-8222-222222222222', finished_at: at }],
+  ];
+  const store = new AzureSqlGovernanceStore('health-test');
+
+  expect(await store.health(context)).toEqual({
+    connectors: [{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', workspace: 'alpha', state: 'healthy', installations: 2 }],
+    circuits: [{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', workspace: 'alpha', key: null, state: 'open', since: at }],
+    reconciliation: [{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', workspace: 'alpha', runId: 'bbbbbbbb-2222-4222-8222-222222222222', since: at }],
+  });
+  state.recordsets = [[], [{ tenant_id: 'a', slug: 'x', circuit_key: null, state: 'open', updated_at: 'yesterday' }], []];
+  await expect(store.health(context)).rejects.toMatchObject({ code: 'INVALID' });
+});

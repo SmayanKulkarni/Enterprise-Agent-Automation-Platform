@@ -1,12 +1,13 @@
 import { expect, test } from 'vitest';
 import { GovernanceService, type GovernanceStore } from './service.js';
+import type { HealthRows, PendingApprovalRow } from './attention.js';
 import type { OverviewRows, SeriesRow, WindowRow, WorkflowRow } from './reads.js';
 
 const tenantA = '11111111-1111-4111-8111-111111111111';
 const tenantB = '22222222-2222-4222-8222-222222222222';
 const context = { userId: '33333333-3333-4333-8333-333333333333', groupId: 'a0000000-0000-4000-8000-000000000001', groupEpoch: 1, adminEpoch: 1, tenantIds: [tenantA, tenantB] as never };
 const unused = (): never => { throw new Error('store must not be called'); };
-const stub = (overrides: Partial<GovernanceStore> = {}): GovernanceStore => ({ members: unused, overview: unused, runSeries: unused, workflows: unused, ...overrides });
+const stub = (overrides: Partial<GovernanceStore> = {}): GovernanceStore => ({ members: unused, overview: unused, runSeries: unused, workflows: unused, pendingApprovals: unused, health: unused, ...overrides });
 const members = { workspaces: [{ tenantId: tenantA, name: 'one', joinedAt: '2026-01-01T00:00:00.000Z', billing: true }], admins: [{ userId: context.userId, name: 'Ada' }], eligible: [] };
 
 test('returns the store data labelled full and restricted-operational', async () => {
@@ -160,4 +161,99 @@ test('serves all three collections as fixtures for exactly the context workspace
   expect(workflows['classification']).toBe('fixture');
   expect((workflows['workflows'] as { tenantId: string }[]).map((workflow) => workflow.tenantId)).toEqual([tenantB]);
   expect(JSON.stringify(await service.read(context, 'overview', { range: '7d' }))).toBe(JSON.stringify(overview));
+});
+
+const DIGEST = 'a'.repeat(64);
+const waiting = (overrides: Record<string, unknown> = {}): string => JSON.stringify({ nodeId: 'agent', bindingDigest: DIGEST, requestedAt: '2026-09-30T11:50:00.000Z', expiresAt: '2026-09-30T12:30:00.000Z', review: { revision: 2, installationId: 'inst-1', capability: 'write', target: 'crm', argumentsDigest: 'b'.repeat(64), arguments: [{ name: 'subject', type: 'string' }] }, ...overrides });
+const pendingRow = (overrides: Partial<PendingApprovalRow> = {}): PendingApprovalRow => ({ tenantId: tenantA, workspace: 'alpha', runId: 'c0000000-0000-4000-8000-000000000001', runVersion: '5', definitionRevision: '2', workflowName: 'Onboarding', waitingJson: waiting(), waitingKind: 'agent', ...overrides });
+const approvals = async (rows: PendingApprovalRow[], query: Record<string, string> = {}) => clocked(stub({ pendingApprovals: () => Promise.resolve(rows) })).read(context, 'approvals', query);
+
+test('the approval projection is an allowlist: stored input, argument values and unknown fields never leave', async () => {
+  const leaky = waiting({ input: { secret: 'SECRET_INPUT' }, outputs: { note: 'SECRET_OUTPUT' }, extra: 'x', review: { revision: 2, installationId: 'inst-1', capability: 'write', target: 'crm', argumentsDigest: 'b'.repeat(64), input: 'SECRET_INPUT', arguments: [{ name: 'subject', type: 'string', value: 'SECRET_VALUE' }] } });
+  const result = await approvals([pendingRow({ waitingJson: leaky })]);
+
+  expect(result['approvals']).toEqual([{ tenantId: tenantA, workspace: 'alpha', runId: 'c0000000-0000-4000-8000-000000000001', runVersion: 5, workflowName: 'Onboarding', revision: 2, nodeId: 'agent', kind: 'tool', capability: 'write', installationId: 'inst-1', target: 'crm', arguments: [{ name: 'subject', type: 'string' }], argumentsDigest: 'b'.repeat(64), requestedAt: '2026-09-30T11:50:00.000Z', expiresAt: '2026-09-30T12:30:00.000Z', bindingDigest: DIGEST }]);
+  expect(JSON.stringify(result)).not.toMatch(/SECRET|extra/u);
+  expect(result).toMatchObject({ count: 1, completeness: 'full', classification: 'restricted-operational' });
+});
+
+test.each([['agent', 'tool'], ['approval', 'step'], [null, 'step']])('maps the waiting history kind %s to %s', async (waitingKind, kind) => {
+  expect((await approvals([pendingRow({ waitingKind })]))['approvals']).toMatchObject([{ kind }]);
+});
+
+test('omits requestedAt when the run does not carry it, and caps argument names and types', async () => {
+  const long = 'n'.repeat(500);
+  const json = waiting({ requestedAt: undefined, review: { revision: 2, installationId: 'inst-1', capability: 'write', target: 'crm', argumentsDigest: 'b'.repeat(64), arguments: [{ name: long, type: long }, { name: 7, type: 'string' }, 'text'] } });
+  const [approval] = (await approvals([pendingRow({ waitingJson: json })]))['approvals'] as Record<string, unknown>[];
+
+  expect(approval).not.toHaveProperty('requestedAt');
+  expect(approval?.['arguments']).toEqual([{ name: 'n'.repeat(128), type: 'n'.repeat(128) }]);
+});
+
+test.each([
+  ['a missing waiting object', null],
+  ['malformed JSON', '{'],
+  ['a waiting value that is not an object', '[1]'],
+  ['a binding digest that is not 64 hex characters', waiting({ bindingDigest: 'xyz' })],
+  ['an expiry that cannot be parsed', waiting({ expiresAt: 'tomorrow' })],
+  ['a missing review', waiting({ review: undefined })],
+])('skips a row with %s and flags the inbox partial', async (_name, waitingJson) => {
+  const result = await approvals([pendingRow({ waitingJson }), pendingRow({ runId: 'c0000000-0000-4000-8000-000000000002' })]);
+
+  expect((result['approvals'] as { runId: string }[]).map((approval) => approval.runId)).toEqual(['c0000000-0000-4000-8000-000000000002']);
+  expect(result).toMatchObject({ count: 1, completeness: 'partial' });
+});
+
+test('skips a row whose run version is not a safe integer', async () => {
+  expect(await approvals([pendingRow({ runVersion: '9007199254740993' })])).toMatchObject({ approvals: [], completeness: 'partial' });
+});
+
+test.each([[199, 'full'], [200, 'partial']])('reports %i approvals as %s', async (size, completeness) => {
+  const result = await approvals(Array.from({ length: size }, (_unused, index) => pendingRow({ runId: `c0000000-0000-4000-8000-${String(index).padStart(12, '0')}` })));
+
+  expect(result).toMatchObject({ count: size, completeness });
+});
+
+test('approvals and health ignore a supplied range or tenant', async () => {
+  expect(await approvals([], { range: '2y', tenant: outsider })).toMatchObject({ approvals: [], count: 0 });
+  expect(await clocked(stub({ health: () => Promise.resolve({ connectors: [], circuits: [], reconciliation: [] }) })).read(context, 'health', { range: '7d', tenant: outsider })).toMatchObject({ connectors: [] });
+  await expect(clocked(stub()).read(context, 'approvals', { cursor: 'x' })).rejects.toMatchObject({ code: 'INVALID' });
+});
+
+const SINCE = new Date('2026-09-30T11:00:00.000Z');
+const healthRows = (overrides: Partial<HealthRows> = {}): HealthRows => ({
+  connectors: [{ tenantId: tenantA, workspace: 'alpha', state: 'healthy', installations: '2' }, { tenantId: tenantA, workspace: 'alpha', state: 'offline', installations: 1 }, { tenantId: tenantB, workspace: 'beta', state: 'revoked', installations: 4 }, { tenantId: tenantB, workspace: 'beta', state: 'mystery', installations: 9 }],
+  circuits: [{ tenantId: tenantA, workspace: 'alpha', key: 'model:azure-openai', state: 'open', since: SINCE }, { tenantId: tenantA, workspace: 'alpha', key: null, state: 'probe', since: SINCE }, { tenantId: tenantA, workspace: 'alpha', key: 'connector:<script>', state: 'open', since: SINCE }],
+  reconciliation: [{ tenantId: tenantB, workspace: 'beta', runId: 'c0000000-0000-4000-8000-000000000009', since: SINCE }],
+  ...overrides,
+});
+const health = (rows: HealthRows) => clocked(stub({ health: () => Promise.resolve(rows) })).read(context, 'health', {});
+
+test('health counts connectors by state per workspace, names the guarded provider, and lists runs needing reconciliation', async () => {
+  const result = await health(healthRows());
+
+  expect(result['connectors']).toEqual([{ tenantId: tenantA, workspace: 'alpha', healthy: 2, offline: 1, revoked: 0 }, { tenantId: tenantB, workspace: 'beta', healthy: 0, offline: 0, revoked: 4 }]);
+  expect((result['circuits'] as { key: string; state: string }[]).map(({ key, state }) => [key, state])).toEqual([['model:azure-openai', 'open'], ['unknown', 'probe'], ['unknown', 'open']]);
+  expect(result['reconciliation']).toEqual([{ tenantId: tenantB, workspace: 'beta', runId: 'c0000000-0000-4000-8000-000000000009', since: SINCE.toISOString() }]);
+  expect(result).toMatchObject({ completeness: 'full', classification: 'restricted-operational' });
+});
+
+test('health is partial when a list reaches its cap and drops a circuit that is neither open nor probing', async () => {
+  const circuit = { tenantId: tenantA, workspace: 'alpha', key: 'model:x', state: 'open', since: SINCE };
+  expect(await health(healthRows({ circuits: Array.from({ length: 100 }, () => circuit) }))).toMatchObject({ completeness: 'partial' });
+  const result = await health(healthRows({ circuits: [{ ...circuit, state: 'closed' }] }));
+
+  expect(result).toMatchObject({ circuits: [], completeness: 'partial' });
+});
+
+test('serves approvals and health as fixtures for the context workspaces when no store is configured', async () => {
+  const service = clocked();
+  const inbox = await service.read(context, 'approvals', {});
+  const summary = await service.read(context, 'health', {});
+
+  expect(inbox).toMatchObject({ classification: 'fixture', count: 2, completeness: 'full' });
+  expect((inbox['approvals'] as { bindingDigest: string; tenantId: string }[]).every((approval) => /^[0-9a-f]{64}$/u.test(approval.bindingDigest) && approval.tenantId === tenantA)).toBe(true);
+  expect(summary).toMatchObject({ classification: 'fixture', circuits: [{ key: 'model:openrouter', state: 'open' }] });
+  expect(await service.read(context, 'approvals', {})).toEqual(inbox);
+  expect(await new GovernanceService(undefined, () => NOW).read({ ...context, tenantIds: [] }, 'approvals', {})).toMatchObject({ approvals: [], count: 0 });
 });

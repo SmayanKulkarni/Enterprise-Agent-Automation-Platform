@@ -1,16 +1,17 @@
 import { AppError } from '../../errors/src/app-error.js';
 import type { GroupContext } from '../../identity/src/index.js';
 import { isPanel, isRange, isSqlPanel, RANGES, type RangeKey } from './catalog.js';
-import { fixtureMembers, fixtureOverview, fixtureSeries, fixtureWorkflows } from './fixtures.js';
+import { buildApprovals, buildHealth } from './attention.js';
+import { fixtureApprovals, fixtureHealth, fixtureMembers, fixtureOverview, fixtureSeries, fixtureWorkflows } from './fixtures.js';
 import { buildOverview, buildSeries, buildWorkflows } from './reads.js';
 import type { AzureSqlGovernanceStore } from './sql.js';
 
-export type GovernanceStore = Pick<AzureSqlGovernanceStore, 'members' | 'overview' | 'runSeries' | 'workflows'>;
+export type GovernanceStore = Pick<AzureSqlGovernanceStore, 'members' | 'overview' | 'runSeries' | 'workflows' | 'pendingApprovals' | 'health'>;
 type Query = Readonly<Record<string, string>>;
 interface Window { range: RangeKey; from: number; to: number; tenantId?: string }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const KEYS = { members: [], overview: ['range', 'tenant'], series: ['panel', 'range', 'tenant'], workflows: ['range', 'tenant'] } as const;
+const KEYS = { members: [], approvals: ['range', 'tenant'], health: ['range', 'tenant'], overview: ['range', 'tenant'], series: ['panel', 'range', 'tenant'], workflows: ['range', 'tenant'] } as const;
 type Collection = keyof typeof KEYS;
 const isCollection = (value: string): value is Collection => Object.hasOwn(KEYS, value);
 
@@ -21,6 +22,8 @@ export class GovernanceService {
     if (!isCollection(collection)) throw new AppError('NOT_FOUND');
     if (Object.keys(query).some((key) => !(KEYS[collection] as readonly string[]).includes(key))) throw new AppError('INVALID');
     if (collection === 'members') return this.members(context);
+    if (collection === 'approvals') return this.approvals(context);
+    if (collection === 'health') return this.health(context);
     const window = this.window(context, query);
     if (collection === 'overview') return this.overview(context, window);
     if (collection === 'workflows') return this.workflows(context, window);
@@ -30,6 +33,16 @@ export class GovernanceService {
   private async members(context: GroupContext): Promise<Record<string, unknown>> {
     if (this.store === undefined) return { ...fixtureMembers(context), completeness: 'full', classification: 'fixture' };
     return { ...await this.store.members(context), completeness: 'full', classification: 'restricted-operational' };
+  }
+
+  private async approvals(context: GroupContext): Promise<Record<string, unknown>> {
+    const rows = this.store === undefined ? fixtureApprovals(context.tenantIds.map(String), this.now()) : await this.store.pendingApprovals(context);
+    return { ...buildApprovals(rows), classification: this.classification() };
+  }
+
+  private async health(context: GroupContext): Promise<Record<string, unknown>> {
+    const rows = this.store === undefined ? fixtureHealth(context.tenantIds.map(String), this.now()) : await this.store.health(context);
+    return { ...buildHealth(rows), classification: this.classification() };
   }
 
   private window(context: GroupContext, query: Query): Window {

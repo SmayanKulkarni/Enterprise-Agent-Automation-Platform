@@ -1,4 +1,5 @@
 import { windowSpan } from './reads.js';
+import type { HealthRows, PendingApprovalRow } from './attention.js';
 import type { OverviewRows, SeriesRow, WindowRow, WorkflowRow } from './reads.js';
 import type { RangeKey } from './catalog.js';
 
@@ -42,4 +43,28 @@ export function fixtureWorkflows(tenantIds: readonly string[]): WorkflowRow[] {
     const runs = 20 + 7 * index;
     return { tenantId, workspace: fixtureName(tenantId), definitionId: `f0000000-0000-4000-8000-${String(index).padStart(12, '0')}`, name: `Fixture workflow ${String(index + 1)}`, runs, completed: runs - 3, p95Ms: 1500 + 100 * index, cost: runs * 0.0125, estimatedRuns: 0 };
   }).reverse();
+}
+
+const fixtureDigest = (seed: string): string => seed.repeat(64).slice(0, 64);
+const FIXTURE_MINUTE = 60_000;
+
+export function fixtureApprovals(tenantIds: readonly string[], now: number): PendingApprovalRow[] {
+  const tenantId = tenantIds[0];
+  if (tenantId === undefined) return [];
+  const row = (index: number, kind: 'agent' | 'approval', capability: string, target: string, expiresInMinutes: number): PendingApprovalRow => ({
+    tenantId, workspace: fixtureName(tenantId), runId: `e0000000-0000-4000-8000-${String(index).padStart(12, '0')}`, runVersion: 4 + index, definitionRevision: 2, workflowName: `Fixture workflow ${String(index)}`, waitingKind: kind,
+    waitingJson: JSON.stringify({ nodeId: kind === 'agent' ? 'agent' : 'approval', bindingDigest: fixtureDigest(String(index)), requestedAt: new Date(now - 10 * FIXTURE_MINUTE).toISOString(), expiresAt: new Date(now + expiresInMinutes * FIXTURE_MINUTE).toISOString(), review: { revision: 2, installationId: 'd0000000-0000-4000-8000-000000000001', capability, target, argumentsDigest: fixtureDigest('a'), arguments: [{ name: 'subject', type: 'string' }, { name: 'amount', type: 'number' }] } }),
+  });
+  return [row(1, 'approval', 'send-invoice', 'billing', 30), row(2, 'agent', 'update-record', 'crm', 55)];
+}
+
+export function fixtureHealth(tenantIds: readonly string[], now: number): HealthRows {
+  const tenantId = tenantIds[0];
+  if (tenantId === undefined) return { connectors: [], circuits: [], reconciliation: [] };
+  const workspace = fixtureName(tenantId);
+  return {
+    connectors: [{ tenantId, workspace, state: 'healthy', installations: 2 }, { tenantId, workspace, state: 'offline', installations: 1 }],
+    circuits: [{ tenantId, workspace, key: 'model:openrouter', state: 'open', since: new Date(now - 5 * FIXTURE_MINUTE) }],
+    reconciliation: [],
+  };
 }

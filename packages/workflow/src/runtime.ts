@@ -22,7 +22,7 @@ export interface ModelPort { complete(request: ModelRequest): Promise<ModelResul
 export interface McpPort { invoke(installation: Installation, capability: string, args: Record<string, unknown>, effectId: string, deadline: string): Promise<{ outcome: 'succeeded' | 'not-dispatched' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown> }>; }
 export interface EffectData { runId: string; nodeId: string; agentId?: string; installationId: string; requestDigest: string; argumentsDigest: string; state: 'prepared' | 'queued' | 'possible-send' | 'succeeded' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown>; }
 export interface StepResult { next?: string; waiting?: 'approval' | 'connector' | 'circuit'; deadline?: string; bindingDigest?: string; effectId?: string; completed?: boolean; failed?: boolean; }
-interface CircuitData { failures: number; openedUntil?: string; probeUntil?: string; }
+interface CircuitData { failures: number; key?: string; openedUntil?: string; probeUntil?: string; }
 
 interface CapabilityCall { node: CompiledNode; pin: CapabilityPin; args: Record<string, unknown>; argumentsDigest: string; effectId: string; deadline: string; agentId?: string; }
 type Invocation = { state: 'succeeded'; output: Record<string, unknown>; effectId: string } | { state: 'waiting'; step: StepResult } | { state: 'stopped'; reason: string; unknown?: boolean };
@@ -164,7 +164,7 @@ export class WorkflowWorker {
       const until = current.state === 'probe' ? current.data.probeUntil : current.data.openedUntil;
       if (until && Date.parse(until) > Date.now()) return until;
       const probeUntil = new Date(Date.now() + 30000).toISOString();
-      try { await this.store.workerWrite<CircuitData>(tenantId, 'circuit', id, current.version, 'probe', { failures: current.data.failures, probeUntil }); circuitTransition(tenantId, key, 'probe'); return undefined; }
+      try { await this.store.workerWrite<CircuitData>(tenantId, 'circuit', id, current.version, 'probe', { failures: current.data.failures, key, probeUntil }); circuitTransition(tenantId, key, 'probe'); return undefined; }
       catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'STALE')) throw error; }
     }
     return fail('CIRCUIT_BUSY');
@@ -176,7 +176,7 @@ export class WorkflowWorker {
       const current = await this.store.workerRead<CircuitData>(tenantId, 'circuit', id);
       const failures = failed ? (current?.data.failures ?? 0) + 1 : 0;
       const open = failed && (failures >= 3 || current?.state === 'probe');
-      const data: CircuitData = { failures, ...(open ? { openedUntil: new Date(Date.now() + 60000).toISOString() } : {}) };
+      const data: CircuitData = { failures, key, ...(open ? { openedUntil: new Date(Date.now() + 60000).toISOString() } : {}) };
       try { await this.store.workerWrite(tenantId, 'circuit', id, current?.version ?? 0, open ? 'open' : 'closed', data); if ((current?.state ?? 'closed') !== (open ? 'open' : 'closed')) circuitTransition(tenantId, key, open ? 'open' : 'closed'); return; }
       catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'STALE')) throw error; }
     }
