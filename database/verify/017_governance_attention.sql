@@ -1,4 +1,5 @@
 SET NOCOUNT ON;
+SET XACT_ABORT OFF;
 
 IF OBJECT_ID(N'governance.read_pending_approvals', N'P') IS NULL
   OR OBJECT_ID(N'governance.read_health', N'P') IS NULL
