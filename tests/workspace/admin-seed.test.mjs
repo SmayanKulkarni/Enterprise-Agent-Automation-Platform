@@ -11,6 +11,11 @@ describe('admin seed substitution', () => {
     expect(seedSource('001_identity_demo.sql', 'SELECT 1', {})).toBe('SELECT 1');
   });
 
+  test('substitutes placeholders in the tenant group demo seed', () => {
+    expect(seedSource('005_tenant_group_demo.sql', SOURCE, env)).toBe("N'https://clerk.example.com' N'user_2abc' N'11111111-1111-4111-8111-111111111111'");
+    expect(seedSource('005_tenant_group_demo.sql', SOURCE, { ...env, ADMIN_TEST_CLERK_SUBJECT: '' })).toBeUndefined();
+  });
+
   test('skips the admin seed when no subject is configured', () => {
     expect(seedSource('004_admin_test_account.sql', SOURCE, { ...env, ADMIN_TEST_CLERK_SUBJECT: '  ' })).toBeUndefined();
   });

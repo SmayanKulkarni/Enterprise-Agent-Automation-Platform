@@ -2,19 +2,23 @@ import { Buffer } from 'node:buffer';
 import { expect, test } from 'vitest';
 import { BROWSER_COLLECTIONS } from './browser-contracts.js';
 import { BrowserV1Transport, ClerkSessionAdapter, liveClerkSessionAdapter, type BrowserTransportOptions, type ClerkBackend } from './index.js';
+import { decodeContract, descriptorFor } from '../../contracts/src/index.js';
 import { IdentityStore } from '../../identity/src/index.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const userId = '22222222-2222-4222-8222-222222222222';
 const origin = 'https://app.example';
 
-function transport(extra: Partial<BrowserTransportOptions> = {}): BrowserV1Transport {
+const groupId = 'a0000000-0000-4000-8000-000000000001';
+
+function transport(extra: Partial<BrowserTransportOptions> = {}, withGroup = false): BrowserV1Transport {
   const identity = new IdentityStore();
   identity.provision(tenantId);
   identity.transition(tenantId, 1, 'activate');
   identity.mapUser('https://clerk.example', userId, userId);
   identity.membership(tenantId, userId, ['admin']);
   identity.setMembership(tenantId, userId, 1, 'current');
+  if (withGroup) identity.group(groupId, 'Local group', [tenantId], [userId]);
   const clerk = new ClerkSessionAdapter({ issuer: 'https://clerk.example', publishableKey: 'pk_test', audience: 'platform-browser-api', authorizedParties: [origin] }, {
     verifySessionToken: () => ({ issuer: 'https://clerk.example', subject: userId, sessionId: userId, audience: 'platform-browser-api', expiresAt: '2099-01-01T00:00:00.000Z', tokenUse: 'session', authorizedParty: origin }),
     getSession: () => ({ subject: userId, status: 'active' }),
@@ -95,4 +99,36 @@ test.each([
   const response = await get(transport({ clerk: liveClerkSessionAdapter(clerkEnvironment, backend) }), '/api/v1/session');
 
   expect(response.status).toBe(status);
+});
+
+const payloadOf = (response: { body: Uint8Array }): Record<string, unknown> => (JSON.parse(new TextDecoder().decode(response.body)) as { payload: Record<string, unknown> }).payload;
+
+test('lists the groups a user administers in a governance.v1 envelope without a tenant id', async () => {
+  const response = await get(transport({}, true), '/api/v1/groups');
+  const envelope = decodeContract(descriptorFor('governance.v1'), response.body);
+
+  expect(response.status).toBe(200);
+  expect(envelope.contract).toBe('governance.v1');
+  expect(envelope.tenantId).toBeUndefined();
+  expect(envelope.payload).toEqual({ groups: [{ id: groupId, name: 'Local group', epoch: 1, adminEpoch: 1, tenantIds: [tenantId] }], completeness: 'full' });
+});
+
+test('answers 200 with an empty list for a user in no group', async () => {
+  const response = await get(transport(), '/api/v1/groups');
+
+  expect(response.status).toBe(200);
+  expect(payloadOf(response)['groups']).toEqual([]);
+});
+
+test('answers 401 without a bearer token on group routes in a governance.v1 envelope', async () => {
+  const response = await get(transport({}, true), '/api/v1/groups', { origin });
+
+  expect(response.status).toBe(401);
+  expect(decodeContract(descriptorFor('governance.v1'), response.body).tenantId).toBeUndefined();
+});
+
+test('keeps browser.v1 envelopes on tenant routes', async () => {
+  const response = await get(transport({}, true), '/api/v1/tenants');
+
+  expect(decodeContract(descriptorFor('browser.v1'), response.body, tenantId).contract).toBe('browser.v1');
 });

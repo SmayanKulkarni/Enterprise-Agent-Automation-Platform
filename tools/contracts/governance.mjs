@@ -20,11 +20,12 @@ function scanSecrets(directory) {
 }
 
 const packed = await import(resolve(root, 'packages/contracts/dist/index.js'));
+const UNSCOPED = new Set(['governance.v1']);
 const declared = Object.keys(packed.CONTRACT_DESCRIPTORS).sort();
 if (declared.length === 0) output('CONTRACT_METADATA_INVALID', 'No contract descriptors were exported.');
 for (const name of declared) {
   const descriptor = packed.descriptorFor(name);
-  if (descriptor.name !== name || !descriptor.tenantScoped || descriptor.version !== '1.0.0') output('CONTRACT_METADATA_DRIFT', name);
+  if (descriptor.name !== name || descriptor.tenantScoped === UNSCOPED.has(name) || descriptor.version !== '1.0.0') output('CONTRACT_METADATA_DRIFT', name);
 }
 const secretFindings = scanSecrets(resolve(root, 'packages'));
 if (secretFindings.length > 0) output('SECRET_SCAN_FAILED', secretFindings.join(', '));

@@ -23,9 +23,13 @@ export interface Approval extends ApprovalBinding { id: string; tenantId: Tenant
 export type IngressMode = 'interactive' | 'workload' | 'worker' | 'webhook';
 export interface Proof { mode: IngressMode; issuer: string; subject: string; audience: string; expiresAt: string; tokenUse: string; sessionId?: string; nonce?: string; origin?: string; replayKey?: string; }
 export interface ExecutionContext { mode: IngressMode; userId: string; tenantId: TenantId; expiresAt: string; membershipEpoch: number; tenantEpoch: number; sessionId?: string; }
+export interface TenantGroup { id: string; name: string; epoch: number; adminEpoch: number; tenantIds: readonly TenantId[]; billingTenantId?: TenantId; }
+export interface GroupContext { userId: string; groupId: string; groupEpoch: number; adminEpoch: number; tenantIds: readonly TenantId[]; }
 export interface IdentityReadStore {
   authenticate(proof: Proof, selectedTenant: string, audience: string, now?: string): ExecutionContext | Promise<ExecutionContext>;
   membershipsForProof(proof: Proof): readonly Pick<Membership, 'tenantId' | 'profiles' | 'epoch'>[] | Promise<readonly Pick<Membership, 'tenantId' | 'profiles' | 'epoch'>[]>;
+  groupsForProof(proof: Proof): readonly TenantGroup[] | Promise<readonly TenantGroup[]>;
+  authenticateGroup(proof: Proof, groupId: string, audience: string, now?: string): GroupContext | Promise<GroupContext>;
 }
 
 export class IdentityStore {
@@ -35,6 +39,7 @@ export class IdentityStore {
   #memberships = new Map<string, Membership>();
   #approvals = new Map<string, Approval>();
   #replays = new Set<string>();
+  #groups = new Map<string, { group: TenantGroup; adminUserIds: ReadonlySet<string> }>();
 
   provision(id: string): Tenant {
     const tenant = tenantId(id); if (this.#tenants.has(tenant)) deny('CONFLICT');
@@ -80,11 +85,19 @@ export class IdentityStore {
     if (approval.consumed || approval.revoked || !approver.profiles.includes(approval.requiredProfile) || Date.parse(approval.expiresAt) <= Date.parse(now) || canonicalJson(this.binding(approval)) !== canonicalJson(binding)) deny('CONFLICT');
     const used = { ...approval, consumed: true }; this.#approvals.set(approvalId, used); return used;
   }
+  group(id: string, name: string, tenantIds: readonly string[], adminUserIds: readonly string[]): TenantGroup {
+    const group: TenantGroup = { id, name, epoch: 1, adminEpoch: 1, tenantIds: tenantIds.map((tenant) => this.tenant(tenant).id) };
+    this.#groups.set(id, { group, adminUserIds: new Set(adminUserIds) }); return group;
+  }
+  groupsForProof(proof: Proof): readonly TenantGroup[] {
+    const userId = this.userForExternal(proof.issuer, proof.subject).id; return [...this.#groups.values()].filter((entry) => entry.adminUserIds.has(userId)).map((entry) => entry.group);
+  }
+  authenticateGroup(proof: Proof, groupId: string, audience: string, now = new Date().toISOString()): GroupContext {
+    const userId = this.proofUser(proof, audience, now); const entry = this.#groups.get(tenantId(groupId)); if (entry === undefined || !entry.adminUserIds.has(userId)) throw new IdentityError('DENIED');
+    return { userId, groupId: entry.group.id, groupEpoch: entry.group.epoch, adminEpoch: entry.group.adminEpoch, tenantIds: entry.group.tenantIds };
+  }
   authenticate(proof: Proof, selectedTenant: string, audience: string, now = new Date().toISOString()): ExecutionContext {
-    const expectedTokenUse: Record<IngressMode, string> = { interactive: 'session', workload: 'workload', worker: 'workload', webhook: 'webhook' };
-    if (proof.audience !== audience || proof.tokenUse !== expectedTokenUse[proof.mode] || !proof.issuer || !proof.subject || Date.parse(proof.expiresAt) <= Date.parse(now)) throw new IdentityError('DENIED');
-    if (proof.mode === 'interactive' && proof.sessionId === undefined) throw new IdentityError('DENIED'); if (proof.mode === 'webhook' && (proof.replayKey === undefined || this.#replays.has(proof.replayKey))) throw new IdentityError('DENIED');
-    if (proof.replayKey !== undefined) this.#replays.add(proof.replayKey); const userId = this.#subjectUsers.get(`${proof.issuer}\u0000${proof.subject}`); if (userId === undefined || this.#users.get(userId)?.disabled) throw new IdentityError('DENIED');
+    const userId = this.proofUser(proof, audience, now);
     const tenant = this.tenant(selectedTenant); const member = this.currentMembership(tenant.id, userId); if (tenant.status !== 'active') deny();
     return { mode: proof.mode, userId, tenantId: tenant.id, expiresAt: proof.expiresAt, membershipEpoch: member.epoch, tenantEpoch: tenant.epoch, ...(proof.sessionId === undefined ? {} : { sessionId: proof.sessionId }) };
   }
@@ -105,6 +118,13 @@ export class IdentityStore {
   userForExternal(issuer: string, subject: string): User { const userId = this.#subjectUsers.get(`${issuer}\u0000${subject}`); const user = userId === undefined ? undefined : this.#users.get(userId); return user ?? deny('DENIED'); }
   exportManifest(id: string): { tenantId: TenantId; status: TenantStatus; users: number; memberships: number; approvals: number } { const tenant = this.tenant(id); const memberships = [...this.#memberships.values()].filter((membership) => membership.tenantId === tenant.id); return { tenantId: tenant.id, status: tenant.status, users: new Set(memberships.map((membership) => membership.userId)).size, memberships: memberships.length, approvals: [...this.#approvals.values()].filter((approval) => approval.tenantId === tenant.id).length }; }
   tenant(id: string | TenantId): Tenant { const value = this.#tenants.get(tenantId(id)); if (value === undefined) throw new IdentityError('DENIED'); return value; }
+  private proofUser(proof: Proof, audience: string, now: string): string {
+    const expectedTokenUse: Record<IngressMode, string> = { interactive: 'session', workload: 'workload', worker: 'workload', webhook: 'webhook' };
+    if (proof.audience !== audience || proof.tokenUse !== expectedTokenUse[proof.mode] || !proof.issuer || !proof.subject || Date.parse(proof.expiresAt) <= Date.parse(now)) throw new IdentityError('DENIED');
+    if (proof.mode === 'interactive' && proof.sessionId === undefined) throw new IdentityError('DENIED'); if (proof.mode === 'webhook' && (proof.replayKey === undefined || this.#replays.has(proof.replayKey))) throw new IdentityError('DENIED');
+    if (proof.replayKey !== undefined) this.#replays.add(proof.replayKey); const userId = this.#subjectUsers.get(`${proof.issuer}\u0000${proof.subject}`); if (userId === undefined || this.#users.get(userId)?.disabled) throw new IdentityError('DENIED');
+    return userId;
+  }
   private currentMembership(id: TenantId, userId: string): Membership { const membership = this.#memberships.get(this.key(id, userId)); if (membership === undefined || membership.status !== 'current') throw new IdentityError('DENIED'); return membership; }
   private key(id: TenantId, userId: string): string { return `${id}\u0000${userId}`; }
   private binding(approval: Approval): ApprovalBinding { const { caseId, generation, action, target, argumentDigest, requiredProfile, risk } = approval; return { caseId, generation, action, target, argumentDigest, requiredProfile, risk }; }
@@ -133,6 +153,26 @@ export class AzureSqlIdentityStore implements IdentityReadStore {
       memberships.set(String(id), item);
     }
     return [...memberships.values()].map((membership) => ({ ...membership, profiles: [...new Set(membership.profiles)].sort() }));
+  }
+  async groupsForProof(proof: Proof): Promise<readonly TenantGroup[]> {
+    const result = await this.call('identity.list_current_groups', (request) => request.input('issuer', sql.NVarChar(512), proof.issuer).input('subject', sql.NVarChar(256), proof.subject));
+    const groups = new Map<string, { id: string; name: string; epoch: number; adminEpoch: number; tenantIds: TenantId[]; billingTenantId?: TenantId }>();
+    for (const row of result.recordset as { group_id?: string; name?: string; group_epoch?: number | string; admin_epoch?: number | string; billing_tenant_id?: string | null; tenant_id?: string | null }[]) {
+      const epoch = sqlEpoch(row.group_epoch); const adminEpoch = sqlEpoch(row.admin_epoch);
+      if (!row.group_id || !row.name || epoch === undefined || adminEpoch === undefined) continue;
+      const existing = groups.get(row.group_id) ?? { id: row.group_id, name: row.name, epoch, adminEpoch, tenantIds: [], ...(row.billing_tenant_id ? { billingTenantId: tenantId(row.billing_tenant_id) } : {}) };
+      if (row.tenant_id) existing.tenantIds.push(tenantId(row.tenant_id));
+      groups.set(row.group_id, existing);
+    }
+    return [...groups.values()];
+  }
+  async authenticateGroup(proof: Proof, groupId: string, audience: string, now = new Date().toISOString()): Promise<GroupContext> {
+    this.validate(proof, audience, now);
+    const group = tenantId(groupId); const result = await this.call('identity.read_group_session', (request) => request.input('group_id', sql.UniqueIdentifier, String(group)).input('issuer', sql.NVarChar(512), proof.issuer).input('subject', sql.NVarChar(256), proof.subject));
+    const row = result.recordsets[0]?.[0] as { user_id?: string; group_epoch?: number | string; admin_epoch?: number | string } | undefined;
+    const groupEpoch = sqlEpoch(row?.group_epoch); const adminEpoch = sqlEpoch(row?.admin_epoch);
+    if (!row?.user_id || groupEpoch === undefined || adminEpoch === undefined) throw new IdentityError('DENIED');
+    return { userId: row.user_id, groupId: String(group), groupEpoch, adminEpoch, tenantIds: ((result.recordsets[1] ?? []) as { tenant_id?: string }[]).flatMap((member) => member.tenant_id ? [tenantId(member.tenant_id)] : []) };
   }
   private validate(proof: Proof, audience: string, now: string): void {
     const tokenUse: Record<IngressMode, string> = { interactive: 'session', workload: 'workload', worker: 'workload', webhook: 'webhook' };

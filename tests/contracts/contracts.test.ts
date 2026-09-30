@@ -47,4 +47,13 @@ describe('@platform/contracts', () => {
     expect(() => canonicalJson({ value: Number.NaN })).toThrow(ContractValidationError);
     expect(assertCompatible('1.2.3', '>=2.0.0 <3.0.0')).toEqual({ compatible: false, reason: 'incompatible-major' });
   });
+
+  test('requires a tenant id on browser.v1 but not on governance.v1', () => {
+    const unscoped: Record<string, unknown> = { ...fixture('governance.v1') };
+    delete unscoped['tenantId'];
+    const scoped = { ...unscoped, contract: 'browser.v1', classification: descriptorFor('browser.v1').classification };
+    expect(decodeContract(descriptorFor('governance.v1'), JSON.stringify(unscoped)).contract).toBe('governance.v1');
+    expect(() => decodeContract(descriptorFor('browser.v1'), JSON.stringify(scoped))).toThrow(expect.objectContaining({ code: 'MISSING_TENANT' }));
+    expect(Object.values(CONTRACT_DESCRIPTORS).filter((descriptor) => !descriptor.tenantScoped).map((descriptor) => descriptor.name)).toEqual(['governance.v1']);
+  });
 });

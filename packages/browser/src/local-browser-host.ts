@@ -48,10 +48,13 @@ export function localBrowserTransport(environment: Readonly<Record<string, strin
   return new BrowserV1Transport({ allowedOrigins: authorizedParties, onError: report, clerk, identity, projections: read, ...(commands ? { commands } : {}), ...(workflow ? { connections: async (input) => { if (!crypto) throw new AppError('FEATURE_NOT_READY'); const result = await workflow.openRouterConnection(input.context, input.action, input.expectedVersion, input.idempotencyKey, await digest({ action: input.action, key: input.key ? crypto.digest(String(input.context.tenantId), input.key) : undefined }), input.key); return { commandId: input.idempotencyKey, objectId: '00000000-0000-5000-8000-000000000002', revision: result.version, state: result.state, digest: 'redacted', evidenceIds: [] }; } } : {}) });
 }
 
+const LOCAL_GROUP_ID = 'a0000000-0000-4000-8000-000000000001';
+
 function fixtureIdentity(issuer: string, subject: string, tenantIds: readonly string[]): IdentityStore {
   if (tenantIds.length === 0) throw new Error('Missing PLATFORM_LOCAL_TENANTS.');
   const identity = new IdentityStore(); identity.mapUser(issuer, subject, subject);
   for (const tenantId of tenantIds) { identity.provision(tenantId); identity.transition(tenantId, 1, 'activate'); identity.membership(tenantId, subject, ['admin']); identity.setMembership(tenantId, subject, 1, 'current'); }
+  identity.group(LOCAL_GROUP_ID, 'Local group', tenantIds, [subject]);
   return identity;
 }
 

@@ -141,6 +141,7 @@ const collections = new Set<string>(BROWSER_COLLECTIONS);
 export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
   { method: 'GET', path: '/api/v1/session', owner: 'identity', action: 'identity.session.read', ready: true },
   { method: 'GET', path: '/api/v1/tenants', owner: 'identity', action: 'identity.membership.list', ready: true },
+  { method: 'GET', path: '/api/v1/groups', owner: 'governance', action: 'governance.group.list', ready: true },
   { method: 'GET', path: '/api/v1/tenants/:tenantId/{cases,interventions,capabilities,installations,memory,evaluations,improvements,packages,agent-teams,workflows,skills,test-runs,reviews,versions,operations,deployments,readiness,vendor-assessments,access-grants}[/:id]', owner: 'projection', action: 'projection.read', ready: false },
   { method: 'POST', path: '/api/v1/tenants/:tenantId/commands/:owner/:name', owner: 'named registry', action: 'owner.command', ready: false },
   { method: 'GET', path: '/api/v1/tenants/:tenantId/events', owner: 'operations', action: 'operations.events.read', ready: false },
@@ -157,6 +158,7 @@ export class BrowserV1Transport {
       if (request.method === 'POST' || path.endsWith('/events')) this.assertOrigin(request);
       if (path === '/api/v1/session') return await this.session(request);
       if (path === '/api/v1/tenants') return await this.tenants(request);
+      if (path === '/api/v1/groups' && request.method === 'GET') return await this.groups(request);
       const match = /^\/api\/v1\/tenants\/([^/]+)(?:\/(.*))?$/u.exec(path); if (match === null) throw new AppError('NOT_FOUND');
       const routeTenant = tenantId(this.decodeSegment(match[1] ?? ''));
       const tail = match[2] ?? ''; const query = this.validateQuery(url, routeTenant);
@@ -174,6 +176,12 @@ export class BrowserV1Transport {
   private async context(request: BrowserRequest, selectedTenant: string): Promise<ExecutionContext | undefined> { if (this.options.clerk === undefined || this.options.identity === undefined) return undefined; const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ') || authorization.length < 8) throw new AppError('UNAUTHENTICATED'); return this.options.identity.authenticate(await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')), selectedTenant, 'platform-browser-api', this.#now()); }
   private async session(request: BrowserRequest): Promise<BrowserResponse> { if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined); const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED'); const proof = await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); const user = await this.options.identity.authenticate(proof, header(request, 'x-platform-tenant') ?? await this.firstTenant(proof), 'platform-browser-api', this.#now()); return this.success(request, String(user.tenantId), { user: { id: user.userId }, tenant: { id: user.tenantId, epoch: user.tenantEpoch }, actionHints: [] }); }
   private async tenants(request: BrowserRequest): Promise<BrowserResponse> { if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined); const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED'); const proof = await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')); const memberships = await this.options.identity.membershipsForProof(proof); const selected = String(memberships[0]?.tenantId ?? ''); const context = await this.options.identity.authenticate(proof, selected, 'platform-browser-api', this.#now()); return this.success(request, String(context.tenantId), { tenants: memberships.map((membership) => ({ id: membership.tenantId, profiles: membership.profiles, epoch: membership.epoch })) }); }
+  private async groups(request: BrowserRequest): Promise<BrowserResponse> {
+    if (this.options.clerk === undefined || this.options.identity === undefined) return this.featureNotReady(request, undefined);
+    const authorization = header(request, 'authorization'); if (!authorization?.startsWith('Bearer ')) throw new AppError('UNAUTHENTICATED');
+    const groups = await this.options.identity.groupsForProof(await this.options.clerk.proof(authorization.slice(7), header(request, 'origin')));
+    return this.success(request, undefined, { groups: groups.map((group) => ({ id: group.id, name: group.name, epoch: group.epoch, adminEpoch: group.adminEpoch, tenantIds: group.tenantIds, ...(group.billingTenantId === undefined ? {} : { billingTenantId: group.billingTenantId }) })), completeness: 'full' });
+  }
   private async firstTenant(proof: Proof): Promise<string> { if (this.options.identity === undefined) throw new Error('DENIED'); const membership = (await this.options.identity.membershipsForProof(proof))[0]; if (membership === undefined) throw new Error('DENIED'); return String(membership.tenantId); }
   private async projection(request: BrowserRequest, routeTenant: string, tail: string, query: { pageSize?: number; cursor?: string }): Promise<BrowserResponse> { const [collection, id] = tail.split('/'); const context = await this.context(request, routeTenant); if (context === undefined || collection === undefined || this.options.projections === undefined) return this.featureNotReady(request, routeTenant); return this.success(request, routeTenant, await this.options.projections({ context, collection, ...(id === undefined ? {} : { id }), ...query })); }
   private validateQuery(url: URL, routeTenant: string): { pageSize?: number; cursor?: string } {
@@ -210,11 +218,11 @@ export class BrowserV1Transport {
   private routeTenant(request: BrowserRequest): string | undefined { const candidate = /^\/api\/v1\/tenants\/([^/?]+)/u.exec(request.path)?.[1]; return candidate !== undefined && UUID.test(candidate) ? candidate.toLowerCase() : undefined; }
   private errorContext(request: BrowserRequest): ErrorContext { const tenant = this.routeTenant(request); return { correlationId: this.correlation(request), ...(tenant === undefined ? {} : { tenantId: tenant }), method: request.method, route: request.path.split('?')[0] ?? request.path }; }
   private async response(request: BrowserRequest, status: number, selectedTenant: string | undefined, payload: Record<string, unknown>): Promise<BrowserResponse> {
-    const id = this.correlation(request);
+    const id = this.correlation(request); const descriptor = descriptorFor(request.path.startsWith('/api/v1/groups') ? 'governance.v1' : 'browser.v1');
     const safePayload = JSON.parse(canonicalJson(payload)) as Record<string, unknown>;
-    const envelope: ContractEnvelope = { messageId: messageId(id), contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: this.#now(), sender: 'browser-transport', classification: 'restricted-operational', payload: { ...safePayload, completeness: safePayload['completeness'] ?? 'not-ready' } };
-    envelope.tenantId = tenantId(selectedTenant ?? '11111111-1111-4111-8111-111111111111'); envelope.correlationId = correlationId(id);
-    const encoded = await encodeContract(descriptorFor('browser.v1'), envelope);
+    const envelope: ContractEnvelope = { messageId: messageId(id), contract: descriptor.name, contractVersion: '1.0.0', occurredAt: this.#now(), sender: 'browser-transport', classification: 'restricted-operational', payload: { ...safePayload, completeness: safePayload['completeness'] ?? 'not-ready' } };
+    if (descriptor.tenantScoped) envelope.tenantId = tenantId(selectedTenant ?? '11111111-1111-4111-8111-111111111111'); envelope.correlationId = correlationId(id);
+    const encoded = await encodeContract(descriptor, envelope);
     return { status, headers: { 'content-type': MEDIA_TYPE, 'x-contract-version': '1.0.0', 'x-correlation-id': id }, body: encoded.bytes };
   }
 }

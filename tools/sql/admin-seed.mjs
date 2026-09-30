@@ -1,5 +1,5 @@
 import { URL } from 'node:url';
-const ADMIN_SEED_FILE = /^004_/u;
+const ADMIN_SEED_FILE = /^00[45]_/u;
 const SUBJECT_PATTERN = /^[A-Za-z0-9_.:@-]{1,256}$/u;
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const MAX_ISSUER_LENGTH = 512;
