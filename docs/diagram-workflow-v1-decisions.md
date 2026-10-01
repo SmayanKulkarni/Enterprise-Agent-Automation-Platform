@@ -172,3 +172,32 @@ Spec: `docs/superpowers/specs/2026-09-29-studio-agent-tools-design.md`.
 - **Tool flag.** Only an explicit `tools: false` marks a catalog model unsupported; a missing flag is unknown and allowed. The server check stays authoritative. The failure seen in Studio came from a stale `dist/` served by the Functions host; run `pnpm build:azure` and restart `func` after catalog changes.
 - **Revision history.** `[studio].list_revisions` returns at most the newest 200 revisions of a draft after `assert_context`, including `draft_json`. The `workflow-revisions` projection (record id is the draft id) omits the author. Loading a revision replaces the canvas but leaves the saved revision untouched, so the editor reads as unsaved and a save appends the next revision. New node ids come from `freeSequence`, so they cannot collide with ids in a loaded revision.
 - **Admin test account.** `database/seed/004_admin_test_account.sql` upserts the Clerk user for `CLERK_ISSUER` and `ADMIN_TEST_CLERK_SUBJECT`, a current membership (reactivating a revoked one with a bumped epoch) in every existing tenant listed in `PLATFORM_LOCAL_TENANTS`, and an `admin` profile. `tools/sql/admin-seed.mjs` fills the `$(ADMIN_*)` placeholders after validating the subject charset, the issuer URL, and tenant GUIDs, and skips the file when the subject is unset. It runs only with `AZURE_SQL_ALLOW_DEMO_SEED=true`. The `/governance` route renders the labelled fixture preview when auth is on; the role switch stays fixture-only.
+
+## Governance and observability (2026-10-01)
+
+Spec: `docs/superpowers/specs/2026-09-30-governance-observability-design.md`. Tickets: `.scratch/governance-observability/issues/01` to `18`.
+
+Decisions:
+
+- **D1.** A tenant group is a new entity that owns several existing tenants (workspaces); a workspace is in at most one group.
+- **D2.** A run's approval can be decided by a group admin in the Governance inbox or by the workspace's own admin in Studio Run History.
+- **D3.** A group admin is a full admin of every member workspace. The rights are materialized as real `identity.memberships` and `membership_profiles` rows, with the created rows recorded in `identity.group_admin_grants`.
+- **D4.** Telemetry runs on a local `grafana/otel-lgtm` container and on Grafana Cloud when deployed.
+- **D5.** Charts are drawn natively from our own API. Grafana is the operator's tool and is not embedded.
+- **D6.** The assistant's provider and model are the admin's choice. OpenRouter uses the connection of a chosen workspace in the group, which must be a member.
+- **D7.** Groups are provisioned through the Governance UI by the group admin.
+
+Deviations from the spec:
+
+- Migrations were split into 012 to 017 instead of two files, because an applied migration is pinned by digest and cannot be edited.
+- `governance.command_receipts` and `workflow.run_facts.usage_estimated` were added. The second marks runs whose cost was estimated, so the overview can mark them partial.
+- A workflow's display name is taken from the draft's trigger node title.
+- MCP telemetry is recorded in `runtime.invokeCapability`, not in the port.
+- The `tenant_id` metric label is set only from verified sources.
+- Circuit records gained a `key`, so the health view can name the model or connector that is open.
+- The assistant route has no `If-Match`, because a turn is not a versioned write. A call whose reported cost exceeds the ceiling fails the turn. `RATE_LIMITED` (429, category `retryable`) was added to the error codes; the browser reads the HTTP status for it, because `describeError` maps the `retryable` category first.
+- Fixture mode has no group writes, no fake logs or traces, and hides the assistant.
+- The dashboards use a data source variable instead of an exported `__inputs` block, so file provisioning works without edits. The `grafana/otel-lgtm` image has no provider for a custom dashboard folder, so `infra/observability/dashboard-provider.yaml` was added and the compose mount changed to `/threadline-dashboards`.
+- `CONTEXT.md` was restored from git before the glossary entries were added, because it had been deleted in the working tree and `CLAUDE.md` names it as the glossary.
+
+Known ceilings: the assistant rate limit is per server instance; groups hold at most 50 workspaces, which bounds the tenant regular expression in telemetry queries; the Loki tenant filter is structured metadata, not a stream label; deployed telemetry retention is 14 days, so `30d` telemetry panels are partial.

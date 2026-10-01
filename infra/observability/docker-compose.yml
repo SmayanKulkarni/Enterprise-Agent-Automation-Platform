@@ -8,4 +8,5 @@ services:
       - "127.0.0.1:3100:3100"
       - "127.0.0.1:3200:3200"
     volumes:
-      - ./dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards/custom:ro
+      - ./dashboards:/threadline-dashboards:ro
+      - ./dashboard-provider.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/threadline.yaml:ro

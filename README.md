@@ -673,6 +673,18 @@ The editable diagram source is `docs/api-routes-sequence.drawio`, with a JSON de
 | 501 | Feature not ready (`FEATURE_NOT_READY`) |
 | 503 | Dependency unavailable |
 
+### 8.7 Group routes (Governance)
+
+A group admin reaches these five routes. Responses use the unscoped `governance.v1` envelope, so they carry no `tenantId`. The caller must be a current admin of the group in the path. Group ids are UUIDs.
+
+| Method and path | Purpose | Error codes |
+| --- | --- | --- |
+| `GET /api/v1/groups` | List the groups the caller administers. Answers `200` with `[]` for a user in no group. | `401` |
+| `GET /api/v1/groups/:groupId/:collection` | Read one governance collection: `members`, `overview`, `series`, `workflows`, `approvals`, `health`, `logs` or `trace`. Query keys are fixed per collection (`range`, `tenant`, `panel`, `level`, `event`, `run`, `cursor`); an unknown key is rejected. `range` is `1h`, `24h`, `7d` or `30d`. `tenant` must be a member workspace. | `401`, `403` (not an admin, or `tenant` outside the group), `404` (unknown collection), `422` (bad query), `501` |
+| `POST /api/v1/groups/commands/governance/create-group` | Create a group from workspaces the caller administers. `If-Match: 0`. | `401`, `403`, `409`, `422`, `501` |
+| `POST /api/v1/groups/:groupId/commands/governance/:name` | Run `add-tenant`, `remove-tenant`, `add-admin`, `remove-admin` or `set-billing-tenant`. Needs `Idempotency-Key`, `X-Correlation-Id` and `If-Match` equal to the group epoch. | `401`, `403`, `409` (stale epoch, last admin), `422`, `501` |
+| `POST /api/v1/groups/:groupId/assistant` | Ask the governance assistant one question. The body is JSON: `messages`, `scope`, `range`, `provider`, `model`, `billingTenantId`. Needs `Idempotency-Key` and `X-Correlation-Id`, no `If-Match`. Answers `{ answer, model, tokens, cost }`. The server builds the data summary; the body cannot supply it. | `401`, `403` (not an admin, or a workspace outside the group), `400` (not JSON), `422` (bad body, or a call over the cost ceiling), `429` (`RATE_LIMITED`, 20 requests per 5 minutes per admin per group), `501` (`GOVERNANCE_ASSISTANT_MAX_COST` unset) |
+
 ## 9. User flows
 
 ### 9.1 Roles
@@ -828,7 +840,8 @@ The browser shell in `apps/browser` is a React 19 and Vite 7 app.
 | API client | `platform-api.ts`, `session-state.ts` |
 | Studio | `studio-editor.tsx`, `inspector.tsx`, `workflow-model.ts` |
 | Panels | `connector-panel.tsx`, `webhook-panel.tsx`, `run-history.tsx`, `workflow-memory-panel.tsx`, `memory-import-panel.tsx`, `openrouter-connection-panel.tsx` |
-| Governance preview | `governance-preview.tsx` |
+| Governance | `governance/governance-page.tsx`, `governance-route.tsx`, `governance-api.ts`, `governance-source.ts`, `governance-model.ts`, `decoders.ts` |
+| Governance panels | `overview-panel.tsx`, `kpi-row.tsx`, `approvals-inbox.tsx`, `group-admin-panel.tsx`, `create-group.tsx`, `logs-panel.tsx`, `trace-panel.tsx`, `assistant-drawer.tsx`, and the SVG charts in `charts/` |
 
 Behaviors worth knowing:
 
@@ -838,6 +851,20 @@ Behaviors worth knowing:
 - One `pending` union prevents two commands from showing the same label. Destructive canvas changes go through one confirmation dialog.
 - Fixture-only surfaces show a "Local example, not saved or evaluated" notice.
 - Client routing rewrites all non-`/api/` paths to `index.html`.
+
+### 13.1 Governance page
+
+The Governance page at `/governance` serves a group admin. It has a group, scope (all workspaces or one) and range (`1h`, `24h`, `7d`, `30d`) selector, a health banner, KPI tiles with the previous period, and five tabs.
+
+| Tab | Content |
+| --- | --- |
+| Overview | Six charts drawn as SVG with theme tokens: runs over time, spend by workspace, API latency, API error rate, model latency, MCP outcomes. Run, spend and token numbers come from SQL. Latency, error and MCP charts come from Prometheus and show a plain sentence when telemetry is not configured or unavailable. |
+| Approvals | Pending approvals across the group. Approve or reject runs the existing `workflow.approve` command in the owning workspace. The list polls every 5 seconds and reloads after 30 seconds. A decided or expired approval shows a conflict notice. |
+| Workspaces & admins | Member workspaces, co-admins, billing workspace, create-group form. Removals ask for confirmation and state the consequence. |
+| Logs | Events from Loki with level, event and run filters and "Load older". |
+| Trace | Spans of one run from Tempo as a waterfall. |
+
+The **Ask** button opens the assistant drawer. The admin picks a provider, a model and the billing workspace, and types a question. The answer is plain text (`white-space: pre-wrap`), never HTML. The conversation lives in component state and is gone on reload. In fixture mode the page shows labelled example SQL-style data, has no group writes, shows no logs or traces, and hides Ask.
 
 ## 14. Observability and error handling
 
@@ -861,6 +888,108 @@ pnpm profile:workflow
 ```
 
 Writes V8 CPU profiles of the end-to-end workflow scenario to `outputs/profiles/`. The scenario uses in-memory ports, so it measures orchestration CPU only. Waits on SQL, models, MCP servers, and Upstash appear in traces.
+
+### 14.4 Two data planes
+
+Governance reads from two planes. They answer different questions.
+
+| Plane | Source of truth for | Exactness |
+| --- | --- | --- |
+| Evidence plane (Azure SQL) | Run counts, spend, tokens, pending approvals, health, group membership | Exact. `workflow.run_facts` holds one row per run. Runs written before the table existed are backfilled; a run whose cost was estimated is flagged `usage_estimated` and the overview marks such figures partial. |
+| Telemetry plane (OTLP to Prometheus, Loki, Tempo) | API and model latency, error rates, MCP outcomes, logs, traces | Approximate. Sampling gaps, restarts and the retention window all lose data. |
+
+The page never mixes the two in one number. A SQL figure is exact; a chart from telemetry is labelled when telemetry is missing.
+
+### 14.5 Local telemetry stack
+
+```sh
+docker compose -f infra/observability/docker-compose.yml up -d
+```
+
+This starts `grafana/otel-lgtm` with Grafana on `127.0.0.1:3000`, OTLP/HTTP on `4318`, Prometheus on `9090`, Loki on `3100` and Tempo on `3200`. The four dashboards in `infra/observability/dashboards/` (API, Workflows, Models and tools, Approvals) are provisioned from the mount through `dashboard-provider.yaml`. Each has a data source variable and a multi-value `tenant_id` variable.
+
+Point the app at it:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+GOVERNANCE_PROMETHEUS_URL=http://127.0.0.1:9090
+GOVERNANCE_LOKI_URL=http://127.0.0.1:3100
+GOVERNANCE_TEMPO_URL=http://127.0.0.1:3200
+```
+
+On Docker Desktop the repository path must be under a shared folder, or the compose mount fails with "is not shared from the host". Deployed, the same variables point at Grafana Cloud with `GOVERNANCE_QUERY_USER` and `GOVERNANCE_QUERY_TOKEN` (read-only) and `OTEL_EXPORTER_OTLP_*` for export.
+
+### 14.6 Metric catalog
+
+`packages/telemetry/src/instruments.ts` is the catalog. Prometheus renames instruments: dots become underscores, counters gain `_total`, histograms with a unit gain it as a suffix (`_seconds`) and expose `_bucket`, `_count` and `_sum`. The token histogram has no unit suffix and the cost counter keeps the uppercase unit (`gen_ai_client_cost_USD_total`). Label dots also become underscores (`http_route`, `gen_ai_provider_name`, `error_type`).
+
+| Instrument | Type | Unit | Labels |
+| --- | --- | --- | --- |
+| `http.server.request.duration` | histogram | s | `http.route`, `http.request.method`, `http.response.status_code`, `tenant_id` |
+| `app.errors` | counter | none | `code`, `category`, `site`, `tenant_id` |
+| `auth.denied` | counter | none | `reason` |
+| `workflow.runs.started` | counter | none | `tenant_id`, `trigger` |
+| `workflow.runs.finished` | counter | none | `tenant_id`, `status`, `reason` |
+| `workflow.step.duration` | histogram | s | `tenant_id`, `node_kind`, `outcome` |
+| `workflow.approvals.requested` | counter | none | `tenant_id`, `kind` |
+| `workflow.approvals.decided` | counter | none | `tenant_id`, `decision` |
+| `workflow.approvals.expired` | counter | none | `tenant_id` |
+| `workflow.approval.wait.duration` | histogram | s | `tenant_id`, `decision` |
+| `gen_ai.client.operation.duration` | histogram | s | `gen_ai.provider.name`, `gen_ai.request.model`, `tenant_id`, `feature`, `error.type` |
+| `gen_ai.client.token.usage` | histogram | {token} | `gen_ai.provider.name`, `gen_ai.request.model`, `tenant_id`, `feature`, `error.type`, `gen_ai.token.type` |
+| `gen_ai.client.cost` | counter | USD | `gen_ai.provider.name`, `gen_ai.request.model`, `tenant_id`, `feature` |
+| `mcp.tool.call.duration` | histogram | s | `tenant_id`, `capability`, `outcome`, `route` |
+| `workflow.effects` | counter | none | `tenant_id`, `state` |
+| `workflow.circuit.transitions` | counter | none | `tenant_id`, `kind`, `state` |
+| `workflow.webhook.deliveries` | counter | none | `tenant_id`, `outcome` |
+| `connector.agent.requests` | counter | none | `tenant_id`, `operation`, `outcome` |
+| `memory.retrievals` | counter | none | `tenant_id`, `status` |
+| `memory.proposals` | counter | none | `tenant_id`, `state` |
+| `workflow.dispatch.recovered` | counter | none | none |
+
+### 14.7 Event catalog
+
+`logEvent(name, attributes)` writes one JSON line to stdout and one OTLP log record. Only the attributes listed here are kept; each string value is scrubbed and cut to 200 characters. Events carry `event` and `level` as well.
+
+| Event | Allowed attributes |
+| --- | --- |
+| `api.request.failed` | `tenant_id`, `route`, `method`, `status`, `code`, `category`, `correlation_id` |
+| `auth.denied` | `route`, `reason` |
+| `command.executed` | `tenant_id`, `owner`, `name`, `outcome`, `actor_user_id`, `object_id` |
+| `run.started` | `tenant_id`, `run_id`, `definition_id`, `trigger`, `owner_id` |
+| `run.finished` | `tenant_id`, `run_id`, `definition_id`, `status`, `reason`, `duration_s`, `tokens`, `cost` |
+| `node.failed` | `tenant_id`, `run_id`, `node_id`, `node_kind`, `code` |
+| `approval.requested` | `tenant_id`, `run_id`, `node_id`, `kind`, `capability`, `expires_at` |
+| `approval.decided` | `tenant_id`, `run_id`, `decision`, `actor_user_id`, `wait_s` |
+| `approval.expired` | `tenant_id`, `run_id`, `node_id` |
+| `model.call` | `tenant_id`, `run_id`, `node_id`, `provider`, `model`, `attempt`, `outcome`, `tokens`, `cost`, `duration_s` |
+| `mcp.call` | `tenant_id`, `run_id`, `node_id`, `capability`, `route`, `outcome`, `duration_s`, `effect_id` |
+| `circuit.transition` | `tenant_id`, `kind`, `state` |
+| `webhook.delivery` | `tenant_id`, `definition_id`, `outcome` |
+| `connector.request` | `tenant_id`, `installation_id`, `operation`, `outcome` |
+| `memory.retrieval` | `tenant_id`, `run_id`, `node_id`, `status`, `item_count` |
+| `group.changed` | `group_id`, `action`, `actor_user_id`, `subject_id` |
+| `assistant.asked` | `group_id`, `billing_tenant_id`, `provider`, `model`, `tokens`, `cost`, `outcome` |
+
+The assistant never logs message text: `assistant.asked` holds only group, billing workspace, provider, model, tokens, cost and outcome.
+
+### 14.8 Label rules
+
+- A label that is not in a metric's catalog entry is dropped, so a run id or a free-text field cannot become a series.
+- String label values are scrubbed and cut to 128 characters. Non-finite numbers are dropped.
+- `tenant_id` is set only from a verified source: an authenticated tenant route, a worker that read the tenant from its own record, or an `unknown` placeholder for webhooks that failed lookup. A request for a tenant the caller does not belong to gets no tenant label.
+- `workflow.dispatch.recovered` and `auth.denied` carry no tenant label, so dashboards show them for all workspaces.
+
+### 14.9 Flush per invocation
+
+Serverless hosts can freeze a process as soon as the response is sent, and metrics export every 15 seconds. Each Azure Function handler runs through `withFlush`, which flushes traces, metrics and logs after every invocation and gives up after 2 seconds, so a slow collector cannot hold a response. The Vercel API entry calls `flushTelemetry()` inside `waitUntil` after the response is built.
+
+### 14.10 Known ceilings
+
+- **Assistant rate limit.** The limit of 20 requests per 5 minutes is kept in memory per server instance. Across several instances the effective limit is higher. The per-call cost ceiling (`GOVERNANCE_ASSISTANT_MAX_COST`) bounds spend regardless.
+- **Tenant count.** A group holds at most 50 workspaces. Every telemetry query filters with one regular expression of up to 50 tenant ids; a larger group would need a different filter.
+- **Loki tenant filter.** The tenant id is structured metadata, not a stream label. Filters on it scan every line of the Threadline stream in the window, so cost grows with log volume.
+- **Retention.** Deployed telemetry is kept 14 days. A `30d` range is reported as partial for telemetry panels. SQL evidence is not affected.
 
 ## 15. Local development
 
@@ -943,6 +1072,22 @@ Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 | `WORKFLOW_MEMORY_ENABLED_TENANTS` | API, Functions | Comma-separated tenant IDs allowed to use Operational Memory |
 | `WORKFLOW_WEBHOOK_SECRET_<DEFINITIONID>` | Functions | Fallback webhook secret before a managed credential exists |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Functions | Enables trace export |
+| `GOVERNANCE_PROMETHEUS_URL` | API | Prometheus query endpoint for governance charts. Unset: chart panels report not-configured |
+| `GOVERNANCE_LOKI_URL` | API | Loki query endpoint for the Logs tab and the assistant |
+| `GOVERNANCE_TEMPO_URL` | API | Tempo query endpoint for the Trace tab |
+| `GOVERNANCE_QUERY_USER`, `GOVERNANCE_QUERY_TOKEN` | API | Basic-auth pair sent to all three query endpoints; set both or neither |
+| `GOVERNANCE_ASSISTANT_MAX_COST` | API | Per-call cost ceiling in USD. Unset or not a positive number: the assistant answers 501. A call that reports more fails the turn |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | API, Functions | Enables OTLP export of traces, metrics and logs |
+| `OTEL_EXPORTER_OTLP_HEADERS` | API, Functions | Standard OTLP header list, for example the Grafana Cloud authorization header |
+| `DEPLOYMENT_ENVIRONMENT` | API, Functions | Value of the `deployment.environment.name` resource attribute. Unset gives `unknown` |
+
+**Governance database role.** Migration 012 creates the role `platform_governance_browser` and later migrations grant it execute on the governance procedures. No migration adds a login to it, because the runtime user differs per environment. After migrating, an operator adds the user named in `AZURE_SQL_CONNECTION_STRING`:
+
+```sql
+ALTER ROLE platform_governance_browser ADD MEMBER [<runtime user>];
+```
+
+Until this runs, group routes backed by SQL answer an error and the Governance page cannot load.
 
 Never commit `.env.local`, `.env.server.local`, or any file holding real keys. Rotate a key that has appeared in a committed or shared file.
 

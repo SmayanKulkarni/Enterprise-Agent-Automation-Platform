@@ -93,3 +93,21 @@ _Avoid_: Connector callback, schedule
 **Evidence retention**:
 The tenant policy that controls the lifetime of Run History and derived operational logs.
 _Avoid_: Backup, memory retention
+
+## Governance
+
+**Tenant group**:
+An entity that owns several workspaces (tenants). A workspace belongs to at most one group.
+_Avoid_: Organization, folder, parent tenant
+
+**Group admin**:
+A user who administers a tenant group and therefore holds real admin rights in every member workspace, materialized as memberships.
+_Avoid_: Super admin, owner
+
+**Evidence plane**:
+Azure SQL as the exact source of truth for run counts, spend, approvals and membership.
+_Avoid_: Metrics store
+
+**Telemetry plane**:
+Traces, metrics and logs pushed over OTLP; approximate; used for latency, error rates, logs and traces.
+_Avoid_: Audit trail
