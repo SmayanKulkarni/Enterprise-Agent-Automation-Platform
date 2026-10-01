@@ -14,6 +14,7 @@
   --shadow-rgb: 34 41 32;
   --radius-s: 4px; --radius-m: 8px;
   --motion-fast: 120ms; --motion: 200ms;
+  --chart-1: #587713; --chart-2: #0b6aa8; --chart-3: #c2410c; --chart-4: #7e3fa8; --chart-5: #b0366b; --chart-6: #5f655d;
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
@@ -25,6 +26,7 @@
   --accent-surface: #1c2612; --accent-line: #33431f; --accent-text: #b4dc62;
   --success: #a3d65c; --warning: #e0a45c; --danger: #ff8a7d;
   --success-surface: #1c2612; --warning-surface: #2b2013; --danger-surface: #2f1815;
+  --chart-1: #b4dc62; --chart-2: #5aaeea; --chart-3: #f08a4b; --chart-4: #b78ae0; --chart-5: #ec7fae; --chart-6: #a0a69c;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -509,3 +511,15 @@ dialog.trace-drawer { position: fixed; inset: 0 0 0 auto; margin: 0; width: min(
 .governance-tabs .tab-badge { min-width: 20px; padding: 1px 6px; border-radius: 10px; background: var(--accent-surface); color: var(--accent-text); font-size: var(--text-xs); text-align: center; }
 @media (max-width: 760px) { .governance-heading { flex-direction: column; align-items: stretch; } .governance-controls { justify-content: flex-start; } }
 @media (max-width: 560px) { table.data-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } table.data-table tbody tr { padding-block: 8px; border-bottom: 1px solid var(--line-soft); } table.data-table tbody th, table.data-table tbody td { border: 0; padding: 4px 20px; } }
+.governance-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }.card-note { margin: 0; padding: 0 20px 14px; color: var(--muted); font-size: var(--text-xs); }
+.chart { margin: 0; padding: 16px 20px 14px; }.chart-body { display: grid; grid-template-columns: auto 1fr; grid-template-rows: 180px auto; column-gap: 8px; border-radius: 6px; }.chart-body:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chart-yaxis { position: relative; min-width: 44px; }.chart-yaxis span { position: absolute; right: 0; transform: translateY(50%); color: var(--muted); font-family: 'Geist Mono', monospace; font-size: 11px; white-space: nowrap; }
+.chart-plot { position: relative; border-bottom: 1px solid var(--line-strong); }.chart-plot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }.chart-grid { stroke: var(--line-soft); stroke-width: 1; }.chart-cross { stroke: var(--line-stronger); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); }
+.chart-xaxis { grid-column: 2; display: flex; justify-content: space-between; padding-top: 6px; color: var(--muted); font-size: 11px; }
+.chart-tooltip { position: absolute; top: 4px; z-index: 2; display: grid; gap: 3px; min-width: 130px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--panel); box-shadow: 0 6px 18px rgb(var(--shadow-rgb) / 14%); font-size: var(--text-xs); pointer-events: none; transform: translateX(8px); }.chart-tooltip[data-flip] { transform: translateX(calc(-100% - 8px)); }.chart-tooltip span { display: flex; align-items: center; gap: 6px; font-family: 'Geist Mono', monospace; }.chart-tooltip i { width: 8px; height: 8px; border-radius: 2px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0 0; padding: 0; list-style: none; color: var(--text-soft); font-size: var(--text-xs); }.chart-legend li { display: flex; align-items: center; gap: 6px; }
+.sparkline { display: block; width: 100%; height: 28px; margin-top: 10px; }
+@media (max-width: 900px) { .governance-charts { grid-template-columns: 1fr; } }
+.chart-card { overflow: visible; }
+.chart-tooltip span { white-space: nowrap; }

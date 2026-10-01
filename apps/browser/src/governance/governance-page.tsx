@@ -7,6 +7,8 @@ import { banner, kpis, rangeName, RANGES } from './governance-model.js';
 import type { GovernanceSource } from './governance-source.js';
 import { KpiRow } from './kpi-row.js';
 import { OverviewPanel } from './overview-panel.js';
+import { Sparkline } from '../charts/sparkline.js';
+import { useSeries } from './use-series.js';
 
 interface Loaded { overview: Overview; workflows: Workflows; health: Health; telemetry: Series }
 interface Props { source: GovernanceSource; groups: readonly Group[]; groupId: string; setGroupId: (id: string) => void }
@@ -53,6 +55,12 @@ export function GovernancePage({ source, groups, groupId, setGroupId }: Props) {
     gsap.from('.metric, .governance-card', { y: 12, opacity: 0, duration: 0.4, stagger: STAGGER_SECONDS, ease: 'power2.out', clearProps: 'transform,opacity' });
   }, { dependencies: [loaded === undefined], scope: body });
 
+  const runs = useSeries(source, 'runs-over-time', range, scope, reload);
+  const runPoints = useMemo(() => {
+    const totals = new Map<number, number>();
+    for (const line of runs.series?.status === 'ready' ? runs.series.series : []) for (const [t, v] of line.points) totals.set(t, (totals.get(t) ?? 0) + v);
+    return [...totals].sort(([a], [b]) => a - b);
+  }, [runs.series]);
   const tiles = useMemo(() => loaded === undefined ? [] : kpis(loaded.overview.total), [loaded]);
   const status = loaded === undefined ? undefined : banner(loaded.health, loaded.telemetry.status);
   const changeGroup = (id: string) => { setScope(undefined); setNames({}); setLoaded(undefined); setGroupId(id); };
@@ -75,12 +83,12 @@ export function GovernancePage({ source, groups, groupId, setGroupId }: Props) {
       {failure !== undefined ? <ErrorPage error={failure.error} onRetry={() => setReload((value) => value + 1)} /> : loaded === undefined || status === undefined ? <StatePage busy title="Loading governance">Reading your group's numbers…</StatePage> : (
         <div ref={body} aria-busy={loading}>
           <div className="health-banner" data-tone={status.tone}><span><i /> {status.text}</span></div>
-          <KpiRow tiles={tiles} range={range} />
+          <KpiRow tiles={tiles} range={range} extras={{ runs: <Sparkline points={runPoints} label="Runs over the selected period" /> }} />
           <div className="governance-tabs" role="tablist" aria-label="Governance sections" onKeyDown={moveTabFocus}>
             {tabs.map((entry) => <button key={entry.id} role="tab" id={`gov-tab-${entry.id}`} aria-selected={tab === entry.id} aria-controls={`gov-panel-${entry.id}`} tabIndex={tab === entry.id ? 0 : -1} onClick={() => setTab(entry.id)}>{entry.label}</button>)}
           </div>
           <div role="tabpanel" id={`gov-panel-${tab}`} aria-labelledby={`gov-tab-${tab}`}>
-            {tab === 'overview' && <OverviewPanel overview={loaded.overview} workflows={loaded.workflows} scope={scope} setScope={setScope} />}
+            {tab === 'overview' && <OverviewPanel overview={loaded.overview} workflows={loaded.workflows} scope={scope} setScope={setScope} source={source} range={range} reload={reload} />}
           </div>
         </div>
       )}

@@ -1,13 +1,16 @@
 import { Notice } from '../ui.js';
-import type { Overview, Workflows } from './decoders.js';
+import { ChartPanel, OVERVIEW_PANELS } from './chart-panel.js';
+import type { Overview, RangeKey, Workflows } from './decoders.js';
+import type { GovernanceSource } from './governance-source.js';
 import { dataNotes, formatCount, formatPercent, formatSeconds, formatUsd, successRateOf } from './governance-model.js';
 
-interface Props { overview: Overview; workflows: Workflows; setScope: (tenantId: string) => void; scope: string | undefined }
+interface Props { overview: Overview; workflows: Workflows; setScope: (tenantId: string) => void; scope: string | undefined; source?: GovernanceSource; range?: RangeKey; reload?: number }
 
-export function OverviewPanel({ overview, workflows, scope, setScope }: Props) {
+export function OverviewPanel({ overview, workflows, scope, setScope, source, range, reload = 0 }: Props) {
   return (
     <>
       {dataNotes(overview, workflows).map((note) => <Notice key={note} tone="info">{note}</Notice>)}
+      {source !== undefined && range !== undefined && <div className="governance-charts">{OVERVIEW_PANELS.map((spec) => <ChartPanel key={spec.id} source={source} spec={spec} range={range} scope={scope} reload={reload} />)}</div>}
       <div className="governance-stack">
         <article className="governance-card">
           <div className="card-heading"><div><h2>Workspaces</h2><p>Select a workspace to scope the page to it</p></div></div>
