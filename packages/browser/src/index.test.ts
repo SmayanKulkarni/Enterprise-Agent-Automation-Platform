@@ -193,6 +193,64 @@ test('refuses a group command without a bearer token with 401', async () => {
   expect((await postGroup(browser, addTenantPath, commandBody(1, { tenantId: otherTenant }), { ...commandHeaders, authorization: undefined })).status).toBe(401);
 });
 
+const assistantPath = `/api/v1/groups/${groupId}/assistant`;
+const assistantHeaders = { authorization: `Bearer ${userId}`, origin, 'content-type': 'application/json', 'idempotency-key': '33333333-3333-4333-8333-333333333333', 'x-correlation-id': correlation };
+const assistantAnswer = { answer: 'Spend rose.', model: 'm', tokens: 5, cost: 0.01 };
+const askRoute = (browser: BrowserV1Transport, body: string, headers: Record<string, string | undefined> = assistantHeaders) => browser.handle({ method: 'POST', path: assistantPath, headers, body: new TextEncoder().encode(body) });
+
+test('answers an assistant turn for a group admin and passes the group context and parsed body', async () => {
+  const seen: { groupId: string; body: unknown }[] = [];
+  const browser = transport({ assistant: ({ context, body }) => { seen.push({ groupId: context.groupId, body }); return Promise.resolve(assistantAnswer); } }, [userId]);
+  const response = await askRoute(browser, '{"question":1}');
+
+  expect(response.status).toBe(200);
+  expect(payloadOf(response)).toMatchObject({ groupId, ...assistantAnswer, completeness: 'full' });
+  expect(seen).toEqual([{ groupId, body: { question: 1 } }]);
+});
+
+test('refuses an assistant turn from a non-admin with 403 before calling the handler', async () => {
+  const handler = vi.fn(() => Promise.resolve(assistantAnswer));
+
+  expect((await askRoute(transport({ assistant: handler }, []), '{}')).status).toBe(403);
+  expect(handler).not.toHaveBeenCalled();
+});
+
+test.each([
+  ['a missing origin', { ...assistantHeaders, origin: undefined }],
+  ['a missing idempotency key', { ...assistantHeaders, 'idempotency-key': undefined }],
+  ['a non-UUID correlation id', { ...assistantHeaders, 'x-correlation-id': 'nope' }],
+  ['a wrong content type', { ...assistantHeaders, 'content-type': 'text/plain' }],
+])('refuses an assistant turn with %s', async (_name, headers) => {
+  expect((await askRoute(transport({ assistant: () => Promise.resolve(assistantAnswer) }, [userId]), '{}', headers)).status).toBe(403);
+});
+
+test('refuses an assistant turn without a bearer token with 401', async () => {
+  expect((await askRoute(transport({ assistant: () => Promise.resolve(assistantAnswer) }, [userId]), '{}', { ...assistantHeaders, authorization: undefined })).status).toBe(401);
+});
+
+test.each([
+  ['not JSON', 'nope', 400],
+  ['a JSON array', '[]', 422],
+  ['over 65536 bytes', JSON.stringify({ text: 'a'.repeat(70_000) }), 422],
+])('answers an assistant turn whose body is %s with %i', async (_name, body, status) => {
+  expect((await askRoute(transport({ assistant: () => Promise.resolve(assistantAnswer) }, [userId]), body)).status).toBe(status);
+});
+
+test('labels the assistant route with its template', async () => {
+  const { points } = observe();
+  await askRoute(transport({ assistant: () => Promise.resolve(assistantAnswer) }, [userId]), '{}');
+
+  expect((await points('http.server.request.duration')).map((point) => point.attributes['http.route'])).toEqual(['/api/v1/groups/:groupId/assistant']);
+});
+
+test('maps handler errors to their status and answers 501 without a handler', async () => {
+  const fail = (code: string) => transport({ assistant: () => Promise.reject(Object.assign(new Error(code), { code })) }, [userId]);
+
+  expect((await askRoute(fail('INVALID'), '{}')).status).toBe(422);
+  expect((await askRoute(fail('RATE_LIMITED'), '{}')).status).toBe(429);
+  expect((await askRoute(transport({}, [userId]), '{}')).status).toBe(501);
+});
+
 test('answers 409 when if-match differs from the expected version', async () => {
   const browser = transport({ groupCommands: { 'governance.add-tenant': () => Promise.resolve(okReceipt) } }, [userId]);
 

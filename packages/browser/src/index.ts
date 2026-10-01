@@ -16,6 +16,7 @@ export interface BrowserCommand { context: ExecutionContext; tenantId: string; o
 export interface GroupCommand { userId: string; group?: GroupContext; name: string; idempotencyKey: string; correlationId: CorrelationId; expectedVersion: number; digest: string; arguments: Record<string, unknown>; }
 export type GroupCommandHandler = (command: GroupCommand) => Promise<Record<string, unknown>>;
 export interface GroupProjection { context: GroupContext; collection: string; query: Readonly<Record<string, string>>; }
+export type GroupAssistantHandler = (input: { context: GroupContext; body: unknown }) => Promise<Record<string, unknown>>;
 export type GroupProjectionHandler = (projection: GroupProjection) => Promise<Record<string, unknown>>;
 export type BrowserCommandHandler = (command: BrowserCommand) => Promise<Record<string, unknown>> | Record<string, unknown>;
 export interface ClerkSessionClaims { issuer: string; subject: string; sessionId: string; audience: string; expiresAt: string; tokenUse: string; authorizedParty: string; }
@@ -50,7 +51,7 @@ export class ClerkSessionAdapter {
 export interface BrowserProjection { context: ExecutionContext; collection: string; id?: string; pageSize?: number; cursor?: string; }
 export type BrowserProjectionHandler = (projection: BrowserProjection) => Promise<Record<string, unknown>> | Record<string, unknown>;
 export type BrowserConnectionHandler = (input: { context: ExecutionContext; action: 'connect' | 'rotate' | 'verify' | 'disconnect'; expectedVersion: number; idempotencyKey: string; key?: string }) => Promise<Record<string, unknown>>;
-export interface BrowserTransportOptions { allowedOrigins: readonly string[]; commands?: Readonly<Record<string, BrowserCommandHandler>>; groupCommands?: Readonly<Record<string, GroupCommandHandler>>; groupProjections?: GroupProjectionHandler; connections?: BrowserConnectionHandler; clerk?: ClerkSessionAdapter; identity?: IdentityReadStore; projections?: BrowserProjectionHandler; now?: () => string; onError?: (error: unknown, context: ErrorContext) => void; }
+export interface BrowserTransportOptions { allowedOrigins: readonly string[]; commands?: Readonly<Record<string, BrowserCommandHandler>>; groupCommands?: Readonly<Record<string, GroupCommandHandler>>; groupProjections?: GroupProjectionHandler; assistant?: GroupAssistantHandler; connections?: BrowserConnectionHandler; clerk?: ClerkSessionAdapter; identity?: IdentityReadStore; projections?: BrowserProjectionHandler; now?: () => string; onError?: (error: unknown, context: ErrorContext) => void; }
 export interface SafeCaseProjection { caseId: string; watermark: number; eventSequence: number; generation: number; version: number; classification: 'ordinary' | 'restricted-operational'; redacted: boolean; waiting?: string; approvalDigest?: string; unknownOutcome?: boolean; reconciliation?: string; }
 /** Browser-only Case state: a sequence gap refreshes only the affected Case. */
 export class CaseWorkbench {
@@ -146,6 +147,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const collections = new Set<string>(BROWSER_COLLECTIONS);
 const groupCollections = new Set<string>(GROUP_COLLECTIONS);
 const groupQueryKeys = new Set<string>(GROUP_QUERY_KEYS);
+const ASSISTANT_BODY_LIMIT = 65536;
 const TENANT_COMMAND = /^commands\/([a-z][a-z0-9-]*)\/([a-z][a-z0-9-]*)$/u;
 const GROUP_QUERY_VALUE_LIMIT = 200;
 const GROUP_CURSOR_LIMIT = 2000;
@@ -154,6 +156,7 @@ export const BROWSER_V1_ROUTE_INVENTORY = Object.freeze([
   { method: 'GET', path: '/api/v1/tenants', owner: 'identity', action: 'identity.membership.list', ready: true },
   { method: 'GET', path: '/api/v1/groups', owner: 'governance', action: 'governance.group.list', ready: true },
   { method: 'GET', path: '/api/v1/groups/:groupId/{members,overview,series,workflows,approvals,health,logs,trace}', owner: 'governance', action: 'governance.group.read', ready: false },
+  { method: 'POST', path: '/api/v1/groups/:groupId/assistant', owner: 'governance', action: 'governance.assistant.ask', ready: false },
   { method: 'POST', path: '/api/v1/groups/commands/governance/create-group', owner: 'governance', action: 'governance.group.create', ready: false },
   { method: 'POST', path: '/api/v1/groups/:groupId/commands/governance/:name', owner: 'governance', action: 'governance.group.command', ready: false },
   { method: 'GET', path: '/api/v1/tenants/:tenantId/{cases,interventions,capabilities,installations,memory,evaluations,improvements,packages,agent-teams,workflows,skills,test-runs,reviews,versions,operations,deployments,readiness,vendor-assessments,access-grants}[/:id]', owner: 'projection', action: 'projection.read', ready: false },
@@ -179,6 +182,8 @@ export class BrowserV1Transport {
       if (groupRead !== null) { this.route(request, ROUTES.groupCollection); return await this.groupRead(request, url, this.groupId(groupRead[1] ?? ''), groupRead[2] ?? ''); }
       const groupCommand = request.method === 'POST' ? /^\/api\/v1\/groups\/(?:commands\/governance\/(create-group)|([^/]+)\/commands\/governance\/(?!create-group$)([a-z][a-z0-9-]*))$/u.exec(path) : null;
       if (groupCommand !== null) { this.route(request, groupCommand[1] === undefined ? ROUTES.groupCommand : ROUTES.groupCreate); return await this.groupCommand(request, groupCommand[2] === undefined ? undefined : this.decodeSegment(groupCommand[2]), groupCommand[1] ?? groupCommand[3] ?? ''); }
+      const groupAssistant = request.method === 'POST' ? /^\/api\/v1\/groups\/([^/]+)\/assistant$/u.exec(path) : null;
+      if (groupAssistant !== null) { this.route(request, ROUTES.groupAssistant); return await this.groupAssistant(request, this.groupId(groupAssistant[1] ?? '')); }
       const match = /^\/api\/v1\/tenants\/([^/]+)(?:\/(.*))?$/u.exec(path); if (match === null) throw new AppError('NOT_FOUND');
       const tail = match[2] ?? ''; const route = this.tenantRoute(request.method, tail); this.route(request, route);
       const routeTenant = tenantId(this.decodeSegment(match[1] ?? '')); const query = this.validateQuery(url, routeTenant);
@@ -227,6 +232,16 @@ export class BrowserV1Transport {
     const current = await identity.authenticateGroup(proof, groupId, 'platform-browser-api', this.#now());
     if (current.groupEpoch !== session.groupEpoch || current.adminEpoch !== session.adminEpoch) throw new Error('STALE');
     return this.success(request, undefined, await this.groupChanged(name, current.userId, current.groupId, validatedArguments, () => handler({ ...command, userId: current.userId, group: current })));
+  }
+  private async groupAssistant(request: BrowserRequest, groupId: string): Promise<BrowserResponse> {
+    const proof = await this.proof(request); const key = header(request, 'idempotency-key');
+    if (key === undefined || !UUID.test(key) || !UUID.test(header(request, 'x-correlation-id') ?? '') || header(request, 'content-type') !== 'application/json' || request.body === undefined) throw new Error('DENIED');
+    if (proof === undefined || this.options.identity === undefined || this.options.assistant === undefined) return this.featureNotReady(request, undefined);
+    const context = await this.options.identity.authenticateGroup(proof, groupId, 'platform-browser-api', this.#now());
+    if (request.body.byteLength > ASSISTANT_BODY_LIMIT) throw new AppError('INVALID');
+    let body: unknown; try { body = JSON.parse(Buffer.from(request.body).toString('utf8')); } catch (error) { throw new AppError('INVALID_JSON', { cause: error }); }
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new AppError('INVALID');
+    return this.success(request, undefined, { groupId, ...await this.options.assistant({ context, body }), completeness: 'full' });
   }
   private groupId(segment: string): string { const value = this.decodeSegment(segment); if (!UUID.test(value)) throw new AppError('INVALID_IDENTIFIER'); return value.toLowerCase(); }
   private groupQuery(url: URL): Readonly<Record<string, string>> {

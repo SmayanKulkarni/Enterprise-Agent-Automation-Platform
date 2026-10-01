@@ -1,7 +1,7 @@
 import { clerkAuthorizationHeader } from '../../../../packages/browser/src/clerk-authorization-header.js';
 import { decodeCommandArguments } from '../../../../packages/browser/src/browser-contracts.js';
 import { PlatformApiError, commandReceipt, mediaType, parseResponse, type CommandReceipt } from '../platform-api.js';
-import { decodeGroups, decodeMembers, type Group, type Members } from './decoders.js';
+import { decodeAnswer, decodeGroups, decodeMembers, type AssistantAnswer, type AssistantRequest, type Group, type Members } from './decoders.js';
 
 export type { Group } from './decoders.js';
 
@@ -38,6 +38,14 @@ export class GovernanceApi {
     const base = command.groupId === undefined ? '/api/v1/groups' : `/api/v1/groups/${encodeURIComponent(command.groupId)}`;
     const response = await fetch(`${this.apiOrigin}${base}/commands/governance/${command.name}`, { method: 'POST', headers, body: JSON.stringify(payload), ...(signal === undefined ? {} : { signal }) });
     return commandReceipt(await parseResponse(response, correlationId));
+  }
+
+  async ask(groupId: string, request: AssistantRequest, signal?: AbortSignal): Promise<AssistantAnswer> {
+    const correlationId = crypto.randomUUID();
+    const headers = { accept: mediaType, 'content-type': 'application/json', 'idempotency-key': crypto.randomUUID(), 'x-correlation-id': correlationId, ...(await clerkAuthorizationHeader(this.getToken)) };
+    const response = await fetch(`${this.apiOrigin}/api/v1/groups/${encodeURIComponent(groupId)}/assistant`, { method: 'POST', headers, body: JSON.stringify(request), ...(signal === undefined ? {} : { signal }) });
+    const payload = await parseResponse(response, correlationId);
+    try { return decodeAnswer(payload); } catch (error) { throw error instanceof PlatformApiError ? error : new PlatformApiError(500); }
   }
 
   private async get<T>(path: string, decode: (value: unknown) => T, signal: AbortSignal | undefined): Promise<T> {

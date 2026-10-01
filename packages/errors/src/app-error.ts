@@ -21,6 +21,7 @@ export const ERROR_CODES = {
   PROJECTION_UNAVAILABLE: { status: 503, category: 'terminal', message: 'Projection is unavailable.' },
   UNAVAILABLE: { status: 503, category: 'retryable', message: 'Service is temporarily unavailable.' },
   UPSTREAM_TIMEOUT: { status: 504, category: 'timeout', message: 'An upstream service timed out.' },
+  RATE_LIMITED: { status: 429, category: 'retryable', message: 'Too many requests. Try again shortly.' },
   INTERNAL: { status: 500, category: 'terminal', message: 'The request could not be completed.' },
 } as const satisfies Record<string, CodeSpec>;
 

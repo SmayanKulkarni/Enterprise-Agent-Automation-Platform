@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { PlatformApiError } from '../platform-api.js';
-import { addableWorkspaces, approvalCommand, formatDuration, isUuid, logsQuery, waterfall, banner, commandFailure, shortId, dataNotes, decisionFailure, delta, DASH, formatSeconds, kpis, scopeQuery, timeLeft } from './governance-model.js';
+import { addableWorkspaces, approvalCommand, messagesToSend, formatDuration, isUuid, logsQuery, waterfall, banner, commandFailure, shortId, dataNotes, decisionFailure, delta, DASH, formatSeconds, kpis, scopeQuery, timeLeft } from './governance-model.js';
 import type { Approval, Health, Kpis, Span } from './decoders.js';
 
 const zero = { runs: 0, completed: 0, failed: 0, unknownOutcome: 0, p95Seconds: null, tokens: 0, cost: 0 };
@@ -176,5 +176,25 @@ describe('waterfall', () => {
     const { rows } = waterfall([span({ spanId: 'x', traceId: 'T2', parentSpanId: 'a' }), span({ spanId: 'p', parentSpanId: 'q' }), span({ spanId: 'q', parentSpanId: 'p' })]);
     expect(rows.find((row) => row.span.spanId === 'x')?.depth).toBe(0);
     expect(rows.every((row) => Number.isFinite(row.depth))).toBe(true);
+  });
+});
+
+describe('messagesToSend', () => {
+  const turn = (index: number) => ({ role: index % 2 === 0 ? 'user' as const : 'assistant' as const, content: String(index) });
+
+  test('keeps the whole conversation when it is short', () => {
+    expect(messagesToSend([turn(0), turn(1), turn(2)])).toEqual([turn(0), turn(1), turn(2)]);
+  });
+
+  test('keeps at most 12 messages and starts with a user message', () => {
+    const sent = messagesToSend(Array.from({ length: 15 }, (_, index) => turn(index)));
+
+    expect(sent.length).toBeLessThanOrEqual(12);
+    expect(sent[0]?.role).toBe('user');
+    expect(sent.at(-1)).toEqual(turn(14));
+  });
+
+  test('returns nothing when no message is from the user', () => {
+    expect(messagesToSend([turn(1)])).toEqual([]);
   });
 });

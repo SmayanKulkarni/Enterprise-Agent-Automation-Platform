@@ -155,3 +155,39 @@ describe('decodeLogs and decodeTrace', () => {
     expect(() => decodeTrace(trace({ ...span, durationMs: -1 }))).toThrow(PlatformApiError);
   });
 });
+
+describe('GovernanceApi.ask', () => {
+  const answerPayload = { answer: 'Spend rose.', model: 'gpt-4o', tokens: 12, cost: 0.01, groupId: 'g', completeness: 'full' };
+  const request = { messages: [{ role: 'user' as const, content: 'Why?' }], scope: { tenantId: null }, range: '7d' as const, provider: 'azure-openai' as const, model: 'gpt-4o', billingTenantId: 't' };
+
+  test('posts the request as JSON with fresh keys and decodes the answer', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => { calls.push({ url, init }); return Promise.resolve(new Response(JSON.stringify({ payload: answerPayload }), { status: 200 })); });
+    const api = new GovernanceApi(() => Promise.resolve('token'));
+
+    expect(await api.ask('g/1', request)).toEqual({ answer: 'Spend rose.', model: 'gpt-4o', tokens: 12, cost: 0.01 });
+    expect(await api.ask('g/1', request)).toBeDefined();
+    const [first, second] = calls;
+    expect(first?.url).toBe('/api/v1/groups/g%2F1/assistant');
+    expect(first?.init.method).toBe('POST');
+    expect(JSON.parse(first?.init.body as string)).toEqual(request);
+    const headers = (call: typeof first) => call?.init.headers as Record<string, string>;
+    expect(headers(first)['content-type']).toBe('application/json');
+    expect(headers(first)['idempotency-key']).not.toBe(headers(second)['idempotency-key']);
+    vi.unstubAllGlobals();
+  });
+
+  test('rejects an answer that is not text', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response(JSON.stringify({ payload: { ...answerPayload, answer: 5 } }), { status: 200 })));
+
+    await expect(new GovernanceApi(() => Promise.resolve('token')).ask('g', request)).rejects.toBeInstanceOf(PlatformApiError);
+    vi.unstubAllGlobals();
+  });
+
+  test('surfaces the status of a refused turn', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response(JSON.stringify({ payload: { error: { category: 'retryable', code: 'RATE_LIMITED' } } }), { status: 429 })));
+
+    await expect(new GovernanceApi(() => Promise.resolve('token')).ask('g', request)).rejects.toMatchObject({ status: 429 });
+    vi.unstubAllGlobals();
+  });
+});

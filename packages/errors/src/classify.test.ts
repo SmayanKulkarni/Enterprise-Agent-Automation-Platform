@@ -6,7 +6,7 @@ const table = [
   ['UNAUTHENTICATED', 401, 'denied'], ['DENIED', 403, 'denied'], ['TENANT_MISMATCH', 403, 'denied'], ['INVALID_IDENTIFIER', 403, 'denied'],
   ['NOT_FOUND', 404, 'invalid'], ['CONFLICT', 409, 'conflict'], ['STALE', 409, 'conflict'],
   ['INVALID', 422, 'invalid'], ['INVALID_REQUEST', 422, 'invalid'], ['INVALID_PAGE_SIZE', 422, 'invalid'], ['INVALID_CURSOR', 422, 'invalid'], ['INVALID_BROWSER_COMMAND', 422, 'invalid'],
-  ['INVALID_JSON', 400, 'invalid'], ['FEATURE_NOT_READY', 501, 'terminal'], ['PROJECTION_UNAVAILABLE', 503, 'terminal'], ['INTERNAL', 500, 'terminal'],
+  ['INVALID_JSON', 400, 'invalid'], ['FEATURE_NOT_READY', 501, 'terminal'], ['PROJECTION_UNAVAILABLE', 503, 'terminal'], ['INTERNAL', 500, 'terminal'], ['RATE_LIMITED', 429, 'retryable'],
 ] as const;
 
 test.each(table)('maps legacy message %s to %i/%s', (code, status, category) => {

@@ -159,3 +159,12 @@ export function decodeApprovals(value: unknown): Approvals {
   });
   return { approvals, count: int(body['count']), completeness: completeness(body), classification: classification(body) };
 }
+
+export interface ChatMessage { role: 'user' | 'assistant'; content: string }
+export interface AssistantRequest { messages: readonly ChatMessage[]; scope: { tenantId: string | null }; range: RangeKey; provider: 'azure-openai' | 'openrouter'; model: string; billingTenantId: string }
+export interface AssistantAnswer { answer: string; model: string; tokens: number; cost: number }
+
+export function decodeAnswer(value: unknown): AssistantAnswer {
+  const body = obj(value);
+  return { answer: typeof body['answer'] === 'string' ? body['answer'] : malformed(), model: str(body['model']), tokens: nonNegative(body['tokens']), cost: nonNegative(body['cost']) };
+}

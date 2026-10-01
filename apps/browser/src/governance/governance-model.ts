@@ -1,5 +1,5 @@
 import { describeError, PlatformApiError, type PlatformCommand, type Tenant } from '../platform-api.js';
-import type { Approval, Classification, Completeness, Group, Health, Kpis, RangeKey, SeriesStatus, Span } from './decoders.js';
+import type { Approval, ChatMessage, Classification, Completeness, Group, Health, Kpis, RangeKey, SeriesStatus, Span } from './decoders.js';
 import type { GroupCommandName } from './governance-api.js';
 
 export type Unit = 'count' | 'percent' | 'seconds' | 'usd';
@@ -159,4 +159,12 @@ export function waterfall(spans: readonly Span[]): { totalMs: number; rows: Wate
     return { span, offsetPercent: offset, widthPercent: Math.min(width, PERCENT - offset), depth: depthOf(span) };
   });
   return { totalMs, rows };
+}
+
+const MAX_SENT_MESSAGES = 12;
+
+export function messagesToSend(messages: readonly ChatMessage[]): ChatMessage[] {
+  const recent = messages.slice(-MAX_SENT_MESSAGES);
+  const first = recent.findIndex((message) => message.role === 'user');
+  return first < 0 ? [] : recent.slice(first);
 }

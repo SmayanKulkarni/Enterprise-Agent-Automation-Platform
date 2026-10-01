@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { gsap, motionAllowed, useGSAP } from '../motion.js';
 import SplitText from '../react-bits/SplitText.js';
 import { ErrorPage, StatePage, moveTabFocus } from '../ui.js';
 import { ApprovalsInbox, type InboxNotice } from './approvals-inbox.js';
 import type { Approval, Group, Health, Members, Overview, RangeKey, Series, Workflows } from './decoders.js';
-import { approvalCommand, banner, commandFailure, decisionFailure, kpis, rangeName, RANGES } from './governance-model.js';
+import { approvalCommand, banner, commandFailure, decisionFailure, kpis, rangeName, RANGES, shortId } from './governance-model.js';
+import { AssistantDrawer } from './assistant-drawer.js';
+import { parseCatalogModels } from '../model-picker.js';
 import type { GovernanceApi } from './governance-api.js';
 import { LogsPanel } from './logs-panel.js';
 import { TracePanel } from './trace-panel.js';
@@ -103,6 +105,7 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
   };
   const openTrace = (runId: string): void => { setTraceRunId(runId); setTab('trace'); };
   const group = groups.find((entry) => entry.id === groupId);
+  const loadModels = useCallback((tenantId: string) => (platformApi?.projection(tenantId, 'openrouter-models') ?? Promise.reject(new Error('unavailable'))).then((projection) => parseCatalogModels(projection.records[0]?.['models'])), [platformApi]);
   const runGroup: RunCommand = (name, args) => {
     if (governanceApi === undefined || reloadGroups === undefined || group === undefined || groupBusy) return;
     setGroupBusy(true);
@@ -128,6 +131,7 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
           {groups.length > 1 && <label className="gov-control">Group<select value={groupId} onChange={(event) => changeGroup(event.target.value)}>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>}
           <label className="gov-control">Scope<select value={scope ?? ''} onChange={(event) => setScope(event.target.value === '' ? undefined : event.target.value)}><option value="">All workspaces</option>{Object.entries(names).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
           <label className="gov-control">Range<select value={range} onChange={(event) => setRange(event.target.value as RangeKey)}>{RANGES.map((key) => <option key={key} value={key}>{key} · {rangeName(key)}</option>)}</select></label>
+          {!source.fixture && group !== undefined && governanceApi !== undefined && platformApi !== undefined && <AssistantDrawer ask={(request, signal) => governanceApi.ask(groupId, request, signal)} loadModels={loadModels} workspaces={group.tenantIds.map((id) => ({ id, name: names[id] ?? shortId(id) }))} defaultBilling={group.billingTenantId ?? group.tenantIds[0] ?? ''} scope={scope} range={range} />}
           <button className="button-secondary" onClick={() => setReload((value) => value + 1)} disabled={loading}>Refresh</button>
         </div>
       </div>
