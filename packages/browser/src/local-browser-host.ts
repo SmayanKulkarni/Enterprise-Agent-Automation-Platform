@@ -10,6 +10,7 @@ import { OpenRouterConnectionCrypto } from '../../workflow/src/openrouter-connec
 import { workflowCommandHandlers } from './workflow-commands.js';
 import { governanceCommandHandlers } from './governance-commands.js';
 import { AzureSqlGovernanceStore } from '../../governance/src/sql.js';
+import { backendsFromEnvironment } from '../../governance/src/backend.js';
 import { GovernanceService } from '../../governance/src/service.js';
 import { digest } from '../../contracts/src/index.js';
 import { AppError } from '../../errors/src/app-error.js';
@@ -34,7 +35,7 @@ export function localBrowserTransport(environment: Readonly<Record<string, strin
   );
   const clerk = liveClerkSessionAdapter(environment, backend);
   const governanceStore = connectionString ? new AzureSqlGovernanceStore(connectionString) : undefined;
-  const governance = new GovernanceService(governanceStore);
+  const governance = new GovernanceService(governanceStore, Date.now, backendsFromEnvironment(environment));
   const projectionStore = connectionString ? new AzureSqlProjectionStore(connectionString) : undefined;
   const projections = projectionStore === undefined ? fixtureProjection : (input: BrowserProjection) => projectionStore.read(input);
   const workflowStore = connectionString ? new AzureSqlWorkflowStore(connectionString) : undefined;

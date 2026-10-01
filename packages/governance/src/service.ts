@@ -1,22 +1,24 @@
 import { AppError } from '../../errors/src/app-error.js';
 import type { GroupContext } from '../../identity/src/index.js';
-import { isPanel, isRange, isSqlPanel, RANGES, type RangeKey } from './catalog.js';
+import { NONE, type Backends } from './backend.js';
+import { isPanel, isPrometheusPanel, isRange, isSqlPanel, PROMETHEUS_PANELS, RANGES, type PrometheusPanelId, type RangeKey } from './catalog.js';
 import { buildApprovals, buildHealth } from './attention.js';
 import { fixtureApprovals, fixtureHealth, fixtureMembers, fixtureOverview, fixtureSeries, fixtureWorkflows } from './fixtures.js';
 import { buildOverview, buildSeries, buildWorkflows } from './reads.js';
+import { prometheusRange } from './prometheus.js';
+import { tenantMatcher, UUID } from './scope.js';
 import type { AzureSqlGovernanceStore } from './sql.js';
 
 export type GovernanceStore = Pick<AzureSqlGovernanceStore, 'members' | 'overview' | 'runSeries' | 'workflows' | 'pendingApprovals' | 'health'>;
 type Query = Readonly<Record<string, string>>;
 interface Window { range: RangeKey; from: number; to: number; tenantId?: string }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const KEYS = { members: [], approvals: ['range', 'tenant'], health: ['range', 'tenant'], overview: ['range', 'tenant'], series: ['panel', 'range', 'tenant'], workflows: ['range', 'tenant'] } as const;
 type Collection = keyof typeof KEYS;
 const isCollection = (value: string): value is Collection => Object.hasOwn(KEYS, value);
 
 export class GovernanceService {
-  constructor(private readonly store?: GovernanceStore, private readonly now: () => number = Date.now) {}
+  constructor(private readonly store?: GovernanceStore, private readonly now: () => number = Date.now, private readonly backends: Backends = NONE) {}
 
   async read(context: GroupContext, collection: string, query: Query): Promise<Record<string, unknown>> {
     if (!isCollection(collection)) throw new AppError('NOT_FOUND');
@@ -77,9 +79,19 @@ export class GovernanceService {
 
   private async series(context: GroupContext, window: Window, panel: string | undefined): Promise<Record<string, unknown>> {
     if (panel === undefined || !isPanel(panel)) throw new AppError('INVALID');
+    if (isPrometheusPanel(panel)) return this.telemetrySeries(context, window, panel);
     if (!isSqlPanel(panel)) return { panel, range: window.range, status: 'not-configured', series: [], completeness: 'full', classification: this.classification() };
     const rows = this.store === undefined ? fixtureSeries(this.scope(context, window), window.range, window.from) : await this.store.runSeries(context, new Date(window.from), new Date(window.to), RANGES[window.range].bucketMinutes, window.tenantId);
     return { ...buildSeries(panel, window.range, rows, window.from), classification: this.classification() };
+  }
+
+  private async telemetrySeries(context: GroupContext, window: Window, panel: PrometheusPanelId): Promise<Record<string, unknown>> {
+    const base = { panel, range: window.range, completeness: window.range === '30d' ? 'partial' : 'full', classification: this.classification() };
+    const ids = this.scope(context, window);
+    if (ids.length === 0) return { ...base, status: 'ready', series: [] };
+    const step = RANGES[window.range].bucketMinutes * 60;
+    const queries = PROMETHEUS_PANELS[panel](tenantMatcher(ids), step, RANGES[window.range].ms / 1000);
+    return { ...base, ...await prometheusRange(this.backends.prometheus, queries, window.from, window.to, step) };
   }
 
   private classification(): 'fixture' | 'restricted-operational' {

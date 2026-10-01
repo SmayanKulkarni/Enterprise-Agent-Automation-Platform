@@ -1,4 +1,5 @@
-import { expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
+import type { Backends } from './backend.js';
 import { GovernanceService, type GovernanceStore } from './service.js';
 import type { HealthRows, PendingApprovalRow } from './attention.js';
 import type { OverviewRows, SeriesRow, WindowRow, WorkflowRow } from './reads.js';
@@ -128,7 +129,7 @@ test('spend-by-workspace draws one line per workspace holding cost', async () =>
   expect(lines[1]?.points[1]).toEqual([from + 60_000, 0.25]);
 });
 
-test.each([['api-latency'], ['logs'], ['trace']])('answers not-configured for the %s panel without touching the store', async (panel) => {
+test.each([['api-latency'], ['logs'], ['trace']])('answers not-configured for the %s panel without a backend or store', async (panel) => {
   expect(await clocked(stub()).read(context, 'series', { range: '7d', panel })).toMatchObject({ status: 'not-configured', series: [] });
 });
 
@@ -256,4 +257,61 @@ test('serves approvals and health as fixtures for the context workspaces when no
   expect(summary).toMatchObject({ classification: 'fixture', circuits: [{ key: 'model:openrouter', state: 'open' }] });
   expect(await service.read(context, 'approvals', {})).toEqual(inbox);
   expect(await new GovernanceService(undefined, () => NOW).read({ ...context, tenantIds: [] }, 'approvals', {})).toMatchObject({ approvals: [], count: 0 });
+});
+
+const prom = { url: 'http://prom.invalid' };
+const backends = (overrides: Partial<Backends> = {}): Backends => ({ prometheus: prom, loki: { url: undefined }, tempo: { url: undefined }, ...overrides });
+const matrixBody = JSON.stringify({ status: 'success', data: { resultType: 'matrix', result: [{ metric: {}, values: [[1, '2']] }] } });
+const sentQueries = (fetchMock: ReturnType<typeof vi.fn>): string[] => fetchMock.mock.calls.map((call) => new URLSearchParams((call as [string, RequestInit & { body: string }])[1].body).get('query') ?? '');
+
+afterEach(() => { vi.unstubAllGlobals(); });
+
+test('a prometheus panel queries the whole group and reads ready', async () => {
+  const fetchMock = vi.fn(() => Promise.resolve(new Response(matrixBody)));
+  vi.stubGlobal('fetch', fetchMock);
+
+  const result = await new GovernanceService(undefined, () => NOW, backends()).read(context, 'series', { range: '24h', panel: 'api-latency' });
+
+  expect(result).toMatchObject({ status: 'ready', completeness: 'full', series: [{ label: 'p50' }, { label: 'p95' }] });
+  expect(sentQueries(fetchMock)[0]).toContain(`tenant_id=~"${tenantA}|${tenantB}"`);
+});
+
+test('a member tenant narrows the matcher to that workspace', async () => {
+  const fetchMock = vi.fn(() => Promise.resolve(new Response(matrixBody)));
+  vi.stubGlobal('fetch', fetchMock);
+
+  await new GovernanceService(undefined, () => NOW, backends()).read(context, 'series', { range: '24h', panel: 'api-latency', tenant: tenantB });
+
+  for (const query of sentQueries(fetchMock)) { expect(query).toContain(`tenant_id=~"${tenantB}"`); expect(query).not.toContain(tenantA); }
+});
+
+test('a non-member tenant is denied before any query is sent', async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(new GovernanceService(undefined, () => NOW, backends()).read(context, 'series', { range: '24h', panel: 'api-latency', tenant: outsider })).rejects.toMatchObject({ code: 'DENIED' });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test('30d reports partial completeness', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(matrixBody))));
+
+  expect(await new GovernanceService(undefined, () => NOW, backends()).read(context, 'series', { range: '30d', panel: 'mcp-outcomes' })).toMatchObject({ completeness: 'partial' });
+});
+
+test('an empty group is ready with no series and no query', async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal('fetch', fetchMock);
+
+  const result = await new GovernanceService(undefined, () => NOW, backends()).read({ ...context, tenantIds: [] as never }, 'series', { range: '24h', panel: 'api-latency' });
+
+  expect(result).toMatchObject({ status: 'ready', series: [] });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test('a failing backend degrades the panel without failing the request', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('', { status: 500 }))));
+
+  expect(await new GovernanceService(undefined, () => NOW, backends()).read(context, 'series', { range: '24h', panel: 'api-latency' })).toMatchObject({ status: 'unavailable', series: [] });
 });
