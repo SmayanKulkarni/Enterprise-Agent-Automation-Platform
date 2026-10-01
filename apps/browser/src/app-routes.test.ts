@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { routeFromPath } from './app-routes.js';
+import { routeFromPath, titles } from './app-routes.js';
 
 describe('routeFromPath', () => {
   test.each([
@@ -13,5 +13,11 @@ describe('routeFromPath', () => {
     ['//evil', 'not-found'],
   ] as const)('%s -> %s', (pathname, expected) => {
     expect(routeFromPath(pathname)).toBe(expected);
+  });
+});
+
+describe('titles', () => {
+  test('governance is no longer a preview', () => {
+    expect(titles.governance).toBe('Governance · Threadline');
   });
 });

@@ -2,7 +2,7 @@ import { clerkAuthorizationHeader } from '../../../packages/browser/src/clerk-au
 import { decodeCommandArguments, decodeProjection, decodeSession, decodeTenants, type BrowserProjection, type BrowserSession, type BrowserTenant } from '../../../packages/browser/src/browser-contracts.js';
 
 type GetToken = () => Promise<string | null>;
-const mediaType = 'application/vnd.platform.browser.v1+json';
+export const mediaType = 'application/vnd.platform.browser.v1+json';
 
 export type Tenant = BrowserTenant;
 export type Session = BrowserSession;
@@ -108,7 +108,7 @@ export class PlatformApi {
   }
 }
 
-async function parseResponse(response: Response, sentCorrelationId: string): Promise<unknown> {
+export async function parseResponse(response: Response, sentCorrelationId: string): Promise<unknown> {
   const correlationId = response.headers.get('x-correlation-id') ?? sentCorrelationId;
   latestCorrelationId = correlationId;
   const body: unknown = await response.json().catch(() => undefined);

@@ -1,6 +1,6 @@
 export type Route = 'home' | 'studio' | 'governance' | 'signin' | 'not-found';
 export const paths = { home: '/', studio: '/studio', governance: '/governance', signin: '/sign-in' } as const satisfies Record<Exclude<Route, 'not-found'>, string>;
-export const titles: Record<Route, string> = { home: 'Threadline', studio: 'Solution Studio · Threadline', governance: 'Governance preview · Threadline', signin: 'Sign in · Threadline', 'not-found': 'Page not found · Threadline' };
+export const titles: Record<Route, string> = { home: 'Threadline', studio: 'Solution Studio · Threadline', governance: 'Governance · Threadline', signin: 'Sign in · Threadline', 'not-found': 'Page not found · Threadline' };
 export type Navigate = (route: Exclude<Route, 'not-found'>) => void;
 
 export function routeFromPath(pathname: string): Route {
