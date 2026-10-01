@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import type { Backends } from './backend.js';
+import { encodeLogCursor } from './loki.js';
 import { GovernanceService, type GovernanceStore } from './service.js';
 import type { HealthRows, PendingApprovalRow } from './attention.js';
 import type { OverviewRows, SeriesRow, WindowRow, WorkflowRow } from './reads.js';
@@ -314,4 +315,88 @@ test('a failing backend degrades the panel without failing the request', async (
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('', { status: 500 }))));
 
   expect(await new GovernanceService(undefined, () => NOW, backends()).read(context, 'series', { range: '24h', panel: 'api-latency' })).toMatchObject({ status: 'unavailable', series: [] });
+});
+
+const lokiBackend = { url: 'http://loki.invalid' };
+const tempoBackend = { url: 'http://tempo.invalid' };
+const lines = (count: number) => ({ status: 'success', data: { resultType: 'streams', result: [{ stream: { event: 'run.started', level: 'info', tenant_id: tenantA }, values: Array.from({ length: count }, (_, index) => [String(1_700_000_000_000_000_000n + BigInt(count - index)), 'run.started']) }] } });
+const lokiFetch = (body: unknown) => vi.fn(() => Promise.resolve(new Response(JSON.stringify(body))));
+const lokiService = () => new GovernanceService(undefined, () => NOW, backends({ loki: lokiBackend }));
+const sentEnd = (fetchMock: ReturnType<typeof vi.fn>): string | null => new URL((fetchMock.mock.calls[0] as unknown as [string])[0]).searchParams.get('end');
+
+test.each([
+  ['an unknown event', { range: '24h', event: 'not-an-event' }],
+  ['an unsupported level', { range: '24h', level: 'debug' }],
+  ['a run that is not a uuid', { range: '24h', run: 'abc' }],
+  ['a tenant outside the group is denied elsewhere', { range: '24h', cursor: '!!!' }],
+])('logs rejects %s with zero fetch calls', async (_name, query) => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(lokiService().read(context, 'logs', query)).rejects.toMatchObject({ code: expect.stringMatching(/INVALID|DENIED/u) as string });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test('logs denies a tenant outside the group before any query', async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(lokiService().read(context, 'logs', { range: '24h', tenant: outsider })).rejects.toMatchObject({ code: 'DENIED' });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test('logs denies a cursor made for another group', async () => {
+  const cursor = encodeLogCursor('b0000000-0000-4000-8000-000000000002', '1700000000000000000');
+
+  await expect(lokiService().read(context, 'logs', { range: '24h', cursor })).rejects.toMatchObject({ code: 'DENIED' });
+});
+
+test('logs rejects a malformed cursor', async () => {
+  const cursor = Buffer.from(`${context.groupId}.${JSON.stringify({ before: 'x' })}`).toString('base64url');
+
+  await expect(lokiService().read(context, 'logs', { range: '24h', cursor })).rejects.toMatchObject({ code: 'INVALID' });
+});
+
+test('201 backend lines give 200 entries and a cursor that moves the window end just before the 200th entry', async () => {
+  const fetchMock = lokiFetch(lines(201));
+  vi.stubGlobal('fetch', fetchMock);
+
+  const first = await lokiService().read(context, 'logs', { range: '24h' });
+  const entries = first['entries'] as { at: string; ns?: string }[];
+  const { cursor } = first['continuation'] as { cursor: string };
+
+  expect(entries).toHaveLength(200);
+  expect(entries[0]).not.toHaveProperty('ns');
+  expect(sentEnd(fetchMock)).toBe(String(BigInt(NOW) * 1_000_000n));
+  expect(Buffer.from(cursor, 'base64url').toString()).toBe(`${context.groupId}.${JSON.stringify({ before: '1700000000000000002' })}`);
+
+  const second = lokiFetch(lines(1));
+  vi.stubGlobal('fetch', second);
+  const next = await lokiService().read(context, 'logs', { range: '24h', cursor });
+
+  expect(sentEnd(second)).toBe('1700000000000000001');
+  expect(next).not.toHaveProperty('continuation');
+});
+
+test('logs and trace are not-configured without a backend', async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal('fetch', fetchMock);
+
+  expect(await new GovernanceService().read(context, 'logs', { range: '24h' })).toMatchObject({ status: 'not-configured', entries: [], classification: 'fixture' });
+  expect(await new GovernanceService().read(context, 'trace', { run: '33333333-3333-4333-8333-333333333333' })).toMatchObject({ status: 'not-configured', spans: [] });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test('trace without a run is INVALID', async () => {
+  await expect(new GovernanceService(undefined, () => NOW, backends({ tempo: tempoBackend })).read(context, 'trace', {})).rejects.toMatchObject({ code: 'INVALID' });
+  await expect(new GovernanceService(undefined, () => NOW, backends({ tempo: tempoBackend })).read(context, 'trace', { run: 'abc' })).rejects.toMatchObject({ code: 'INVALID' });
+});
+
+test('trace returns the run spans for the group', async () => {
+  const run = '33333333-3333-4333-8333-333333333333';
+  vi.stubGlobal('fetch', vi.fn((input: string) => Promise.resolve(new Response(JSON.stringify(input.includes('/api/search') ? { traces: [{ traceID: 'a'.repeat(32) }] } : { batches: [{ scopeSpans: [{ spans: [{ traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), name: 'workflow.step', startTimeUnixNano: '1000000', endTimeUnixNano: '3000000', attributes: [{ key: 'tenant_id', value: { stringValue: tenantA } }] }] }] }] })))));
+
+  const result = await new GovernanceService(undefined, () => NOW, backends({ tempo: tempoBackend })).read(context, 'trace', { run });
+
+  expect(result).toMatchObject({ run, status: 'ready', spans: [{ name: 'workflow.step', startMs: 1, durationMs: 2, status: 'unset' }] });
 });
