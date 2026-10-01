@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { PlatformApiError } from '../platform-api.js';
-import { approvalCommand, banner, dataNotes, decisionFailure, delta, DASH, formatSeconds, kpis, scopeQuery, timeLeft } from './governance-model.js';
+import { addableWorkspaces, approvalCommand, banner, commandFailure, shortId, dataNotes, decisionFailure, delta, DASH, formatSeconds, kpis, scopeQuery, timeLeft } from './governance-model.js';
 import type { Approval, Health, Kpis } from './decoders.js';
 
 const zero = { runs: 0, completed: 0, failed: 0, unknownOutcome: 0, p95Seconds: null, tokens: 0, cost: 0 };
@@ -89,5 +89,37 @@ describe('decisionFailure', () => {
     expect(decisionFailure(new TypeError('Failed to fetch'))).toBe('unknown');
     expect(decisionFailure(new PlatformApiError(403))).toBe('denied');
     expect(decisionFailure(new PlatformApiError(422))).toBe('failed');
+  });
+});
+
+describe('addableWorkspaces', () => {
+  const tenants = [{ id: 'a', profiles: ['admin'], epoch: 1 }, { id: 'b', profiles: ['operator'], epoch: 1 }, { id: 'c', profiles: ['admin', 'editor'], epoch: 1 }];
+
+  test('excludes workspaces the user does not administer and ones already in the group', () => {
+    const group = { id: 'g', name: 'G', epoch: 1, adminEpoch: 1, tenantIds: ['c'] };
+    expect(addableWorkspaces(tenants, group)).toEqual(['a']);
+  });
+});
+
+describe('commandFailure', () => {
+  const failure = (status: number) => new PlatformApiError(status);
+
+  test.each([
+    [failure(409), 'add-tenant', 2, 'The group changed since you loaded it. It has been reloaded.'],
+    [failure(409), 'remove-admin', 1, 'A group must keep at least one admin.'],
+    [failure(409), 'remove-admin', 2, 'The group changed since you loaded it. It has been reloaded.'],
+    [failure(403), 'add-tenant', 2, "Only a workspace's own admin can add it to a group."],
+    [failure(403), 'create-group', 2, "Only a workspace's own admin can add it to a group."],
+    [failure(403), 'remove-tenant', 2, "You can't change this group."],
+    [failure(422), 'add-admin', 2, 'That request was not valid.'],
+    [failure(500), 'add-admin', 2, 'The change could not be saved. Try again.'],
+  ] as const)('%#: maps status and command to a sentence', (error, name, admins, text) => {
+    expect(commandFailure(error, name, admins)).toBe(text);
+  });
+});
+
+describe('shortId', () => {
+  test('keeps the first eight characters', () => {
+    expect(shortId('a1000000-0000-4000-8000-000000000001')).toBe('a1000000');
   });
 });

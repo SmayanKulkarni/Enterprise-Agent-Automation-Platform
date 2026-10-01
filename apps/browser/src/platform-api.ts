@@ -119,7 +119,7 @@ export async function parseResponse(response: Response, sentCorrelationId: strin
   return record(body)['payload'];
 }
 
-function commandReceipt(value: unknown): CommandReceipt {
+export function commandReceipt(value: unknown): CommandReceipt {
   const result = record(value);
   if (typeof result['commandId'] !== 'string' || typeof result['objectId'] !== 'string' || !Number.isSafeInteger(result['revision']) || typeof result['state'] !== 'string' || typeof result['digest'] !== 'string' || !Array.isArray(result['evidenceIds']) || !result['evidenceIds'].every((id) => typeof id === 'string')) throw new PlatformApiError(500);
   const issues = result['issues'];

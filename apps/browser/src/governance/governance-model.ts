@@ -1,5 +1,6 @@
-import { describeError, type PlatformCommand } from '../platform-api.js';
-import type { Approval, Classification, Completeness, Health, Kpis, RangeKey, SeriesStatus } from './decoders.js';
+import { describeError, PlatformApiError, type PlatformCommand, type Tenant } from '../platform-api.js';
+import type { Approval, Classification, Completeness, Group, Health, Kpis, RangeKey, SeriesStatus } from './decoders.js';
+import type { GroupCommandName } from './governance-api.js';
 
 export type Unit = 'count' | 'percent' | 'seconds' | 'usd';
 export type Direction = 'up' | 'down' | 'flat' | 'none';
@@ -94,4 +95,23 @@ export type DecisionFailure = 'conflict' | 'denied' | 'unknown' | 'failed';
 export function decisionFailure(error: unknown): DecisionFailure {
   const kind = describeError(error, { write: true });
   return kind === 'conflict' || kind === 'denied' || kind === 'unknown' ? kind : 'failed';
+}
+
+const SHORT_ID_LENGTH = 8;
+export const MAX_GROUP_WORKSPACES = 50;
+export const MAX_GROUP_ADMINS = 20;
+export const shortId = (id: string): string => id.slice(0, SHORT_ID_LENGTH);
+
+export const addableWorkspaces = (tenants: readonly Tenant[], group: Group): string[] =>
+  tenants.filter((tenant) => tenant.profiles.includes('admin') && !group.tenantIds.includes(tenant.id)).map((tenant) => tenant.id);
+
+const CONSENT_COMMANDS: readonly GroupCommandName[] = ['add-tenant', 'create-group'];
+
+export function commandFailure(error: unknown, name: GroupCommandName, adminCount = MAX_GROUP_ADMINS): string {
+  const status = error instanceof PlatformApiError ? error.status : undefined;
+  if (status === 409 && name === 'remove-admin' && adminCount <= 1) return 'A group must keep at least one admin.';
+  if (status === 409) return 'The group changed since you loaded it. It has been reloaded.';
+  if (status === 403) return CONSENT_COMMANDS.includes(name) ? "Only a workspace's own admin can add it to a group." : "You can't change this group.";
+  if (status === 422 || status === 400) return 'That request was not valid.';
+  return 'The change could not be saved. Try again.';
 }

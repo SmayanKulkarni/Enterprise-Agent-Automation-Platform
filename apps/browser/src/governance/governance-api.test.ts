@@ -58,3 +58,80 @@ describe('decodeApprovals', () => {
     expect(() => decodeApprovals(body(entry))).toThrow(PlatformApiError);
   });
 });
+
+describe('GovernanceApi.command', () => {
+  const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const receipt = { commandId: 'c1', objectId: 'g1', revision: 2, state: 'accepted', digest: 'd', evidenceIds: [] };
+  const sent = (fetch: ReturnType<typeof vi.fn>, index = 0) => {
+    const [url, init] = fetch.mock.calls[index] as [string, { method: string; headers: Record<string, string>; body: string }];
+    return { url, headers: init.headers, body: JSON.parse(init.body) as { tenantId?: string; contract: string; payload: { expectedVersion: number; arguments: Record<string, unknown> } } };
+  };
+
+  test('create-group posts to the create path with if-match 0 and a null billing tenant', async () => {
+    const fetch = vi.fn().mockResolvedValue(ok(receipt));
+    vi.stubGlobal('fetch', fetch);
+
+    await api().command({ name: 'create-group', expectedVersion: 0, arguments: { name: 'Ops', tenantIds: [uuid(1)], billingTenantId: null } });
+    const { url, headers, body } = sent(fetch);
+    expect(url).toBe('/api/v1/groups/commands/governance/create-group');
+    expect(headers['if-match']).toBe('0');
+    expect(headers['x-platform-tenant']).toBeUndefined();
+    expect(body.contract).toBe('governance.v1');
+    expect(body).not.toHaveProperty('tenantId');
+    expect(body.payload.arguments['billingTenantId']).toBeNull();
+  });
+
+  test('add-tenant posts to the group path with the epoch as if-match', async () => {
+    const fetch = vi.fn().mockResolvedValue(ok(receipt));
+    vi.stubGlobal('fetch', fetch);
+
+    await api().command({ groupId: 'g1', name: 'add-tenant', expectedVersion: 7, arguments: { tenantId: uuid(2) } });
+    const { url, headers, body } = sent(fetch);
+    expect(url).toBe('/api/v1/groups/g1/commands/governance/add-tenant');
+    expect(headers['if-match']).toBe('7');
+    expect(body.payload.expectedVersion).toBe(7);
+  });
+
+  test('identical commands reuse the idempotency key and a different argument gets a new one', async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(ok(receipt)));
+    vi.stubGlobal('fetch', fetch);
+    const client = api();
+    const add = (tenantId: string) => client.command({ groupId: 'g1', name: 'add-tenant', expectedVersion: 1, arguments: { tenantId } });
+
+    await add(uuid(2)); await add(uuid(2)); await add(uuid(3));
+    expect(sent(fetch, 0).headers['idempotency-key']).toBe(sent(fetch, 1).headers['idempotency-key']);
+    expect(sent(fetch, 2).headers['idempotency-key']).not.toBe(sent(fetch, 0).headers['idempotency-key']);
+  });
+
+  test.each([
+    ['51 tenant ids', { name: 'Ops', tenantIds: Array.from({ length: 51 }, (_, i) => uuid(i + 1)), billingTenantId: null }],
+    ['an empty name', { name: '', tenantIds: [uuid(1)], billingTenantId: null }],
+  ])('rejects %s before any request', async (_label, args) => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api().command({ name: 'create-group', expectedVersion: 0, arguments: args })).rejects.toBeInstanceOf(PlatformApiError);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test('a 409 becomes a PlatformApiError with status 409', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ payload: { error: { category: 'conflict' } } }), { status: 409 })));
+
+    await expect(api().command({ groupId: 'g1', name: 'add-tenant', expectedVersion: 1, arguments: { tenantId: uuid(2) } })).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('GovernanceApi.members', () => {
+  test('decodes workspaces, admins and eligible people', async () => {
+    const body = { workspaces: [{ tenantId: 't1', name: 'one', joinedAt: '2026-01-01T00:00:00.000Z', billing: true }], admins: [{ userId: 'u1', name: 'Ada' }], eligible: [{ userId: 'u2', name: 'Bo' }], completeness: 'full', classification: 'restricted-operational' };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok(body)));
+
+    await expect(api().members('g1')).resolves.toMatchObject({ workspaces: [{ tenantId: 't1', billing: true }], admins: [{ userId: 'u1' }], eligible: [{ userId: 'u2' }] });
+  });
+
+  test('rejects a workspace without a billing flag', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok({ workspaces: [{ tenantId: 't1', name: 'one', joinedAt: 'x' }], admins: [], eligible: [] })));
+
+    await expect(api().members('g1')).rejects.toBeInstanceOf(PlatformApiError);
+  });
+});

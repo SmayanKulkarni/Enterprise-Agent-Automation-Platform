@@ -3,9 +3,11 @@ import { gsap, motionAllowed, useGSAP } from '../motion.js';
 import SplitText from '../react-bits/SplitText.js';
 import { ErrorPage, StatePage, moveTabFocus } from '../ui.js';
 import { ApprovalsInbox, type InboxNotice } from './approvals-inbox.js';
-import type { Approval, Group, Health, Overview, RangeKey, Series, Workflows } from './decoders.js';
-import { approvalCommand, banner, decisionFailure, kpis, rangeName, RANGES } from './governance-model.js';
-import type { PlatformApi } from '../platform-api.js';
+import type { Approval, Group, Health, Members, Overview, RangeKey, Series, Workflows } from './decoders.js';
+import { approvalCommand, banner, commandFailure, decisionFailure, kpis, rangeName, RANGES } from './governance-model.js';
+import type { GovernanceApi } from './governance-api.js';
+import { GroupAdminPanel, type RunCommand } from './group-admin-panel.js';
+import type { PlatformApi, Tenant } from '../platform-api.js';
 import type { PendingApprovals } from './use-pending-approvals.js';
 import type { GovernanceSource } from './governance-source.js';
 import { KpiRow } from './kpi-row.js';
@@ -14,8 +16,8 @@ import { Sparkline } from '../charts/sparkline.js';
 import { useSeries } from './use-series.js';
 
 interface Loaded { overview: Overview; workflows: Workflows; health: Health; telemetry: Series }
-interface Props { source: GovernanceSource; groups: readonly Group[]; groupId: string; setGroupId: (id: string) => void; pending: PendingApprovals; platformApi?: PlatformApi }
-type TabId = 'overview' | 'approvals';
+interface Props { source: GovernanceSource; groups: readonly Group[]; groupId: string; setGroupId: (id: string) => void; pending: PendingApprovals; platformApi?: PlatformApi; governanceApi?: GovernanceApi; tenants?: readonly Tenant[]; reloadGroups?: () => Promise<void> }
+type TabId = 'overview' | 'approvals' | 'group';
 const decisionNotices: Record<ReturnType<typeof decisionFailure>, string> = {
   conflict: 'This approval was already decided, expired, or changed. The list is up to date.',
   unknown: 'The result is not known yet. The list was reloaded; check it before deciding again.',
@@ -25,7 +27,7 @@ const decisionNotices: Record<ReturnType<typeof decisionFailure>, string> = {
 const isAbort = (error: unknown): boolean => error instanceof DOMException && error.name === 'AbortError';
 const STAGGER_SECONDS = 0.06;
 
-export function GovernancePage({ source, groups, groupId, setGroupId, pending, platformApi }: Props) {
+export function GovernancePage({ source, groups, groupId, setGroupId, pending, platformApi, governanceApi, tenants = [], reloadGroups }: Props) {
   const [scope, setScope] = useState<string>();
   const [range, setRange] = useState<RangeKey>('7d');
   const [reload, setReload] = useState(0);
@@ -36,6 +38,10 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
   const [names, setNames] = useState<Readonly<Record<string, string>>>({});
   const [busyRunId, setBusyRunId] = useState<string>();
   const [notice, setNotice] = useState<InboxNotice>();
+  const [members, setMembers] = useState<Members>();
+  const [membersReload, setMembersReload] = useState(0);
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [groupNotice, setGroupNotice] = useState<InboxNotice>();
   const body = useRef<HTMLDivElement>(null);
   const entered = useRef(false);
 
@@ -59,6 +65,15 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
     return () => controller.abort();
   }, [source, range, scope, reload]);
 
+  useEffect(() => {
+    if (tab !== 'group') return;
+    const controller = new AbortController();
+    source.members(controller.signal)
+      .then(setMembers)
+      .catch((error: unknown) => { if (!isAbort(error) && !controller.signal.aborted) setGroupNotice({ tone: 'danger', text: 'Workspaces and admins could not be loaded.' }); });
+    return () => { controller.abort(); };
+  }, [source, tab, membersReload]);
+
   useGSAP(() => {
     if (loaded === undefined || entered.current || !motionAllowed()) return;
     entered.current = true;
@@ -73,7 +88,7 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
   }, [runs.series]);
   const tiles = useMemo(() => loaded === undefined ? [] : kpis(loaded.overview.total), [loaded]);
   const status = loaded === undefined ? undefined : banner(loaded.health, loaded.telemetry.status);
-  const tabs: readonly { id: TabId; label: string; badge?: number }[] = [{ id: 'overview', label: 'Overview' }, { id: 'approvals', label: 'Approvals', badge: pending.count }];
+  const tabs: readonly { id: TabId; label: string; badge?: number }[] = [{ id: 'overview', label: 'Overview' }, { id: 'approvals', label: 'Approvals', badge: pending.count }, { id: 'group', label: 'Workspaces & admins' }];
   const decide = (row: Approval, decision: 'approve' | 'reject'): void => {
     if (platformApi === undefined || busyRunId !== undefined) return;
     setBusyRunId(row.runId);
@@ -83,7 +98,19 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
       .catch((error: unknown) => { const failure = decisionFailure(error); setNotice({ tone: failure === 'conflict' || failure === 'unknown' ? 'warning' : 'danger', text: decisionNotices[failure] }); })
       .finally(() => { setBusyRunId(undefined); pending.reload(); setReload((value) => value + 1); });
   };
-  const changeGroup = (id: string) => { setScope(undefined); setNames({}); setLoaded(undefined); setGroupId(id); };
+  const group = groups.find((entry) => entry.id === groupId);
+  const runGroup: RunCommand = (name, args) => {
+    if (governanceApi === undefined || reloadGroups === undefined || group === undefined || groupBusy) return;
+    setGroupBusy(true);
+    setGroupNotice(undefined);
+    governanceApi.command({ groupId, name, expectedVersion: group.epoch, arguments: args })
+      .then(() => { if (name === 'remove-tenant' && args['tenantId'] === scope) setScope(undefined); })
+      .catch((error: unknown) => { setGroupNotice({ tone: 'warning', text: commandFailure(error, name, members?.admins.length) }); })
+      .then(reloadGroups)
+      .catch(() => { setGroupNotice({ tone: 'danger', text: 'The group could not be reloaded. Refresh the page.' }); })
+      .finally(() => { setGroupBusy(false); setMembersReload((value) => value + 1); setReload((value) => value + 1); });
+  };
+  const changeGroup = (id: string) => { setScope(undefined); setNames({}); setLoaded(undefined); setMembers(undefined); setGroupId(id); };
 
   return (
     <section className="governance-shell">
@@ -109,6 +136,7 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
           </div>
           <div role="tabpanel" id={`gov-panel-${tab}`} aria-labelledby={`gov-tab-${tab}`}>
             {tab === 'approvals' && <ApprovalsInbox approvals={pending.approvals} completeness={pending.completeness} decide={decide} busyRunId={busyRunId} notice={notice} canDecide={platformApi !== undefined} />}
+            {tab === 'group' && (group === undefined || members === undefined ? <p className="card-empty">{groupNotice?.text ?? 'Loading workspaces and admins…'}</p> : <GroupAdminPanel group={group} members={members} tenants={tenants} run={runGroup} busy={groupBusy} notice={groupNotice} readOnly={governanceApi === undefined} />)}
             {tab === 'overview' && <OverviewPanel overview={loaded.overview} workflows={loaded.workflows} scope={scope} setScope={setScope} source={source} range={range} reload={reload} />}
           </div>
         </div>

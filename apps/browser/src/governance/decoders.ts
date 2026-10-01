@@ -24,6 +24,8 @@ export interface Approval {
   tenantId: string; workspace: string; runId: string; runVersion: number; workflowName: string; revision: number; nodeId: string; kind: 'step' | 'tool';
   capability: string; installationId: string; target: string; arguments: readonly { name: string; type: string }[]; argumentsDigest: string; requestedAt?: string; expiresAt: string; bindingDigest: string;
 }
+export interface Person { userId: string; name: string }
+export interface Members { workspaces: readonly { tenantId: string; name: string; joinedAt: string; billing: boolean }[]; admins: readonly Person[]; eligible: readonly Person[] }
 export interface Approvals { approvals: readonly Approval[]; count: number; completeness: Completeness; classification: Classification }
 
 const DIGEST = /^[0-9a-f]{64}$/u;
@@ -95,6 +97,18 @@ export function decodeSeries(value: unknown): Series {
       const line = obj(entry);
       return { label: str(line['label']), points: list(line['points']).map((point): readonly [number, number] => { const pair = list(point); return [num(pair[0]), num(pair[1])]; }) };
     }),
+  };
+}
+
+const bool = (value: unknown): boolean => typeof value === 'boolean' ? value : malformed();
+const person = (value: unknown): Person => ({ userId: str(obj(value)['userId']), name: str(obj(value)['name']) });
+
+export function decodeMembers(value: unknown): Members {
+  const body = obj(value);
+  return {
+    workspaces: list(body['workspaces']).map((entry) => { const row = obj(entry); return { tenantId: str(row['tenantId']), name: str(row['name']), joinedAt: str(row['joinedAt']), billing: bool(row['billing']) }; }),
+    admins: list(body['admins']).map(person),
+    eligible: list(body['eligible']).map(person),
   };
 }
 

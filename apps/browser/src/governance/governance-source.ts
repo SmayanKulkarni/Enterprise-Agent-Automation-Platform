@@ -2,7 +2,7 @@ import { isPanel, isSqlPanel, RANGES, type PanelId } from '../../../../packages/
 import { buildApprovals, buildHealth } from '../../../../packages/governance/src/attention.js';
 import { fixtureApprovals, fixtureHealth, fixtureOverview, fixtureSeries, fixtureWorkflows } from '../../../../packages/governance/src/fixtures.js';
 import { buildOverview, buildSeries, buildWorkflows } from '../../../../packages/governance/src/reads.js';
-import { decodeApprovals, decodeHealth, decodeOverview, decodeSeries, decodeWorkflows, type Approvals, type Group, type Health, type Overview, type RangeKey, type Series, type Workflows } from './decoders.js';
+import { decodeApprovals, decodeHealth, decodeMembers, decodeOverview, decodeSeries, decodeWorkflows, type Approvals, type Group, type Health, type Members, type Overview, type RangeKey, type Series, type Workflows } from './decoders.js';
 import type { GovernanceApi } from './governance-api.js';
 import { scopeQuery } from './governance-model.js';
 
@@ -12,6 +12,7 @@ export interface GovernanceSource {
   workflows(range: RangeKey, scope: string | undefined, signal: AbortSignal): Promise<Workflows>;
   health(signal: AbortSignal): Promise<Health>;
   approvals(signal: AbortSignal): Promise<Approvals>;
+  members(signal: AbortSignal): Promise<Members>;
   series(panel: string, range: RangeKey, scope: string | undefined, signal: AbortSignal): Promise<Series>;
 }
 
@@ -24,6 +25,7 @@ export function liveSource(api: GovernanceApi, groupId: string): GovernanceSourc
     workflows: (range, scope, signal) => api.read(groupId, 'workflows', scopeQuery(scope, range), decodeWorkflows, signal),
     health: (signal) => api.read(groupId, 'health', {}, decodeHealth, signal),
     approvals: (signal) => api.read(groupId, 'approvals', {}, decodeApprovals, signal),
+    members: (signal) => api.members(groupId, signal),
     series: (panel, range, scope, signal) => api.read(groupId, 'series', { panel, ...scopeQuery(scope, range) }, decodeSeries, signal),
   };
 }
@@ -37,6 +39,11 @@ export function fixtureSource(group: Group = FIXTURE_GROUP, now: () => number = 
     workflows: (range, scope, signal) => aborted(signal, () => decodeWorkflows({ ...buildWorkflows(fixtureWorkflows(scoped(scope)), range), classification: 'fixture' })),
     health: (signal) => aborted(signal, () => decodeHealth({ ...buildHealth(fixtureHealth(group.tenantIds, now())), classification: 'fixture' })),
     approvals: (signal) => aborted(signal, () => decodeApprovals({ ...buildApprovals(fixtureApprovals(group.tenantIds, now())), classification: 'fixture' })),
+    members: (signal) => aborted(signal, () => decodeMembers({
+      workspaces: group.tenantIds.map((tenantId, index) => ({ tenantId, name: `Fixture workspace ${String(index + 1)}`, joinedAt: new Date(now()).toISOString(), billing: index === 0 })),
+      admins: [{ userId: 'fixture-admin', name: 'Fixture admin' }],
+      eligible: [],
+    })),
     series: (panel, range, scope, signal) => aborted(signal, () => {
       const known: PanelId | undefined = isPanel(panel) ? panel : undefined;
       const base = { panel, range, completeness: 'full', classification: 'fixture' };

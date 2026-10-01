@@ -12,6 +12,7 @@ export interface Account {
   tenants?: readonly Tenant[];
   governanceApi?: GovernanceApi;
   platformApi?: PlatformApi;
+  reloadGroups?: () => Promise<void>;
   failure?: { error: unknown };
   retry: () => void;
 }
@@ -30,7 +31,14 @@ export function GovernanceSession({ onChange }: { onChange: (account: Account) =
     const controller = new AbortController();
     onChange({ loaded: true, signedIn: true, retry });
     void Promise.all([governanceApi.groups(controller.signal), platformApi.tenants(controller.signal)])
-      .then(([groups, tenants]) => onChange({ loaded: true, signedIn: true, groups, tenants, governanceApi, platformApi, retry }))
+      .then(([groups, tenants]) => {
+        const loaded: Account = { loaded: true, signedIn: true, groups, tenants, governanceApi, platformApi, retry };
+        const reloadGroups = async (): Promise<void> => {
+          const [nextGroups, nextTenants] = await Promise.all([governanceApi.groups(), platformApi.tenants()]);
+          onChange({ ...loaded, groups: nextGroups, tenants: nextTenants, reloadGroups });
+        };
+        onChange({ ...loaded, reloadGroups });
+      })
       .catch((error: unknown) => { if (!isAbort(error)) onChange({ loaded: true, signedIn: true, failure: { error }, retry }); });
     return () => controller.abort();
   }, [isLoaded, isSignedIn, governanceApi, platformApi, attempt, onChange]);
