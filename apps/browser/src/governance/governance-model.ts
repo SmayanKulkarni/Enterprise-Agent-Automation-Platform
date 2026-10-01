@@ -1,4 +1,5 @@
-import type { Classification, Completeness, Health, Kpis, RangeKey, SeriesStatus } from './decoders.js';
+import { describeError, type PlatformCommand } from '../platform-api.js';
+import type { Approval, Classification, Completeness, Health, Kpis, RangeKey, SeriesStatus } from './decoders.js';
 
 export type Unit = 'count' | 'percent' | 'seconds' | 'usd';
 export type Direction = 'up' | 'down' | 'flat' | 'none';
@@ -69,4 +70,28 @@ export function dataNotes(...collections: readonly ({ completeness: Completeness
     ...loaded.some((item) => item.classification === 'fixture') ? ['Fixture data: these numbers are examples, not your real activity.'] : [],
     ...loaded.some((item) => item.completeness === 'partial') ? ['Partial data: some runs are estimated or retained only in part.'] : [],
   ];
+}
+
+const MS_PER_MINUTE = 60_000;
+const MINUTES_PER_HOUR = 60;
+
+export function timeLeft(expiresAt: string, now: number): { text: string; expired: boolean } {
+  const remaining = Date.parse(expiresAt) - now;
+  if (!Number.isFinite(remaining) || remaining <= 0) return { text: 'Expired', expired: true };
+  if (remaining < MS_PER_MINUTE) return { text: 'under a minute', expired: false };
+  const minutes = Math.floor(remaining / MS_PER_MINUTE);
+  const hours = Math.floor(minutes / MINUTES_PER_HOUR);
+  const rest = minutes % MINUTES_PER_HOUR;
+  return { text: hours === 0 ? `${String(rest)} min` : rest === 0 ? `${String(hours)} h` : `${String(hours)} h ${String(rest)} min`, expired: false };
+}
+
+export function approvalCommand(row: Approval, decision: 'approve' | 'reject'): PlatformCommand {
+  return { tenantId: row.tenantId, owner: 'workflow', name: 'approve', expectedVersion: row.runVersion, arguments: { id: row.runId, bindingDigest: row.bindingDigest, decision } };
+}
+
+export type DecisionFailure = 'conflict' | 'denied' | 'unknown' | 'failed';
+
+export function decisionFailure(error: unknown): DecisionFailure {
+  const kind = describeError(error, { write: true });
+  return kind === 'conflict' || kind === 'denied' || kind === 'unknown' ? kind : 'failed';
 }

@@ -132,8 +132,8 @@ function ApprovalSettings({ node, nodes, edges, updateNode }: { node: WorkflowNo
   };
   return <>
     <Field label="Approval timeout (ms)" help={`≈ ${Math.round((Number.isFinite(Number(text)) ? Number(text) : stored) / 60000)} minutes`} error={error}><input type="number" min="1" max="86400000" step="1" value={text} onChange={(event) => change(event.target.value)} /></Field>
-    <p>{next?.kind === 'mcp' ? `This Approval waits for an administrator, then permits the immediately following MCP effect: ${next.title}. The review is bound to this run; there is no separate approval inbox.` : 'Connect this Approval directly to an MCP effect to publish.'}</p>
-    <p>Workspace admins approve or reject in Run History. Run History shows the wait deadline, decision, and receipt. Rejections stop the effect, expired or stale decisions must be refreshed, and an unknown external effect needs reconciliation.</p>
+    <p>{next?.kind === 'mcp' ? `This Approval waits for an administrator, then permits the immediately following MCP effect: ${next.title}. The review is bound to this run.` : 'Connect this Approval directly to an MCP effect to publish.'}</p>
+    <p>Workspace admins approve or reject in Run History, and group admins can also decide from the Governance approvals inbox. Run History shows the wait deadline, decision, and receipt. Rejections stop the effect, expired or stale decisions must be refreshed, and an unknown external effect needs reconciliation.</p>
   </>;
 }
 function McpSummary({ node, updateNode, owner }: { owner?: WorkflowNode | undefined; node: WorkflowNode; updateNode: (id: string, patch: Partial<Pick<WorkflowNode, 'config'>>) => void }) {

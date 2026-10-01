@@ -2,8 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { gsap, motionAllowed, useGSAP } from '../motion.js';
 import SplitText from '../react-bits/SplitText.js';
 import { ErrorPage, StatePage, moveTabFocus } from '../ui.js';
-import type { Group, Health, Overview, RangeKey, Series, Workflows } from './decoders.js';
-import { banner, kpis, rangeName, RANGES } from './governance-model.js';
+import { ApprovalsInbox, type InboxNotice } from './approvals-inbox.js';
+import type { Approval, Group, Health, Overview, RangeKey, Series, Workflows } from './decoders.js';
+import { approvalCommand, banner, decisionFailure, kpis, rangeName, RANGES } from './governance-model.js';
+import type { PlatformApi } from '../platform-api.js';
+import type { PendingApprovals } from './use-pending-approvals.js';
 import type { GovernanceSource } from './governance-source.js';
 import { KpiRow } from './kpi-row.js';
 import { OverviewPanel } from './overview-panel.js';
@@ -11,13 +14,18 @@ import { Sparkline } from '../charts/sparkline.js';
 import { useSeries } from './use-series.js';
 
 interface Loaded { overview: Overview; workflows: Workflows; health: Health; telemetry: Series }
-interface Props { source: GovernanceSource; groups: readonly Group[]; groupId: string; setGroupId: (id: string) => void }
-type TabId = 'overview';
-const tabs: readonly { id: TabId; label: string }[] = [{ id: 'overview', label: 'Overview' }];
+interface Props { source: GovernanceSource; groups: readonly Group[]; groupId: string; setGroupId: (id: string) => void; pending: PendingApprovals; platformApi?: PlatformApi }
+type TabId = 'overview' | 'approvals';
+const decisionNotices: Record<ReturnType<typeof decisionFailure>, string> = {
+  conflict: 'This approval was already decided, expired, or changed. The list is up to date.',
+  unknown: 'The result is not known yet. The list was reloaded; check it before deciding again.',
+  denied: "You can't decide approvals in this workspace.",
+  failed: 'The decision could not be sent. The list was reloaded.',
+};
 const isAbort = (error: unknown): boolean => error instanceof DOMException && error.name === 'AbortError';
 const STAGGER_SECONDS = 0.06;
 
-export function GovernancePage({ source, groups, groupId, setGroupId }: Props) {
+export function GovernancePage({ source, groups, groupId, setGroupId, pending, platformApi }: Props) {
   const [scope, setScope] = useState<string>();
   const [range, setRange] = useState<RangeKey>('7d');
   const [reload, setReload] = useState(0);
@@ -26,6 +34,8 @@ export function GovernancePage({ source, groups, groupId, setGroupId }: Props) {
   const [failure, setFailure] = useState<{ error: unknown }>();
   const [loading, setLoading] = useState(true);
   const [names, setNames] = useState<Readonly<Record<string, string>>>({});
+  const [busyRunId, setBusyRunId] = useState<string>();
+  const [notice, setNotice] = useState<InboxNotice>();
   const body = useRef<HTMLDivElement>(null);
   const entered = useRef(false);
 
@@ -63,6 +73,16 @@ export function GovernancePage({ source, groups, groupId, setGroupId }: Props) {
   }, [runs.series]);
   const tiles = useMemo(() => loaded === undefined ? [] : kpis(loaded.overview.total), [loaded]);
   const status = loaded === undefined ? undefined : banner(loaded.health, loaded.telemetry.status);
+  const tabs: readonly { id: TabId; label: string; badge?: number }[] = [{ id: 'overview', label: 'Overview' }, { id: 'approvals', label: 'Approvals', badge: pending.count }];
+  const decide = (row: Approval, decision: 'approve' | 'reject'): void => {
+    if (platformApi === undefined || busyRunId !== undefined) return;
+    setBusyRunId(row.runId);
+    setNotice(undefined);
+    platformApi.command(approvalCommand(row, decision))
+      .then(() => { setNotice({ tone: 'success', text: `Run ${row.runId} ${decision === 'approve' ? 'approved' : 'rejected'}.` }); })
+      .catch((error: unknown) => { const failure = decisionFailure(error); setNotice({ tone: failure === 'conflict' || failure === 'unknown' ? 'warning' : 'danger', text: decisionNotices[failure] }); })
+      .finally(() => { setBusyRunId(undefined); pending.reload(); setReload((value) => value + 1); });
+  };
   const changeGroup = (id: string) => { setScope(undefined); setNames({}); setLoaded(undefined); setGroupId(id); };
 
   return (
@@ -85,9 +105,10 @@ export function GovernancePage({ source, groups, groupId, setGroupId }: Props) {
           <div className="health-banner" data-tone={status.tone}><span><i /> {status.text}</span></div>
           <KpiRow tiles={tiles} range={range} extras={{ runs: <Sparkline points={runPoints} label="Runs over the selected period" /> }} />
           <div className="governance-tabs" role="tablist" aria-label="Governance sections" onKeyDown={moveTabFocus}>
-            {tabs.map((entry) => <button key={entry.id} role="tab" id={`gov-tab-${entry.id}`} aria-selected={tab === entry.id} aria-controls={`gov-panel-${entry.id}`} tabIndex={tab === entry.id ? 0 : -1} onClick={() => setTab(entry.id)}>{entry.label}</button>)}
+            {tabs.map((entry) => <button key={entry.id} role="tab" id={`gov-tab-${entry.id}`} aria-selected={tab === entry.id} aria-controls={`gov-panel-${entry.id}`} tabIndex={tab === entry.id ? 0 : -1} onClick={() => setTab(entry.id)}>{entry.label}{entry.badge !== undefined && entry.badge > 0 && <span className="tab-badge" aria-label={`${String(entry.badge)} pending`}>{entry.badge}</span>}</button>)}
           </div>
           <div role="tabpanel" id={`gov-panel-${tab}`} aria-labelledby={`gov-tab-${tab}`}>
+            {tab === 'approvals' && <ApprovalsInbox approvals={pending.approvals} completeness={pending.completeness} decide={decide} busyRunId={busyRunId} notice={notice} canDecide={platformApi !== undefined} />}
             {tab === 'overview' && <OverviewPanel overview={loaded.overview} workflows={loaded.workflows} scope={scope} setScope={setScope} source={source} range={range} reload={reload} />}
           </div>
         </div>

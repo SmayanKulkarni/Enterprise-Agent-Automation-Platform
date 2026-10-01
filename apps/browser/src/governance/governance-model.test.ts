@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { banner, dataNotes, delta, DASH, formatSeconds, kpis, scopeQuery } from './governance-model.js';
-import type { Health, Kpis } from './decoders.js';
+import { PlatformApiError } from '../platform-api.js';
+import { approvalCommand, banner, dataNotes, decisionFailure, delta, DASH, formatSeconds, kpis, scopeQuery, timeLeft } from './governance-model.js';
+import type { Approval, Health, Kpis } from './decoders.js';
 
 const zero = { runs: 0, completed: 0, failed: 0, unknownOutcome: 0, p95Seconds: null, tokens: 0, cost: 0 };
 const empty: Kpis = { ...zero, pendingApprovals: 0, previous: zero };
@@ -60,5 +61,33 @@ describe('dataNotes', () => {
   test('states fixture and partial data in words', () => {
     expect(dataNotes({ completeness: 'partial', classification: 'fixture' })).toHaveLength(2);
     expect(dataNotes({ completeness: 'full', classification: 'restricted-operational' }, undefined)).toEqual([]);
+  });
+});
+
+describe('timeLeft', () => {
+  const now = Date.parse('2026-01-01T00:00:00.000Z');
+  const at = (ms: number) => new Date(now + ms).toISOString();
+  test.each([[30_000, 'under a minute'], [12 * 60_000, '12 min'], [(3 * 60 + 5) * 60_000, '3 h 5 min'], [2 * 3_600_000, '2 h']])('%i ms is %s', (ms, text) => {
+    expect(timeLeft(at(ms), now)).toEqual({ text, expired: false });
+  });
+  test('a past time and a bad time are expired', () => {
+    expect(timeLeft(at(-1000), now)).toEqual({ text: 'Expired', expired: true });
+    expect(timeLeft('nonsense', now).expired).toBe(true);
+  });
+});
+
+describe('approvalCommand', () => {
+  const row: Approval = { tenantId: 't1', workspace: 'w', runId: 'r1', runVersion: 7, workflowName: 'wf', revision: 1, nodeId: 'n', kind: 'tool', capability: 'c', installationId: 'i', target: 'x', arguments: [], argumentsDigest: 'a'.repeat(64), expiresAt: '2026-01-01T00:00:00.000Z', bindingDigest: 'b'.repeat(64) };
+  test('targets the existing workflow approve command with the row version and digest', () => {
+    expect(approvalCommand(row, 'reject')).toEqual({ tenantId: 't1', owner: 'workflow', name: 'approve', expectedVersion: 7, arguments: { id: 'r1', bindingDigest: 'b'.repeat(64), decision: 'reject' } });
+  });
+});
+
+describe('decisionFailure', () => {
+  test('maps a 409 to conflict and a network error to unknown', () => {
+    expect(decisionFailure(new PlatformApiError(409))).toBe('conflict');
+    expect(decisionFailure(new TypeError('Failed to fetch'))).toBe('unknown');
+    expect(decisionFailure(new PlatformApiError(403))).toBe('denied');
+    expect(decisionFailure(new PlatformApiError(422))).toBe('failed');
   });
 });
