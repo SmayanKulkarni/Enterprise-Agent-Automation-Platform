@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { PlatformApiError } from '../platform-api.js';
 import { GovernanceApi } from './governance-api.js';
-import { decodeApprovals, decodeOverview } from './decoders.js';
+import { decodeApprovals, decodeLogs, decodeOverview, decodeTrace } from './decoders.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -133,5 +133,25 @@ describe('GovernanceApi.members', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok({ workspaces: [{ tenantId: 't1', name: 'one', joinedAt: 'x' }], admins: [], eligible: [] })));
 
     await expect(api().members('g1')).rejects.toBeInstanceOf(PlatformApiError);
+  });
+});
+
+describe('decodeLogs and decodeTrace', () => {
+  const logs = (entry: unknown) => ({ range: '7d', status: 'ready', entries: [entry], completeness: 'full', classification: 'restricted-operational' });
+  const entry = { at: '2026-01-01T00:00:00.000Z', event: 'run.started', level: 'info', attributes: { run_id: 'r', attempt: 1, ok: true } };
+  const trace = (span: unknown) => ({ run: 'r', status: 'ready', spans: [span], completeness: 'full', classification: 'restricted-operational' });
+  const span = { traceId: 't', spanId: 's', name: 'n', startMs: 5, durationMs: 3, status: 'error', attributes: { a: 'b' } };
+
+  test('accepts well-formed entries and a continuation', () => {
+    expect(decodeLogs({ ...logs(entry), continuation: { cursor: 'c' } })).toMatchObject({ entries: [{ event: 'run.started' }], continuation: { cursor: 'c' } });
+  });
+
+  test('rejects an entry whose attribute value is an object', () => {
+    expect(() => decodeLogs(logs({ ...entry, attributes: { a: { b: 1 } } }))).toThrow(PlatformApiError);
+  });
+
+  test('accepts a span and rejects a negative duration', () => {
+    expect(decodeTrace(trace(span)).spans[0]?.status).toBe('error');
+    expect(() => decodeTrace(trace({ ...span, durationMs: -1 }))).toThrow(PlatformApiError);
   });
 });

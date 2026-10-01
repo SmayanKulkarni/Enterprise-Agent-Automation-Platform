@@ -26,6 +26,11 @@ export interface Approval {
 }
 export interface Person { userId: string; name: string }
 export interface Members { workspaces: readonly { tenantId: string; name: string; joinedAt: string; billing: boolean }[]; admins: readonly Person[]; eligible: readonly Person[] }
+export type Attributes = Readonly<Record<string, string | number | boolean>>;
+export interface LogEntry { at: string; event: string; level: 'info' | 'warn' | 'error'; attributes: Attributes }
+export interface Logs { range: RangeKey; status: SeriesStatus; entries: readonly LogEntry[]; continuation?: { cursor: string }; completeness: Completeness; classification: Classification }
+export interface Span { traceId: string; spanId: string; parentSpanId?: string; name: string; startMs: number; durationMs: number; status: 'ok' | 'error' | 'unset'; attributes: Attributes }
+export interface Trace { run: string; status: SeriesStatus; spans: readonly Span[]; completeness: Completeness; classification: Classification }
 export interface Approvals { approvals: readonly Approval[]; count: number; completeness: Completeness; classification: Classification }
 
 const DIGEST = /^[0-9a-f]{64}$/u;
@@ -109,6 +114,32 @@ export function decodeMembers(value: unknown): Members {
     workspaces: list(body['workspaces']).map((entry) => { const row = obj(entry); return { tenantId: str(row['tenantId']), name: str(row['name']), joinedAt: str(row['joinedAt']), billing: bool(row['billing']) }; }),
     admins: list(body['admins']).map(person),
     eligible: list(body['eligible']).map(person),
+  };
+}
+
+const attributes = (value: unknown): Attributes => Object.fromEntries(Object.entries(obj(value)).map(([key, item]) => [key, typeof item === 'string' || typeof item === 'boolean' || typeof item === 'number' && Number.isFinite(item) ? item : malformed()]));
+const nonNegative = (value: unknown): number => { const number = num(value); return number >= 0 ? number : malformed(); };
+const status = (body: Record<string, unknown>): SeriesStatus => oneOf(['ready', 'not-configured', 'unavailable'], body['status']);
+
+export function decodeLogs(value: unknown): Logs {
+  const body = obj(value);
+  const continuation = body['continuation'];
+  return {
+    range: range(body), status: status(body), completeness: completeness(body), classification: classification(body),
+    entries: list(body['entries']).map((item): LogEntry => { const row = obj(item); return { at: str(row['at']), event: str(row['event']), level: oneOf(['info', 'warn', 'error'], row['level']), attributes: attributes(row['attributes']) }; }),
+    ...(continuation === undefined ? {} : { continuation: { cursor: str(obj(continuation)['cursor']) } }),
+  };
+}
+
+export function decodeTrace(value: unknown): Trace {
+  const body = obj(value);
+  return {
+    run: str(body['run']), status: status(body), completeness: completeness(body), classification: classification(body),
+    spans: list(body['spans']).map((item): Span => {
+      const row = obj(item);
+      const parent = row['parentSpanId'];
+      return { traceId: str(row['traceId']), spanId: str(row['spanId']), name: str(row['name']), startMs: nonNegative(row['startMs']), durationMs: nonNegative(row['durationMs']), status: oneOf(['ok', 'error', 'unset'], row['status']), attributes: attributes(row['attributes']), ...(parent === undefined ? {} : { parentSpanId: str(parent) }) };
+    }),
   };
 }
 

@@ -6,6 +6,8 @@ import { ApprovalsInbox, type InboxNotice } from './approvals-inbox.js';
 import type { Approval, Group, Health, Members, Overview, RangeKey, Series, Workflows } from './decoders.js';
 import { approvalCommand, banner, commandFailure, decisionFailure, kpis, rangeName, RANGES } from './governance-model.js';
 import type { GovernanceApi } from './governance-api.js';
+import { LogsPanel } from './logs-panel.js';
+import { TracePanel } from './trace-panel.js';
 import { GroupAdminPanel, type RunCommand } from './group-admin-panel.js';
 import type { PlatformApi, Tenant } from '../platform-api.js';
 import type { PendingApprovals } from './use-pending-approvals.js';
@@ -17,7 +19,7 @@ import { useSeries } from './use-series.js';
 
 interface Loaded { overview: Overview; workflows: Workflows; health: Health; telemetry: Series }
 interface Props { source: GovernanceSource; groups: readonly Group[]; groupId: string; setGroupId: (id: string) => void; pending: PendingApprovals; platformApi?: PlatformApi; governanceApi?: GovernanceApi; tenants?: readonly Tenant[]; reloadGroups?: () => Promise<void> }
-type TabId = 'overview' | 'approvals' | 'group';
+type TabId = 'overview' | 'approvals' | 'group' | 'logs' | 'trace';
 const decisionNotices: Record<ReturnType<typeof decisionFailure>, string> = {
   conflict: 'This approval was already decided, expired, or changed. The list is up to date.',
   unknown: 'The result is not known yet. The list was reloaded; check it before deciding again.',
@@ -41,6 +43,7 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
   const [members, setMembers] = useState<Members>();
   const [membersReload, setMembersReload] = useState(0);
   const [groupBusy, setGroupBusy] = useState(false);
+  const [traceRunId, setTraceRunId] = useState('');
   const [groupNotice, setGroupNotice] = useState<InboxNotice>();
   const body = useRef<HTMLDivElement>(null);
   const entered = useRef(false);
@@ -88,7 +91,7 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
   }, [runs.series]);
   const tiles = useMemo(() => loaded === undefined ? [] : kpis(loaded.overview.total), [loaded]);
   const status = loaded === undefined ? undefined : banner(loaded.health, loaded.telemetry.status);
-  const tabs: readonly { id: TabId; label: string; badge?: number }[] = [{ id: 'overview', label: 'Overview' }, { id: 'approvals', label: 'Approvals', badge: pending.count }, { id: 'group', label: 'Workspaces & admins' }];
+  const tabs: readonly { id: TabId; label: string; badge?: number }[] = [{ id: 'overview', label: 'Overview' }, { id: 'approvals', label: 'Approvals', badge: pending.count }, { id: 'group', label: 'Workspaces & admins' }, { id: 'logs', label: 'Logs' }, { id: 'trace', label: 'Trace' }];
   const decide = (row: Approval, decision: 'approve' | 'reject'): void => {
     if (platformApi === undefined || busyRunId !== undefined) return;
     setBusyRunId(row.runId);
@@ -98,6 +101,7 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
       .catch((error: unknown) => { const failure = decisionFailure(error); setNotice({ tone: failure === 'conflict' || failure === 'unknown' ? 'warning' : 'danger', text: decisionNotices[failure] }); })
       .finally(() => { setBusyRunId(undefined); pending.reload(); setReload((value) => value + 1); });
   };
+  const openTrace = (runId: string): void => { setTraceRunId(runId); setTab('trace'); };
   const group = groups.find((entry) => entry.id === groupId);
   const runGroup: RunCommand = (name, args) => {
     if (governanceApi === undefined || reloadGroups === undefined || group === undefined || groupBusy) return;
@@ -137,6 +141,8 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
           <div role="tabpanel" id={`gov-panel-${tab}`} aria-labelledby={`gov-tab-${tab}`}>
             {tab === 'approvals' && <ApprovalsInbox approvals={pending.approvals} completeness={pending.completeness} decide={decide} busyRunId={busyRunId} notice={notice} canDecide={platformApi !== undefined} />}
             {tab === 'group' && (group === undefined || members === undefined ? <p className="card-empty">{groupNotice?.text ?? 'Loading workspaces and admins…'}</p> : <GroupAdminPanel group={group} members={members} tenants={tenants} run={runGroup} busy={groupBusy} notice={groupNotice} readOnly={governanceApi === undefined} />)}
+            {tab === 'logs' && <LogsPanel source={source} scope={scope} range={range} names={names} openTrace={openTrace} />}
+            {tab === 'trace' && <TracePanel key={traceRunId} source={source} runId={traceRunId} />}
             {tab === 'overview' && <OverviewPanel overview={loaded.overview} workflows={loaded.workflows} scope={scope} setScope={setScope} source={source} range={range} reload={reload} />}
           </div>
         </div>

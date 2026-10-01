@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { PlatformApiError } from '../platform-api.js';
-import { addableWorkspaces, approvalCommand, banner, commandFailure, shortId, dataNotes, decisionFailure, delta, DASH, formatSeconds, kpis, scopeQuery, timeLeft } from './governance-model.js';
-import type { Approval, Health, Kpis } from './decoders.js';
+import { addableWorkspaces, approvalCommand, formatDuration, isUuid, logsQuery, waterfall, banner, commandFailure, shortId, dataNotes, decisionFailure, delta, DASH, formatSeconds, kpis, scopeQuery, timeLeft } from './governance-model.js';
+import type { Approval, Health, Kpis, Span } from './decoders.js';
 
 const zero = { runs: 0, completed: 0, failed: 0, unknownOutcome: 0, p95Seconds: null, tokens: 0, cost: 0 };
 const empty: Kpis = { ...zero, pendingApprovals: 0, previous: zero };
@@ -121,5 +121,60 @@ describe('commandFailure', () => {
 describe('shortId', () => {
   test('keeps the first eight characters', () => {
     expect(shortId('a1000000-0000-4000-8000-000000000001')).toBe('a1000000');
+  });
+});
+
+describe('isUuid', () => {
+  test.each([['3f2c1a7e-8f2c-4a7e-9b1d-0123456789ab', true], ['abc', false], ['3f2c1a7e-8f2c-4a7e-9b1d-0123456789ab-extra', false], ['3f2c1a7e-8f2c-4a7e-9b1d-0123456789ab\n', false]])('%s is %s', (value, expected) => {
+    expect(isUuid(value)).toBe(expected);
+  });
+});
+
+describe('logsQuery', () => {
+  test('omits empty filters and carries the scope as tenant', () => {
+    expect(logsQuery({ range: '24h', scope: 't1', level: '', event: 'run.started', run: '', cursor: undefined })).toEqual({ range: '24h', tenant: 't1', event: 'run.started' });
+  });
+
+  test('includes every filter and the cursor when set', () => {
+    expect(logsQuery({ range: '7d', scope: undefined, level: 'error', event: 'node.failed', run: 'r', cursor: 'c' })).toEqual({ range: '7d', level: 'error', event: 'node.failed', run: 'r', cursor: 'c' });
+  });
+});
+
+describe('formatDuration', () => {
+  test.each([[18, '18 ms'], [1200, '1.2 s'], [2000, '2 s'], [125000, '2 min 5 s'], [120000, '2 min']])('%d ms is %s', (ms, text) => {
+    expect(formatDuration(ms)).toBe(text);
+  });
+});
+
+describe('waterfall', () => {
+  const span = (overrides: Partial<Span>): Span => ({ traceId: 'T', spanId: 'a', name: 'a', startMs: 1000, durationMs: 1000, status: 'ok', attributes: {}, ...overrides });
+
+  test('positions spans relative to the earliest start and nests children', () => {
+    const { totalMs, rows } = waterfall([span({}), span({ spanId: 'b', parentSpanId: 'a', startMs: 1500, durationMs: 500 }), span({ spanId: 'c', startMs: 2000, durationMs: 0 })]);
+    expect(totalMs).toBe(1000);
+    expect(rows.map((row) => row.offsetPercent)).toEqual([0, 50, 99.5]);
+    expect(rows.map((row) => row.widthPercent)).toEqual([100, 50, 0.5]);
+    expect(rows.map((row) => row.depth)).toEqual([0, 1, 0]);
+  });
+
+  test('orders rows by start time', () => {
+    const { rows } = waterfall([span({ spanId: 'late', startMs: 3000 }), span({ spanId: 'early', startMs: 1000 })]);
+    expect(rows.map((row) => row.span.spanId)).toEqual(['early', 'late']);
+  });
+
+  test('an empty list has no rows and no total', () => {
+    expect(waterfall([])).toEqual({ totalMs: 0, rows: [] });
+  });
+
+  test('a single zero-duration span has finite percentages', () => {
+    const { rows } = waterfall([span({ durationMs: 0 })]);
+    expect(rows[0]?.offsetPercent).toBe(0);
+    expect(rows[0]?.widthPercent).toBe(0.5);
+  });
+
+  test('a parent in another trace or a missing parent gives depth 0, and a cycle terminates', () => {
+    const { rows } = waterfall([span({ spanId: 'x', traceId: 'T2', parentSpanId: 'a' }), span({ spanId: 'p', parentSpanId: 'q' }), span({ spanId: 'q', parentSpanId: 'p' })]);
+    expect(rows.find((row) => row.span.spanId === 'x')?.depth).toBe(0);
+    expect(rows.every((row) => Number.isFinite(row.depth))).toBe(true);
   });
 });

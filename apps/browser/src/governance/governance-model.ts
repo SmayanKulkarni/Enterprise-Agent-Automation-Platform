@@ -1,5 +1,5 @@
 import { describeError, PlatformApiError, type PlatformCommand, type Tenant } from '../platform-api.js';
-import type { Approval, Classification, Completeness, Group, Health, Kpis, RangeKey, SeriesStatus } from './decoders.js';
+import type { Approval, Classification, Completeness, Group, Health, Kpis, RangeKey, SeriesStatus, Span } from './decoders.js';
 import type { GroupCommandName } from './governance-api.js';
 
 export type Unit = 'count' | 'percent' | 'seconds' | 'usd';
@@ -114,4 +114,49 @@ export function commandFailure(error: unknown, name: GroupCommandName, adminCoun
   if (status === 403) return CONSENT_COMMANDS.includes(name) ? "Only a workspace's own admin can add it to a group." : "You can't change this group.";
   if (status === 422 || status === 400) return 'That request was not valid.';
   return 'The change could not be saved. Try again.';
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+export const isUuid = (value: string): boolean => UUID_PATTERN.test(value);
+
+export interface LogFilters { range: RangeKey; scope: string | undefined; level: string; event: string; run: string; cursor: string | undefined }
+
+export function logsQuery({ range, scope, level, event, run, cursor }: LogFilters): Record<string, string> {
+  return { ...scopeQuery(scope, range), ...level === '' ? {} : { level }, ...event === '' ? {} : { event }, ...run === '' ? {} : { run }, ...cursor === undefined ? {} : { cursor } };
+}
+
+const MS_PER_SECOND = 1000;
+const SECONDS_PER_MINUTE = 60;
+
+export function formatDuration(ms: number): string {
+  if (ms < MS_PER_SECOND) return `${String(Math.round(ms))} ms`;
+  const seconds = ms / MS_PER_SECOND;
+  if (seconds < SECONDS_PER_MINUTE) return `${String(Math.round(seconds * 10) / 10)} s`;
+  const whole = Math.round(seconds);
+  const rest = whole % SECONDS_PER_MINUTE;
+  return `${String(Math.floor(whole / SECONDS_PER_MINUTE))} min${rest === 0 ? '' : ` ${String(rest)} s`}`;
+}
+
+const MIN_WIDTH_PERCENT = 0.5;
+const PERCENT = 100;
+const hundredths = (value: number): number => Math.round(value * PERCENT) / PERCENT;
+export interface WaterfallRow { span: Span; offsetPercent: number; widthPercent: number; depth: number }
+
+export function waterfall(spans: readonly Span[]): { totalMs: number; rows: WaterfallRow[] } {
+  if (spans.length === 0) return { totalMs: 0, rows: [] };
+  const origin = Math.min(...spans.map((span) => span.startMs));
+  const totalMs = Math.max(...spans.map((span) => span.startMs + span.durationMs)) - origin;
+  const byId = new Map(spans.map((span) => [`${span.traceId}:${span.spanId}`, span]));
+  const depthOf = (span: Span): number => {
+    const seen = new Set<Span>([span]);
+    let depth = 0;
+    for (let parent = span.parentSpanId === undefined ? undefined : byId.get(`${span.traceId}:${span.parentSpanId}`); parent !== undefined && !seen.has(parent); parent = parent.parentSpanId === undefined ? undefined : byId.get(`${parent.traceId}:${parent.parentSpanId}`)) { seen.add(parent); depth += 1; }
+    return depth;
+  };
+  const rows = [...spans].sort((a, b) => a.startMs - b.startMs).map((span): WaterfallRow => {
+    const width = totalMs === 0 ? MIN_WIDTH_PERCENT : Math.max(MIN_WIDTH_PERCENT, hundredths(span.durationMs / totalMs * PERCENT));
+    const offset = totalMs === 0 ? 0 : Math.min(hundredths((span.startMs - origin) / totalMs * PERCENT), PERCENT - MIN_WIDTH_PERCENT);
+    return { span, offsetPercent: offset, widthPercent: Math.min(width, PERCENT - offset), depth: depthOf(span) };
+  });
+  return { totalMs, rows };
 }
