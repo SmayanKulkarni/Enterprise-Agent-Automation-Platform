@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { failureNotice } from './error-view.js';
 import type { PlatformApi, Projection } from './platform-api.js';
 
@@ -15,6 +15,7 @@ export function PrGateTemplatePanel({ api, tenantId, admin, installations, onCre
   const [issues, setIssues] = useState<readonly { path: string; message: string }[]>([]);
   const [message, setMessage] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const pendingDraft = useRef<string>();
   const choices = certified(installations);
   const githubId = github ?? suggestedInstallation(installations, 'pull_request_read');
   const statusId = status ?? suggestedInstallation(installations, 'create_commit_status');
@@ -22,11 +23,13 @@ export function PrGateTemplatePanel({ api, tenantId, admin, installations, onCre
   const create = async () => {
     setBusy(true); setIssues([]); setMessage(undefined);
     try {
-      const draftId = crypto.randomUUID();
+      const draftId = pendingDraft.current ?? crypto.randomUUID();
+      pendingDraft.current = draftId;
       const receipt = await api.command({ tenantId, owner: 'workflow', name: 'instantiate-pr-gate', expectedVersion: 0, arguments: { id: draftId, githubInstallationId: githubId, statusInstallationId: statusId } });
-      if (receipt.state === 'failed') { setIssues(receipt.issues ?? []); setMessage('The draft was not created. Fix the items below and try again.'); return; }
+      if (receipt.state === 'failed') { pendingDraft.current = undefined; setIssues(receipt.issues ?? []); setMessage('The draft was not created. Fix the items below and try again.'); return; }
       setIssues(receipt.issues ?? []);
       setMessage(receipt.issues?.length ? 'The draft was created but the check found problems.' : 'PR gate draft created and checked. Open it in the canvas, then publish.');
+      pendingDraft.current = undefined;
       await onCreated(draftId);
     } catch (error) {
       setMessage(failureNotice(error, 'The draft could not be created. Only an administrator can create a PR gate.', { write: true }));

@@ -1,4 +1,3 @@
-/* Tenant MCP credentials: one sealed workflow.records row per certified connector installation, written only through the existing write_record procedure. */
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
