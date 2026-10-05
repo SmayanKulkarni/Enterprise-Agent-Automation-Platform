@@ -69,7 +69,7 @@ export function QuestionCard({ id, question, ids, defaults, removable, onChange,
     {question.type === 'noul' && <YesNoCriteria criteria={question.criteria} onChange={(criteria) => onChange(criteria === undefined ? withoutCriteria() : { ...question, criteria })} />}
     <label className="switch-row"><span><strong>Gates the step</strong><small>Turn off for speculative questions; their answers are recorded but a low-confidence answer won't send the step to review.</small></span><input type="checkbox" checked={question.gate !== false} onChange={(event) => { const { gate: _gate, ...rest } = question; onChange(event.target.checked ? rest as QuestionConfig : { ...rest, gate: false } as QuestionConfig); }} /></label>
     <details><summary>{question.thresholds ? 'Own confidence bands' : 'Own confidence bands (using the default)'}</summary>
-      <BandInputs value={question.thresholds ?? defaults} onChange={(thresholds) => update({ thresholds })} />
+      <BandInputs key={question.thresholds ? 'own' : `default-${String(defaults.act)}-${String(defaults.review)}`} value={question.thresholds ?? defaults} onChange={(thresholds) => update({ thresholds })} />
       {question.thresholds && <button type="button" onClick={() => { const { thresholds: _thresholds, ...rest } = question; onChange(rest as QuestionConfig); }}>Use the default bands</button>}
     </details>
     <button type="button" disabled={!removable} onClick={onRemove}>Remove question</button>
