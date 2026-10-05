@@ -1,5 +1,6 @@
 import type { Installation, WorkflowRun } from './service.js';
 import { envMcpCredentials, type McpCredentialLookup } from './mcp-credentials.js';
+import { parseToolList, type DiscoveredTool, type McpDiscoveryPort } from './mcp-discovery.js';
 import { trace } from '@opentelemetry/api';
 import type { JsonSchema } from './graph.js';
 import { memoryMetadataSubjects, type HostedMemoryFilter, type HostedMemoryItem, type HostedMemoryMatch, type HostedMemoryPort } from './memory.js';
@@ -160,7 +161,7 @@ const textOutput = (content: unknown): Record<string, unknown> | undefined => {
   try { return { result: JSON.parse(raw) as unknown }; } catch { return { result: raw }; }
 };
 
-export class HttpMcpPort implements McpPort {
+export class HttpMcpPort implements McpPort, McpDiscoveryPort {
   constructor(private readonly environment: Readonly<Record<string, string | undefined>> = process.env, private readonly credentials: McpCredentialLookup = envMcpCredentials(environment)) {}
   async invoke(installation: Installation & { tenantId?: string }, capability: string, args: Record<string, unknown>, effectId: string, deadline: string): Promise<{ outcome: 'succeeded' | 'not-dispatched' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown> }> {
     if (installation.route !== 'public' || !installation.endpoint) return { outcome: 'not-dispatched' };
@@ -180,6 +181,23 @@ export class HttpMcpPort implements McpPort {
       const output = object(result['structuredContent']) ? result['structuredContent'] : textOutput(result['content']); if (!output) return { outcome: 'unknown-outcome' };
       return { outcome: 'succeeded', output };
     } catch (error) { return reported({ outcome: 'unknown-outcome' as const }, 'ports.mcp')(error); }
+  }
+  async listTools(tenantId: string, installationId: string, endpoint: string, timeoutMs = 10000): Promise<DiscoveredTool[]> {
+    const denied = (): never => { throw Object.assign(new Error('DENIED'), { code: 'DENIED' }); };
+    let url: URL; try { url = new URL(endpoint); } catch { return denied(); }
+    const allowed = (this.environment['WORKFLOW_MCP_ALLOWED_HOSTS'] ?? '').split(',').map((host) => host.trim()).filter(Boolean);
+    if (url.protocol !== 'https:' || url.username || url.password || !allowed.includes(url.hostname)) return denied();
+    const token = await this.credentials.resolve(tenantId, installationId); if (!token) return denied();
+    const requestId = crypto.randomUUID(); let text: string; let streamed: boolean;
+    try {
+      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: requestId, method: 'tools/list' }), signal: AbortSignal.timeout(timeoutMs) });
+      if (!response.ok) throw new Error(`status ${String(response.status)}`);
+      text = await response.text(); streamed = response.headers.get('content-type')?.includes('text/event-stream') ?? false;
+    } catch (error) { reported(undefined, 'ports.mcp.discover')(new Error(error instanceof Error ? error.name : 'DISCOVERY_FAILED')); throw Object.assign(new Error('UNAVAILABLE'), { code: 'UNAVAILABLE' }); }
+    const raw = streamed ? text.split('\n').find((line) => line.startsWith('data:'))?.slice(5).trim() : text;
+    let parsed: unknown; try { parsed = JSON.parse(raw ?? ''); } catch { throw Object.assign(new Error('INVALID'), { code: 'INVALID' }); }
+    if (!object(parsed) || parsed['id'] !== requestId || parsed['error']) throw Object.assign(new Error('INVALID'), { code: 'INVALID' });
+    return parseToolList(parsed['result']);
   }
 }
 

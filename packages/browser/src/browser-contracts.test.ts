@@ -45,6 +45,15 @@ describe('MCP credential command arguments', () => {
   });
 });
 
+describe('discover-tools command arguments', () => {
+  test('accepts an id and a bounded endpoint only', () => {
+    expect(decodeCommandArguments('workflow', 'discover-tools', { id: objectId, endpoint: 'https://mcp.example/mcp' })).toEqual({ id: objectId, endpoint: 'https://mcp.example/mcp' });
+    expect(() => decodeCommandArguments('workflow', 'discover-tools', { id: objectId })).toThrow(BrowserContractError);
+    expect(() => decodeCommandArguments('workflow', 'discover-tools', { id: objectId, endpoint: '' })).toThrow(BrowserContractError);
+    expect(() => decodeCommandArguments('workflow', 'discover-tools', { id: objectId, endpoint: `https://x/${'a'.repeat(2048)}` })).toThrow(BrowserContractError);
+  });
+});
+
 describe('governance command arguments', () => {
   const create = { name: 'Platform', tenantIds: [tenantId], billingTenantId: null };
   const ids = (count: number) => Array.from({ length: count }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);

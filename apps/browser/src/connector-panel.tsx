@@ -6,6 +6,7 @@ import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
 import { isToolNode, mappingFields, toolOwner, toolsOf, type OutputSchemas } from './workflow-model.js';
 import type { PlatformApi, Projection } from './platform-api.js';
 import { McpCredentialPanel } from './mcp-credential-panel.js';
+import { ConnectorDiscovery } from './connector-discovery.js';
 
 interface ConnectorPanelProps {
   api: PlatformApi;
@@ -167,6 +168,7 @@ export function ConnectorPanel({ api, tenantId, draftId, node, nodes, edges, adm
     </>}
     <McpCredentialPanel api={api} tenantId={tenantId} installationIds={choices.filter((item) => item['route'] === 'public').map((item) => String(item['id']))} admin={admin} />
     {admin && <section className="connector-certify">
+      <ConnectorDiscovery api={api} tenantId={tenantId} installationId={newInstallationId} onInstallationId={setNewInstallationId} onCertified={refresh} />
       <label className="field">Installation ID<input value={newInstallationId} onChange={(event) => setNewInstallationId(event.target.value)} placeholder="New ID generated when blank" /></label>
       <label className="field">Certified installation JSON<textarea rows={10} value={manifestText} onChange={(event) => setManifestText(event.target.value)} /></label>
       <button className="button" onClick={() => void certify()}>Certify installation</button>

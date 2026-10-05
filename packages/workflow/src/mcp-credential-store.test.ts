@@ -49,12 +49,14 @@ test('only administrators connect, rotate or disconnect', async () => {
   expect(stored(records)).toBeUndefined();
 });
 
-test('connect is refused for an unknown, uncertified or private installation and for oversize tokens', async () => {
+test('connect is allowed before certification, refused for a private or uncertified installation and for bad tokens', async () => {
   const { records, service } = setup();
-  expect(await code(service.mcpCredential(admin, 'connect', '77777777-7777-4777-8777-777777777777', 0, KEY, 'x'))).toBe('DENIED');
+  expect(await code(service.mcpCredential(admin, 'connect', '77777777-7777-4777-8777-777777777777', 0, KEY, 'x'))).toBe('ok');
   expect(await code(service.mcpCredential(admin, 'connect', INSTALLATION, 0, KEY, 'x'.repeat(4097)))).toBe('INVALID');
   expect(await code(service.mcpCredential(admin, 'connect', INSTALLATION, 0, KEY, ''))).toBe('INVALID');
   records.records.set(`${TENANT}:installation:${INSTALLATION}`, { id: INSTALLATION, kind: 'installation', version: 1, state: 'healthy', data: { ...installation, route: 'private' } });
+  expect(await code(service.mcpCredential(admin, 'connect', INSTALLATION, 0, KEY, 'x'))).toBe('DENIED');
+  records.records.set(`${TENANT}:installation:${INSTALLATION}`, { id: INSTALLATION, kind: 'installation', version: 1, state: 'healthy', data: { ...installation, manifest: { ...installation.manifest, certified: false } } });
   expect(await code(service.mcpCredential(admin, 'connect', INSTALLATION, 0, KEY, 'x'))).toBe('DENIED');
 });
 

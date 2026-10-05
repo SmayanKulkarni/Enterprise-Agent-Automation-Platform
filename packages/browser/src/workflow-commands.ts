@@ -112,6 +112,11 @@ export function workflowCommandHandlers(studio: StudioStore, store: WorkflowStor
       const saved = await service.mcpCredential(command.context, action, installationId, command.expectedVersion, command.idempotencyKey, action === 'disconnect' ? undefined : string(command.arguments['key']));
       return receipt(command, installationId, saved.version, saved.state, saved.digest);
     }])),
+    'workflow.discover-tools': async (command) => {
+      const installationId = id(command.arguments['id']);
+      const tools = await service.discoverTools(command.context, installationId, string(command.arguments['endpoint']));
+      return { ...receipt(command, installationId, 0, 'discovered', command.digest), discovery: { tools } };
+    },
     'workflow.certify': async (command) => {
       const value = command.arguments; const installationId = id(value['id']); const data = record(value['installation']) as unknown as Installation;
       if (Object.keys(data).some((key) => !['route', 'endpoint', 'health', 'manifest'].includes(key)) || !data.manifest || typeof data.manifest !== 'object') fail('INVALID');

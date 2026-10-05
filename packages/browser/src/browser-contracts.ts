@@ -15,7 +15,7 @@ export const COMMANDS = {
   deployment: ['deploy', 'restore', 'teardown'],
   portfolio: ['start-run', 'reset-run', 'publish-evidence', 'score-run'],
   vendor: ['start-assessment', 'decide-assessment', 'supersede-assessment', 'request-grant', 'approve-grant', 'provision-grant', 'revoke-grant', 'expire-grant', 'reconcile-grant'],
-  workflow: ['check', 'publish', 'start', 'approve', 'cancel', 'retire-installation', 'grant', 'certify', 'reconcile', 'enroll', 'rotate', 'revoke', 'provision-webhook-credential', 'rotate-webhook-credential', 'disable-webhook-credential', 'test-webhook', 'import-memory', 'revoke-memory-import', 'withdraw-memory', 'hold-memory', 'release-memory-hold', 'set-memory-expiry', 'delete-memory', 'correct-memory', 'invalidate-memory-source', 'configure-model-settings', 'connect-mcp-credential', 'rotate-mcp-credential', 'disconnect-mcp-credential'],
+  workflow: ['check', 'publish', 'start', 'approve', 'cancel', 'retire-installation', 'grant', 'certify', 'reconcile', 'enroll', 'rotate', 'revoke', 'provision-webhook-credential', 'rotate-webhook-credential', 'disable-webhook-credential', 'test-webhook', 'import-memory', 'revoke-memory-import', 'withdraw-memory', 'hold-memory', 'release-memory-hold', 'set-memory-expiry', 'delete-memory', 'correct-memory', 'invalidate-memory-source', 'configure-model-settings', 'connect-mcp-credential', 'rotate-mcp-credential', 'disconnect-mcp-credential', 'discover-tools'],
   governance: ['create-group', 'add-tenant', 'remove-tenant', 'add-admin', 'remove-admin', 'set-billing-tenant'],
 } as const;
 export type CommandOwner = keyof typeof COMMANDS;
@@ -42,7 +42,7 @@ const argumentKeys: Readonly<Record<string, readonly string[]>> = Object.freeze(
   'workflow.import-memory': ['id', 'sourceDefinitionId'], 'workflow.revoke-memory-import': ['id', 'reason'],
   'workflow.withdraw-memory': ['id', 'reason'], 'workflow.hold-memory': ['id', 'reason'], 'workflow.release-memory-hold': ['id', 'reason'], 'workflow.set-memory-expiry': ['id', 'expiresAt'], 'workflow.delete-memory': ['id', 'reason'],
   'workflow.correct-memory': ['id', 'text'], 'workflow.invalidate-memory-source': ['sourceId'], 'workflow.configure-model-settings': ['id', 'settings'],
-  'workflow.connect-mcp-credential': ['id', 'key'], 'workflow.rotate-mcp-credential': ['id', 'key'], 'workflow.disconnect-mcp-credential': ['id'],
+  'workflow.connect-mcp-credential': ['id', 'key'], 'workflow.rotate-mcp-credential': ['id', 'key'], 'workflow.disconnect-mcp-credential': ['id'], 'workflow.discover-tools': ['id', 'endpoint'],
   'governance.create-group': ['name', 'tenantIds', 'billingTenantId'], 'governance.add-tenant': ['tenantId'], 'governance.remove-tenant': ['tenantId'],
   'governance.add-admin': ['userId'], 'governance.remove-admin': ['userId'], 'governance.set-billing-tenant': ['tenantId'],
 });
@@ -86,6 +86,7 @@ export function decodeCommandArguments(owner: string, name: string, value: unkno
   if ('billingTenantId' in parsed && parsed['billingTenantId'] !== null) id(parsed['billingTenantId']);
   if ('name' in parsed && (typeof parsed['name'] !== 'string' || parsed['name'].trim().length === 0 || parsed['name'].length > 128)) fail();
   if ('key' in parsed && (typeof parsed['key'] !== 'string' || parsed['key'].length === 0 || parsed['key'].length > 4096)) fail();
+  if ('endpoint' in parsed && (typeof parsed['endpoint'] !== 'string' || parsed['endpoint'].length === 0 || parsed['endpoint'].length > 2048)) fail();
   if ('nodeId' in parsed) string(parsed['nodeId']);
   if ('capability' in parsed) string(parsed['capability']);
   if ('disposition' in parsed) oneOf(parsed['disposition'], ['adopt', 'no-effect']);

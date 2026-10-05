@@ -1,3 +1,4 @@
+import type { DiscoveredTool } from './discovery-model.js';
 import { clerkAuthorizationHeader } from '../../../packages/browser/src/clerk-authorization-header.js';
 import { decodeCommandArguments, decodeProjection, decodeSession, decodeTenants, type BrowserProjection, type BrowserSession, type BrowserTenant } from '../../../packages/browser/src/browser-contracts.js';
 
@@ -18,6 +19,7 @@ export interface CommandReceipt {
   issues?: readonly { path: string; code: string; message: string }[];
   enrollmentToken?: string;
   webhookSecret?: string;
+  discovery?: { tools: readonly DiscoveredTool[] };
   webhookTest?: { outcome: 'accepted' | 'invalid-shape' | 'signature' | 'freshness' | 'replay' | 'credential-state' | 'not-found'; runId?: string };
 }
 
@@ -126,8 +128,10 @@ export function commandReceipt(value: unknown): CommandReceipt {
   if (issues !== undefined && (!Array.isArray(issues) || !issues.every((issue: unknown) => issue !== null && typeof issue === 'object' && typeof (issue as Record<string, unknown>)['path'] === 'string' && typeof (issue as Record<string, unknown>)['code'] === 'string'))) throw new PlatformApiError(500);
   const webhookTest = result['webhookTest'];
   if (webhookTest !== undefined && (webhookTest === null || typeof webhookTest !== 'object' || !['accepted', 'invalid-shape', 'signature', 'freshness', 'replay', 'credential-state', 'not-found'].includes(String((webhookTest as Record<string, unknown>)['outcome'])) || (webhookTest as Record<string, unknown>)['runId'] !== undefined && typeof (webhookTest as Record<string, unknown>)['runId'] !== 'string')) throw new PlatformApiError(500);
+  const discovery = result['discovery'];
+  if (discovery !== undefined && (discovery === null || typeof discovery !== 'object' || !Array.isArray((discovery as Record<string, unknown>)['tools']) || !((discovery as Record<string, unknown>)['tools'] as unknown[]).every((tool) => tool !== null && typeof tool === 'object' && typeof (tool as Record<string, unknown>)['name'] === 'string' && Array.isArray((tool as Record<string, unknown>)['fields'])))) throw new PlatformApiError(500);
   const parsedWebhookTest = webhookTest === undefined ? undefined : webhookTest as NonNullable<CommandReceipt['webhookTest']>;
-  return { commandId: result['commandId'], objectId: result['objectId'], revision: result['revision'] as number, state: result['state'], digest: result['digest'], evidenceIds: result['evidenceIds'] as string[], ...(issues ? { issues: issues as { path: string; code: string; message: string }[] } : {}), ...(typeof result['enrollmentToken'] === 'string' ? { enrollmentToken: result['enrollmentToken'] } : {}), ...(typeof result['webhookSecret'] === 'string' ? { webhookSecret: result['webhookSecret'] } : {}), ...(parsedWebhookTest === undefined ? {} : { webhookTest: parsedWebhookTest }) };
+  return { commandId: result['commandId'], objectId: result['objectId'], revision: result['revision'] as number, state: result['state'], digest: result['digest'], evidenceIds: result['evidenceIds'] as string[], ...(issues ? { issues: issues as { path: string; code: string; message: string }[] } : {}), ...(typeof result['enrollmentToken'] === 'string' ? { enrollmentToken: result['enrollmentToken'] } : {}), ...(typeof result['webhookSecret'] === 'string' ? { webhookSecret: result['webhookSecret'] } : {}), ...(parsedWebhookTest === undefined ? {} : { webhookTest: parsedWebhookTest }), ...(discovery === undefined ? {} : { discovery: discovery as NonNullable<CommandReceipt['discovery']> }) };
 }
 
 function record(value: unknown): Record<string, unknown> {

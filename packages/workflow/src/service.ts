@@ -9,6 +9,7 @@ import { maxMemoryExpiry, memoryExpiry, memoryFingerprint, memoryItemId, redacte
 import type { PublishedDefinition, RunHistoryCursor, WorkflowRecord, WorkflowStore } from './sql.js';
 import type { AgentProgress, EffectData } from './runtime.js';
 import type { McpCredentialCrypto, McpCredentialRecord } from './mcp-credentials.js';
+import type { DiscoveredTool, McpDiscoveryPort } from './mcp-discovery.js';
 import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrouter-connection.js';
 import { DEFAULT_MODEL_SETTINGS, MODEL_SETTINGS_ID, parseModelSettings, type ModelSettings } from './model-settings.js';
 import type { OpenRouterCatalog, OpenRouterModel } from './openrouter-catalog.js';
@@ -204,7 +205,7 @@ const judgmentModelIssues = (node: GraphNode, path: string, decisions: readonly 
 };
 
 export class WorkflowService {
-  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation, tenantId: string) => boolean | Promise<boolean> = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }, private readonly openRouterCatalog?: OpenRouterCatalog, private readonly mcpCrypto?: McpCredentialCrypto) {}
+  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation, tenantId: string) => boolean | Promise<boolean> = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }, private readonly openRouterCatalog?: OpenRouterCatalog, private readonly mcpCrypto?: McpCredentialCrypto, private readonly mcpDiscovery?: McpDiscoveryPort) {}
 
   private async providerIssues(context: ExecutionContext, draft: GraphDraft): Promise<GraphIssue[]> {
     const openRouterNode = (kind: string): boolean => draft.nodes.some((node) => node.kind === kind && node.config['provider'] === 'openrouter');
@@ -253,12 +254,20 @@ export class WorkflowService {
     return { version: result.replayed ? expectedVersion + 1 : expectedVersion + 1, state };
   }
 
+  async discoverTools(context: ExecutionContext, installationId: string, endpoint: string): Promise<DiscoveredTool[]> {
+    await this.store.assertProfile(context, 'admin');
+    const discovery = this.mcpDiscovery; if (!discovery) throw Object.assign(new Error('FEATURE_NOT_READY'), { code: 'FEATURE_NOT_READY' });
+    const credentialId = id(installationId).toLowerCase();
+    try { const url = new URL(endpoint); if (url.protocol !== 'https:' || url.username || url.password || url.hash) fail('INVALID'); } catch { fail('INVALID'); }
+    return discovery.listTools(String(context.tenantId), credentialId, endpoint);
+  }
+
   async mcpCredential(context: ExecutionContext, action: 'connect' | 'rotate' | 'disconnect', installationId: string, expectedVersion: number, key: string, secret?: string): Promise<{ version: number; state: string; digest: string }> {
     await this.store.assertProfile(context, 'admin');
     const crypto = this.mcpCrypto; if (!crypto) throw Object.assign(new Error('FEATURE_NOT_READY'), { code: 'FEATURE_NOT_READY' });
     const credentialId = id(installationId).toLowerCase(); const tenant = String(context.tenantId);
     const installation = await this.store.read<Installation>(context, 'installation', credentialId);
-    if (!installation || installation.state !== 'healthy' || installation.data.route !== 'public' || !installation.data.manifest.certified) throw Object.assign(new Error('DENIED'), { code: 'DENIED' });
+    if (installation && (installation.state !== 'healthy' || installation.data.route !== 'public' || !installation.data.manifest.certified)) throw Object.assign(new Error('DENIED'), { code: 'DENIED' });
     let data: McpCredentialRecord; let state: string; let requestDigest: string;
     if (action === 'disconnect') { data = { installationId: credentialId, enabled: false }; state = 'disabled'; requestDigest = await digest({ action, installationId: credentialId }); }
     else {

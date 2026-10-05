@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { PlatformApi, PlatformApiError, describeError, errorRef, lastCorrelationId, withRef } from './platform-api.js';
+import { PlatformApi, PlatformApiError, commandReceipt, describeError, errorRef, lastCorrelationId, withRef } from './platform-api.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -131,5 +131,19 @@ describe('describeError', () => {
     expect(describeError(new TypeError('Failed to fetch'))).toBe('unavailable');
     expect(describeError(new SyntaxError('Unexpected token'), { write: true })).toBe('unknown');
     expect(describeError(new TypeError('Failed to fetch'), { write: true })).toBe('unknown');
+  });
+});
+
+describe('discovery receipts', () => {
+  const base = { commandId: 'c', objectId: 'o', revision: 0, state: 'discovered', digest: 'd', evidenceIds: [] };
+
+  test('a receipt carries the discovered tools', () => {
+    const tools = [{ name: 'ping', risk: 'R3', fields: [] }];
+    expect(commandReceipt({ ...base, discovery: { tools } }).discovery).toEqual({ tools });
+    expect(commandReceipt(base).discovery).toBeUndefined();
+  });
+
+  test.each([[{ tools: 'nope' }], [{ tools: [{ risk: 'R3', fields: [] }] }], [null]])('a malformed discovery %j is refused', (discovery) => {
+    expect(() => commandReceipt({ ...base, discovery })).toThrow(PlatformApiError);
   });
 });
