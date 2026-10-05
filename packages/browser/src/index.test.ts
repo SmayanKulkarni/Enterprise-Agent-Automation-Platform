@@ -473,6 +473,22 @@ test('a tenant command emits command.executed with the outcome, actor and object
   expect(events('command.executed')).toEqual([expect.objectContaining({ tenant_id: tenantId, owner: 'workflow', name: 'check', outcome: 'ok', actor_user_id: userId, object_id: objectId })]);
 });
 
+test('MCP credential commands route through the tenant command route while the connection route still resolves', async () => {
+  const { points } = observe();
+  const objectId = '88888888-8888-4888-8888-888888888888';
+  const handler = vi.fn(() => Promise.resolve({ objectId, revision: 1 }));
+  const body = { messageId: correlation, contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: '2026-01-01T00:00:00.000Z', tenantId, correlationId: correlation, sender: 'platform-browser', classification: 'restricted-operational', payload: { expectedVersion: 0, arguments: { id: objectId, key: 'pasted-token' } } };
+  const browser = transport({ commands: { 'workflow.connect-mcp-credential': handler }, connections: () => Promise.resolve({}) });
+  const response = await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenantId}/commands/workflow/connect-mcp-credential`, headers: { ...commandHeaders, 'if-match': '0' }, body: new TextEncoder().encode(JSON.stringify(body)) });
+  const connection = await browser.handle({ method: 'POST', path: `/api/v1/tenants/${tenantId}/openrouter-connection`, headers: { authorization: `Bearer ${userId}`, origin, 'content-type': 'application/json', 'idempotency-key': commandHeaders['idempotency-key'] }, body: new TextEncoder().encode('{"action":"verify","expectedVersion":0}') });
+
+  expect(response.status).toBe(200);
+  expect(connection.status).toBe(200);
+  expect(handler).toHaveBeenCalledWith(expect.objectContaining({ owner: 'workflow', name: 'connect-mcp-credential', arguments: { id: objectId, key: 'pasted-token' } }));
+  expect(new TextDecoder().decode(response.body)).not.toContain('pasted-token');
+  expect((await points('http.server.request.duration')).map((point) => point.attributes['http.route']).sort()).toEqual(['/api/v1/tenants/:tenantId/commands/:owner/:name', '/api/v1/tenants/:tenantId/openrouter-connection']);
+});
+
 test('a failing tenant command emits command.executed with the error code', async () => {
   observe();
   const body = { messageId: correlation, contract: 'browser.v1', contractVersion: '1.0.0', occurredAt: '2026-01-01T00:00:00.000Z', tenantId, correlationId: correlation, sender: 'platform-browser', classification: 'restricted-operational', payload: { expectedVersion: 0, arguments: { id: '88888888-8888-4888-8888-888888888888' } } };

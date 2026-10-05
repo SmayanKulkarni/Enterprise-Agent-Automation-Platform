@@ -6,7 +6,7 @@ import { AzureSqlWorkflowStore } from '../../workflow/src/sql.js';
 import { WorkflowService, deliverWebhook, type Scheduler, type WebhookDelivery } from '../../workflow/src/service.js';
 import { openRouterCatalog } from '../../workflow/src/openrouter-catalog.js';
 import { HttpEmbeddingPort, HttpMcpPort, HttpModelPort, UpstashVectorMemoryPort } from '../../workflow/src/ports.js';
-import { envMcpCredentials } from '../../workflow/src/mcp-credentials.js';
+import { McpCredentialCrypto, envMcpCredentials, storedMcpCredentials } from '../../workflow/src/mcp-credentials.js';
 import { WorkflowWorker } from '../../workflow/src/runtime.js';
 import { localScheduler, recoverLocalRuns } from './local-scheduler.js';
 import { OpenRouterConnectionCrypto } from '../../workflow/src/openrouter-connection.js';
@@ -49,7 +49,8 @@ export function localBrowserTransport(environment: Readonly<Record<string, strin
   const workflowStore = connectionString ? new AzureSqlWorkflowStore(connectionString) : undefined;
   const providers = [environment['AZURE_OPENAI_ENDPOINT'] && environment['AZURE_OPENAI_API_KEY'] ? 'azure-openai' : undefined, environment['WORKFLOW_OPENROUTER_WRAPPING_KEY'] && environment['WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION'] ? 'openrouter' : undefined].filter((provider): provider is string => provider !== undefined);
   const allowedMcpHosts = new Set((environment['WORKFLOW_MCP_ALLOWED_HOSTS'] ?? '').split(',').map((host) => host.trim()).filter(Boolean));
-  const mcpCredentials = envMcpCredentials(environment);
+  const mcpCrypto = McpCredentialCrypto.fromEnvironment(environment);
+  const mcpCredentials = workflowStore && mcpCrypto ? storedMcpCredentials(workflowStore, mcpCrypto, envMcpCredentials(environment)) : envMcpCredentials(environment);
   const connectorReady = async (installation: { id: string; route: string; endpoint?: string; tokenHash?: string }, tenantId: string): Promise<boolean> => {
     if (installation.route === 'private') return Boolean(installation.tokenHash);
     try { return Boolean(installation.endpoint && allowedMcpHosts.has(new URL(installation.endpoint).hostname) && await mcpCredentials.resolve(tenantId, installation.id)); } catch { return false; }
@@ -60,11 +61,11 @@ export function localBrowserTransport(environment: Readonly<Record<string, strin
   const model = new HttpModelPort(environment, workflowStore, crypto);
   const costCeiling = environment['GOVERNANCE_ASSISTANT_MAX_COST']?.trim();
   const maxCost = costCeiling ? Number(costCeiling) : undefined;
-  const runner = scheduler ?? (environment['PLATFORM_LOCAL_RUNNER'] === 'true' && workflowStore ? localScheduler(new WorkflowWorker(workflowStore, model, new HttpMcpPort(environment), memory), workflowStore) : undefined);
+  const runner = scheduler ?? (environment['PLATFORM_LOCAL_RUNNER'] === 'true' && workflowStore ? localScheduler(new WorkflowWorker(workflowStore, model, new HttpMcpPort(environment, mcpCredentials), memory), workflowStore) : undefined);
   const localTenants = (environment['PLATFORM_LOCAL_RECOVER_TENANTS'] ?? '').split(',').map((tenant) => tenant.trim()).filter(Boolean);
   if (workflowStore && runner && !scheduler && environment['PLATFORM_LOCAL_RUNNER'] === 'true') void recoverLocalRuns(workflowStore, runner, localTenants).catch((error: unknown) => report(error, { site: 'localHost.recoverRuns' }));
   if (workflowStore && runner) webhookIngress = (request) => deliverWebhook(workflowStore, runner, { tenantId: request.tenantId, definitionId: request.definitionId, eventId: request.headers['x-workflow-event-id'], timestamp: request.headers['x-workflow-timestamp'], signature: request.headers['x-workflow-signature'], body: request.body, headers: request.headers, ...(environment[`WORKFLOW_WEBHOOK_SECRET_${request.definitionId.replaceAll('-', '').toUpperCase()}`] === undefined ? {} : { fallbackSecret: environment[`WORKFLOW_WEBHOOK_SECRET_${request.definitionId.replaceAll('-', '').toUpperCase()}`] as string }) });
-  const workflow = connectionString && workflowStore ? new WorkflowService(new AzureSqlStudioStore(connectionString), workflowStore, runner, [], providers, connectorReady, (tenantId) => memory.enabled(tenantId) ? memory.readiness : 'disabled', memory, crypto ? { crypto, verify: async (key) => (await fetch('https://openrouter.ai/api/v1/key', { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000) })).ok } : undefined, catalog) : undefined;
+  const workflow = connectionString && workflowStore ? new WorkflowService(new AzureSqlStudioStore(connectionString), workflowStore, runner, [], providers, connectorReady, (tenantId) => memory.enabled(tenantId) ? memory.readiness : 'disabled', memory, crypto ? { crypto, verify: async (key) => (await fetch('https://openrouter.ai/api/v1/key', { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000) })).ok } : undefined, catalog, mcpCrypto) : undefined;
   const commands = workflow && workflowStore ? workflowCommandHandlers(new AzureSqlStudioStore(connectionString!), workflowStore, workflow) : undefined;
   const read = workflow ? (input: BrowserProjection) => input.collection.startsWith('workflow-') || input.collection === 'connector-installations' || input.collection.startsWith('openrouter-') ? workflow.projection(input.context, input.collection, input.id, { ...(input.pageSize === undefined ? {} : { pageSize: input.pageSize }), ...(input.cursor === undefined ? {} : { cursor: input.cursor }) }) : projections(input) : projections;
   return new BrowserV1Transport({ allowedOrigins: authorizedParties, onError: report, clerk, identity, projections: read, ...(commands ? { commands } : {}), ...(governanceStore ? { groupCommands: governanceCommandHandlers(governanceStore) } : {}), groupProjections: (input) => governance.read(input.context, input.collection, input.query), assistant: ({ context, body }) => askAssistant({ service: governance, model, catalog, maxCost, now: Date.now }, context, body), ...(workflow ? { connections: async (input) => { if (!crypto) throw new AppError('FEATURE_NOT_READY'); const result = await workflow.openRouterConnection(input.context, input.action, input.expectedVersion, input.idempotencyKey, await digest({ action: input.action, key: input.key ? crypto.digest(String(input.context.tenantId), input.key) : undefined }), input.key); return { commandId: input.idempotencyKey, objectId: '00000000-0000-5000-8000-000000000002', revision: result.version, state: result.state, digest: 'redacted', evidenceIds: [] }; } } : {}) });

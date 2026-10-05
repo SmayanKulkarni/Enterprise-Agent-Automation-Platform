@@ -8,6 +8,7 @@ import type { ConsolidationRecord } from './memory-consolidation.js';
 import { maxMemoryExpiry, memoryExpiry, memoryFingerprint, memoryItemId, redacted, type HostedMemoryPort, type MemoryImport, type MemoryItem } from './memory.js';
 import type { PublishedDefinition, RunHistoryCursor, WorkflowRecord, WorkflowStore } from './sql.js';
 import type { AgentProgress, EffectData } from './runtime.js';
+import type { McpCredentialCrypto, McpCredentialRecord } from './mcp-credentials.js';
 import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrouter-connection.js';
 import { DEFAULT_MODEL_SETTINGS, MODEL_SETTINGS_ID, parseModelSettings, type ModelSettings } from './model-settings.js';
 import type { OpenRouterCatalog, OpenRouterModel } from './openrouter-catalog.js';
@@ -203,7 +204,7 @@ const judgmentModelIssues = (node: GraphNode, path: string, decisions: readonly 
 };
 
 export class WorkflowService {
-  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation, tenantId: string) => boolean | Promise<boolean> = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }, private readonly openRouterCatalog?: OpenRouterCatalog) {}
+  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation, tenantId: string) => boolean | Promise<boolean> = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }, private readonly openRouterCatalog?: OpenRouterCatalog, private readonly mcpCrypto?: McpCredentialCrypto) {}
 
   private async providerIssues(context: ExecutionContext, draft: GraphDraft): Promise<GraphIssue[]> {
     const openRouterNode = (kind: string): boolean => draft.nodes.some((node) => node.kind === kind && node.config['provider'] === 'openrouter');
@@ -250,6 +251,23 @@ export class WorkflowService {
     }
     const result = await this.store.write(context, 'admin', 'openrouter-connection', connectionId, expectedVersion, state, data, key, requestDigest, { commandId: key, objectId: connectionId, revision: expectedVersion + 1, state, digest: await digest({ provider: data.provider, enabled: data.enabled, verifiedAt: data.verifiedAt }), evidenceIds: [] });
     return { version: result.replayed ? expectedVersion + 1 : expectedVersion + 1, state };
+  }
+
+  async mcpCredential(context: ExecutionContext, action: 'connect' | 'rotate' | 'disconnect', installationId: string, expectedVersion: number, key: string, secret?: string): Promise<{ version: number; state: string; digest: string }> {
+    await this.store.assertProfile(context, 'admin');
+    const crypto = this.mcpCrypto; if (!crypto) throw Object.assign(new Error('FEATURE_NOT_READY'), { code: 'FEATURE_NOT_READY' });
+    const credentialId = id(installationId).toLowerCase(); const tenant = String(context.tenantId);
+    const installation = await this.store.read<Installation>(context, 'installation', credentialId);
+    if (!installation || installation.state !== 'healthy' || installation.data.route !== 'public' || !installation.data.manifest.certified) throw Object.assign(new Error('DENIED'), { code: 'DENIED' });
+    let data: McpCredentialRecord; let state: string; let requestDigest: string;
+    if (action === 'disconnect') { data = { installationId: credentialId, enabled: false }; state = 'disabled'; requestDigest = await digest({ action, installationId: credentialId }); }
+    else {
+      if (typeof secret !== 'string' || secret.length === 0 || secret.length > 4096) fail('INVALID');
+      data = { installationId: credentialId, enabled: true, key: crypto.seal(tenant, credentialId, secret as string), digest: crypto.digest(tenant, credentialId, secret as string), connectedAt: new Date().toISOString() }; state = 'active'; requestDigest = await digest({ action, installationId: credentialId, secret: data.digest });
+    }
+    const receiptDigest = await digest({ installationId: credentialId, enabled: data.enabled, ...(data.connectedAt ? { connectedAt: data.connectedAt } : {}) });
+    await this.store.write(context, 'admin', 'mcp-credential', credentialId, expectedVersion, state, data, key, requestDigest, { commandId: key, objectId: credentialId, revision: expectedVersion + 1, state, digest: receiptDigest, evidenceIds: [] });
+    return { version: expectedVersion + 1, state, digest: receiptDigest };
   }
 
   private async assertModelSettingsUsable(context: ExecutionContext, settings: ModelSettings): Promise<void> {
@@ -554,6 +572,7 @@ export class WorkflowService {
     else if (collection === 'workflow-grants') records = (await this.store.list<CapabilityGrant>(context, 'grant')).map((item) => ({ id: item.id, version: item.version, state: item.state, ...item.data }));
     else if (collection === 'workflow-webhook-credentials') records = (await this.store.list<WebhookCredential>(context, 'webhook-credential')).map((item) => ({ id: item.id, version: item.version, state: item.state, definitionId: item.data.definitionId, enabled: item.data.enabled, rotatedAt: item.data.rotatedAt, ...(item.data.previousExpiresAt ? { previousExpiresAt: item.data.previousExpiresAt } : {}) }));
     else if (collection === 'openrouter-connections') records = (await this.store.list<OpenRouterConnection>(context, 'openrouter-connection')).map((item) => ({ id: item.id, version: item.version, state: item.state, provider: item.data.provider, enabled: item.data.enabled, ...(item.data.verifiedAt ? { verifiedAt: item.data.verifiedAt } : {}) }));
+    else if (collection === 'workflow-mcp-credentials') records = (await this.store.list<McpCredentialRecord>(context, 'mcp-credential')).map((item) => ({ id: item.id, version: item.version, state: item.state, enabled: item.data.enabled, ...(item.data.connectedAt ? { connectedAt: item.data.connectedAt } : {}) }));
     else if (collection === 'openrouter-models') {
       const catalog = this.openRouterCatalog; const failed = (error: unknown): undefined => { report(error, { site: 'service.catalog' }); return undefined; };
       const [models, embeddingModels, decisionModels] = catalog ? await Promise.all([catalog.chat().catch(failed), catalog.embedding().catch(failed), catalog.decisions().catch(failed)]) : [undefined, undefined, undefined];

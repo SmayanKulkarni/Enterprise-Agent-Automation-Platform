@@ -6,7 +6,7 @@ import type { WorkflowDefinition } from './graph.js';
 import type { EffectData } from './runtime.js';
 import type { WorkflowRun } from './service.js';
 
-export type RecordKind = 'installation' | 'run' | 'effect' | 'summary' | 'grant' | 'circuit' | 'webhook-credential' | 'webhook-dispatch' | 'memory-import' | 'memory-item' | 'memory-lifecycle' | 'memory-retrieval' | 'memory-consolidation' | 'openrouter-connection' | 'model-settings';
+export type RecordKind = 'installation' | 'run' | 'effect' | 'summary' | 'grant' | 'circuit' | 'webhook-credential' | 'webhook-dispatch' | 'memory-import' | 'memory-item' | 'memory-lifecycle' | 'memory-retrieval' | 'memory-consolidation' | 'openrouter-connection' | 'model-settings' | 'mcp-credential';
 export interface WorkflowRecord<T = Record<string, unknown>> { id: string; kind: RecordKind; version: number; state: string; data: T; }
 export interface RunHistoryCursor { createdAt: string; id: string; }
 export interface RunHistoryRecord<T = Record<string, unknown>> extends WorkflowRecord<T> { createdAt: string; }

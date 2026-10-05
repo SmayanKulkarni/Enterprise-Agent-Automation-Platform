@@ -2,6 +2,7 @@ import * as df from 'durable-functions';
 import type { InvocationContext } from '@azure/functions';
 import { AzureSqlWorkflowStore } from '../../../packages/workflow/src/sql.js';
 import { WorkflowWorker, type StepResult } from '../../../packages/workflow/src/runtime.js';
+import { McpCredentialCrypto, envMcpCredentials, storedMcpCredentials } from '../../../packages/workflow/src/mcp-credentials.js';
 import { HttpEmbeddingPort, HttpMcpPort, HttpModelPort, UpstashVectorMemoryPort } from '../../../packages/workflow/src/ports.js';
 import { nextTimerAt } from '../../../packages/workflow/src/timers.js';
 import { OpenRouterConnectionCrypto } from '../../../packages/workflow/src/openrouter-connection.js';
@@ -15,7 +16,7 @@ const logged = <I extends { tenantId: string; runId?: string }, O>(site: string,
 });
 
 const store = (): AzureSqlWorkflowStore => new AzureSqlWorkflowStore(process.env['AZURE_SQL_CONNECTION_STRING'] ?? '');
-const worker = (): WorkflowWorker => { const workflowStore = store(); const crypto = process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY'] && process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION'] ? OpenRouterConnectionCrypto.fromEnvironment(process.env) : undefined; return new WorkflowWorker(workflowStore, new HttpModelPort(process.env, workflowStore, crypto), new HttpMcpPort(), new UpstashVectorMemoryPort(process.env, new HttpEmbeddingPort(process.env, workflowStore, crypto))); };
+const worker = (): WorkflowWorker => { const workflowStore = store(); const crypto = process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY'] && process.env['WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION'] ? OpenRouterConnectionCrypto.fromEnvironment(process.env) : undefined; const mcpCrypto = McpCredentialCrypto.fromEnvironment(process.env); return new WorkflowWorker(workflowStore, new HttpModelPort(process.env, workflowStore, crypto), new HttpMcpPort(process.env, mcpCrypto ? storedMcpCredentials(workflowStore, mcpCrypto, envMcpCredentials()) : envMcpCredentials()), new UpstashVectorMemoryPort(process.env, new HttpEmbeddingPort(process.env, workflowStore, crypto))); };
 
 df.app.activity('workflowStep', { handler: logged('workflowStep', async (input: Input & { nodeId: string }) => worker().step(input.tenantId, input.runId, input.definitionId, input.nodeId)) });
 df.app.activity('workflowExpire', { handler: logged('workflowExpire', async (input: Input & { nodeId: string }) => worker().expire(input.tenantId, input.runId, input.nodeId)) });

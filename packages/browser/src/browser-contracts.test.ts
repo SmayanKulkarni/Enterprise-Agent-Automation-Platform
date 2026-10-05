@@ -27,6 +27,24 @@ describe('browser contracts', () => {
   });
 });
 
+describe('MCP credential command arguments', () => {
+  test('accepts connect and rotate with a bounded key and disconnect with an id only', () => {
+    expect(decodeCommandArguments('workflow', 'connect-mcp-credential', { id: objectId, key: 'pasted' })).toEqual({ id: objectId, key: 'pasted' });
+    expect(decodeCommandArguments('workflow', 'rotate-mcp-credential', { id: objectId, key: 'pasted' })).toEqual({ id: objectId, key: 'pasted' });
+    expect(decodeCommandArguments('workflow', 'disconnect-mcp-credential', { id: objectId })).toEqual({ id: objectId });
+  });
+
+  test.each([
+    ['an empty key', 'connect-mcp-credential', { id: objectId, key: '' }],
+    ['an oversize key', 'rotate-mcp-credential', { id: objectId, key: 'x'.repeat(4097) }],
+    ['a missing key', 'connect-mcp-credential', { id: objectId }],
+    ['a key on disconnect', 'disconnect-mcp-credential', { id: objectId, key: 'pasted' }],
+    ['a secret field', 'connect-mcp-credential', { id: objectId, key: 'pasted', secret: 'nope' }],
+  ])('rejects %s', (_name, command, value) => {
+    expect(() => decodeCommandArguments('workflow', command, value)).toThrow(BrowserContractError);
+  });
+});
+
 describe('governance command arguments', () => {
   const create = { name: 'Platform', tenantIds: [tenantId], billingTenantId: null };
   const ids = (count: number) => Array.from({ length: count }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);

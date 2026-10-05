@@ -107,6 +107,11 @@ export function workflowCommandHandlers(studio: StudioStore, store: WorkflowStor
       const saved = await service.configureModelSettings(command.context, command.arguments['settings'], command.expectedVersion, command.idempotencyKey, command.digest);
       return receipt(command, settingsId, saved.version, saved.state, command.digest);
     },
+    ...Object.fromEntries((['connect', 'rotate', 'disconnect'] as const).map((action) => [`workflow.${action}-mcp-credential`, async (command: BrowserCommand) => {
+      const installationId = id(command.arguments['id']);
+      const saved = await service.mcpCredential(command.context, action, installationId, command.expectedVersion, command.idempotencyKey, action === 'disconnect' ? undefined : string(command.arguments['key']));
+      return receipt(command, installationId, saved.version, saved.state, saved.digest);
+    }])),
     'workflow.certify': async (command) => {
       const value = command.arguments; const installationId = id(value['id']); const data = record(value['installation']) as unknown as Installation;
       if (Object.keys(data).some((key) => !['route', 'endpoint', 'health', 'manifest'].includes(key)) || !data.manifest || typeof data.manifest !== 'object') fail('INVALID');

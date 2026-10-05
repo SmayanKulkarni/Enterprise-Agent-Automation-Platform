@@ -1,4 +1,4 @@
-export const BROWSER_COLLECTIONS = ['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'agent-teams', 'workflows', 'skills', 'test-runs', 'reviews', 'versions', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants', 'workflow-drafts', 'workflow-revisions', 'workflow-definitions', 'workflow-runs', 'workflow-grants', 'workflow-webhook-credentials', 'workflow-memory-imports', 'workflow-memory-items', 'workflow-memory-readiness', 'workflow-model-settings', 'connector-installations', 'openrouter-connections', 'openrouter-models'] as const;
+export const BROWSER_COLLECTIONS = ['cases', 'interventions', 'capabilities', 'installations', 'memory', 'evaluations', 'improvements', 'packages', 'agent-teams', 'workflows', 'skills', 'test-runs', 'reviews', 'versions', 'operations', 'deployments', 'readiness', 'vendor-assessments', 'access-grants', 'workflow-drafts', 'workflow-revisions', 'workflow-definitions', 'workflow-runs', 'workflow-grants', 'workflow-webhook-credentials', 'workflow-memory-imports', 'workflow-memory-items', 'workflow-memory-readiness', 'workflow-model-settings', 'workflow-mcp-credentials', 'connector-installations', 'openrouter-connections', 'openrouter-models'] as const;
 export type BrowserCollection = typeof BROWSER_COLLECTIONS[number];
 export const GROUP_COLLECTIONS = ['members', 'overview', 'series', 'workflows', 'approvals', 'health', 'logs', 'trace'] as const;
 export const GROUP_QUERY_KEYS = ['range', 'tenant', 'panel', 'level', 'event', 'run', 'cursor'] as const;
@@ -15,7 +15,7 @@ export const COMMANDS = {
   deployment: ['deploy', 'restore', 'teardown'],
   portfolio: ['start-run', 'reset-run', 'publish-evidence', 'score-run'],
   vendor: ['start-assessment', 'decide-assessment', 'supersede-assessment', 'request-grant', 'approve-grant', 'provision-grant', 'revoke-grant', 'expire-grant', 'reconcile-grant'],
-  workflow: ['check', 'publish', 'start', 'approve', 'cancel', 'retire-installation', 'grant', 'certify', 'reconcile', 'enroll', 'rotate', 'revoke', 'provision-webhook-credential', 'rotate-webhook-credential', 'disable-webhook-credential', 'test-webhook', 'import-memory', 'revoke-memory-import', 'withdraw-memory', 'hold-memory', 'release-memory-hold', 'set-memory-expiry', 'delete-memory', 'correct-memory', 'invalidate-memory-source', 'configure-model-settings'],
+  workflow: ['check', 'publish', 'start', 'approve', 'cancel', 'retire-installation', 'grant', 'certify', 'reconcile', 'enroll', 'rotate', 'revoke', 'provision-webhook-credential', 'rotate-webhook-credential', 'disable-webhook-credential', 'test-webhook', 'import-memory', 'revoke-memory-import', 'withdraw-memory', 'hold-memory', 'release-memory-hold', 'set-memory-expiry', 'delete-memory', 'correct-memory', 'invalidate-memory-source', 'configure-model-settings', 'connect-mcp-credential', 'rotate-mcp-credential', 'disconnect-mcp-credential'],
   governance: ['create-group', 'add-tenant', 'remove-tenant', 'add-admin', 'remove-admin', 'set-billing-tenant'],
 } as const;
 export type CommandOwner = keyof typeof COMMANDS;
@@ -42,6 +42,7 @@ const argumentKeys: Readonly<Record<string, readonly string[]>> = Object.freeze(
   'workflow.import-memory': ['id', 'sourceDefinitionId'], 'workflow.revoke-memory-import': ['id', 'reason'],
   'workflow.withdraw-memory': ['id', 'reason'], 'workflow.hold-memory': ['id', 'reason'], 'workflow.release-memory-hold': ['id', 'reason'], 'workflow.set-memory-expiry': ['id', 'expiresAt'], 'workflow.delete-memory': ['id', 'reason'],
   'workflow.correct-memory': ['id', 'text'], 'workflow.invalidate-memory-source': ['sourceId'], 'workflow.configure-model-settings': ['id', 'settings'],
+  'workflow.connect-mcp-credential': ['id', 'key'], 'workflow.rotate-mcp-credential': ['id', 'key'], 'workflow.disconnect-mcp-credential': ['id'],
   'governance.create-group': ['name', 'tenantIds', 'billingTenantId'], 'governance.add-tenant': ['tenantId'], 'governance.remove-tenant': ['tenantId'],
   'governance.add-admin': ['userId'], 'governance.remove-admin': ['userId'], 'governance.set-billing-tenant': ['tenantId'],
 });
@@ -84,6 +85,7 @@ export function decodeCommandArguments(owner: string, name: string, value: unkno
   if ('tenantIds' in parsed) { const ids = parsed['tenantIds']; if (!Array.isArray(ids) || ids.length < 1 || ids.length > MAX_GROUP_TENANTS || new Set(ids.map((value) => id(value))).size !== ids.length) fail(); }
   if ('billingTenantId' in parsed && parsed['billingTenantId'] !== null) id(parsed['billingTenantId']);
   if ('name' in parsed && (typeof parsed['name'] !== 'string' || parsed['name'].trim().length === 0 || parsed['name'].length > 128)) fail();
+  if ('key' in parsed && (typeof parsed['key'] !== 'string' || parsed['key'].length === 0 || parsed['key'].length > 4096)) fail();
   if ('nodeId' in parsed) string(parsed['nodeId']);
   if ('capability' in parsed) string(parsed['capability']);
   if ('disposition' in parsed) oneOf(parsed['disposition'], ['adopt', 'no-effect']);
