@@ -188,3 +188,7 @@ Deviations and notes:
 - Route inventory lists the new read route as `ready: false`, like the group command routes.
 - `add-admin` counts only `status = current` towards the 20-admin limit; a re-added revoked admin updates the existing row (`epoch + 1`, `granted_by` = the acting admin).
 - No new operator statement: `platform_governance_browser` membership from ticket 02 covers the four new procedures.
+
+### Follow-up (2026-09-30)
+
+Migrations applied and `sql:verify` passed against the dev database; the "no SQL ran" note above is resolved.

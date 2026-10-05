@@ -227,3 +227,7 @@ Deviations:
 - `identity.read_group_session` returns two recordsets of different shapes, which T-SQL `INSERT ... EXEC` cannot capture. The verify script therefore checks it statically (existence, grant, definition filters on current admin and active group). The list procedure and the fence are checked behaviourally in a rolled-back transaction.
 - The in-memory `authenticate` proof checks moved into a private `proofUser` helper so `authenticateGroup` reuses them.
 - Suspended group, revoked admin, non-admin and suspended-group fence cases are covered by the verify script only, not by the JS tests.
+
+### Follow-up (2026-09-30)
+
+Migrations applied and `sql:verify` passed against the dev database; the "no SQL ran" note above is resolved.

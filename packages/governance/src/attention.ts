@@ -1,14 +1,14 @@
 import { toCount, type Numeric } from './reads.js';
 
-export interface PendingApprovalRow { tenantId: string; workspace: string; runId: string; runVersion: Numeric; definitionRevision: Numeric; workflowName: string | null; waitingJson: string | null; waitingKind: string | null }
+export interface PendingApprovalRow { tenantId: string; workspace: string; runId: string; runVersion: Numeric; definitionRevision: Numeric; workflowName: string | null; runLabel: string | null; waitingJson: string | null; waitingKind: string | null }
 export interface HealthRows {
   connectors: { tenantId: string; workspace: string; state: string; installations: Numeric }[];
   circuits: { tenantId: string; workspace: string; key: string | null; state: string; since: Date }[];
   reconciliation: { tenantId: string; workspace: string; runId: string; since: Date }[];
 }
 export interface Approval {
-  tenantId: string; workspace: string; runId: string; runVersion: number; workflowName: string; revision: number; nodeId: string; kind: 'step' | 'tool';
-  capability: string; installationId: string; target: string; arguments: { name: string; type: string }[]; argumentsDigest: string; requestedAt?: string; expiresAt: string; bindingDigest: string;
+  tenantId: string; workspace: string; runId: string; runVersion: number; workflowName: string; runLabel?: string; revision: number; nodeId: string; kind: 'step' | 'tool';
+  capability: string; installationId: string; target: string; arguments: { name: string; type: string }[]; facts: { name: string; value: string }[]; argumentsDigest: string; requestedAt?: string; expiresAt: string; bindingDigest: string;
 }
 export interface Health {
   connectors: { tenantId: string; workspace: string; healthy: number; offline: number; revoked: number }[];
@@ -22,6 +22,9 @@ const DIGEST = /^[0-9a-f]{64}$/u;
 const CIRCUIT_KEY = /^(model|connector):[A-Za-z0-9._-]{1,64}$/u;
 const ARGUMENT_LIMIT = 100;
 const NAME_LIMIT = 128;
+const LABEL_LIMIT = 120;
+const FACT_LIMIT = 4000;
+const FACT_COUNT = 6;
 const TEXT_LIMIT = 256;
 const UNTITLED = 'Untitled workflow';
 
@@ -38,16 +41,21 @@ const argumentsOf = (value: unknown): { name: string; type: string }[] => (Array
   return name === undefined || type === undefined ? [] : [{ name, type }];
 });
 
+const factsOf = (value: unknown): { name: string; value: string }[] => (Array.isArray(value) ? value.slice(0, FACT_COUNT) : []).flatMap((entry: unknown) => {
+  const name = text(record(entry)?.['name'], NAME_LIMIT); const fact = text(record(entry)?.['value'], FACT_LIMIT);
+  return name === undefined || fact === undefined ? [] : [{ name, value: fact }];
+});
+
 export function projectApproval(row: PendingApprovalRow): Approval | undefined {
   const waiting = record(parse(row.waitingJson)); const review = record(waiting?.['review']);
   const runVersion = safeCount(row.runVersion); const revision = safeCount(row.definitionRevision);
   const nodeId = text(waiting?.['nodeId'], NAME_LIMIT); const bindingDigest = digest(waiting?.['bindingDigest']); const expiresAt = instant(waiting?.['expiresAt']);
   const capability = text(review?.['capability'], TEXT_LIMIT); const installationId = text(review?.['installationId'], NAME_LIMIT); const target = text(review?.['target'], TEXT_LIMIT); const argumentsDigest = digest(review?.['argumentsDigest']);
   if (runVersion === undefined || revision === undefined || nodeId === undefined || bindingDigest === undefined || expiresAt === undefined || capability === undefined || installationId === undefined || target === undefined || argumentsDigest === undefined) return undefined;
-  const requestedAt = instant(waiting?.['requestedAt']);
+  const requestedAt = instant(waiting?.['requestedAt']); const runLabel = row.runLabel?.trim().slice(0, LABEL_LIMIT);
   return {
-    tenantId: row.tenantId, workspace: row.workspace, runId: row.runId, runVersion, workflowName: row.workflowName?.trim().slice(0, NAME_LIMIT) || UNTITLED, revision, nodeId,
-    kind: row.waitingKind === 'agent' ? 'tool' : 'step', capability, installationId, target, arguments: argumentsOf(review?.['arguments']), argumentsDigest,
+    tenantId: row.tenantId, workspace: row.workspace, runId: row.runId, runVersion, workflowName: row.workflowName?.trim().slice(0, NAME_LIMIT) || UNTITLED, ...(runLabel ? { runLabel } : {}), revision, nodeId,
+    kind: row.waitingKind === 'agent' ? 'tool' : 'step', capability, installationId, target, arguments: argumentsOf(review?.['arguments']), facts: factsOf(review?.['facts']), argumentsDigest,
     ...(requestedAt === undefined ? {} : { requestedAt }), expiresAt, bindingDigest,
   };
 }

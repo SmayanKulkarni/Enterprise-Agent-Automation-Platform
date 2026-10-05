@@ -44,8 +44,18 @@ export function workflowCommandHandlers(studio: StudioStore, store: WorkflowStor
     },
     'workflow.approve': async (command) => {
       const value = command.arguments; const runId = id(value['id']); const decision = value['decision']; if (decision !== 'approve' && decision !== 'reject') fail('INVALID');
-      await service.approve(command.context, runId, string(value['bindingDigest']), decision as 'approve' | 'reject', command.expectedVersion, command.idempotencyKey, command.digest);
+      await service.approve(command.context, runId, string(value['bindingDigest']), decision as 'approve' | 'reject', command.expectedVersion, command.idempotencyKey, command.digest, typeof value['reason'] === 'string' ? value['reason'] : value['reason'] === undefined ? undefined : fail('INVALID'));
       return receipt(command, runId, command.expectedVersion + 1, decision as string, string(value['bindingDigest']));
+    },
+    'workflow.cancel': async (command) => {
+      const runId = id(command.arguments['id']);
+      await service.cancel(command.context, runId, command.expectedVersion, command.idempotencyKey, command.digest);
+      return receipt(command, runId, command.expectedVersion + 1, 'cancelled', command.digest);
+    },
+    'workflow.retire-installation': async (command) => {
+      const installationId = id(command.arguments['id']);
+      await service.retire(command.context, installationId, command.expectedVersion, command.idempotencyKey, command.digest);
+      return receipt(command, installationId, command.expectedVersion + 1, 'revoked', command.digest);
     },
     'workflow.grant': async (command) => {
       const value = command.arguments; const draftId = id(value['id']); const installationId = id(value['installationId']);

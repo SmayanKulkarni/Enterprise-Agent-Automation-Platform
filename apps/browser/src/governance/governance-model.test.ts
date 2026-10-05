@@ -77,7 +77,7 @@ describe('timeLeft', () => {
 });
 
 describe('approvalCommand', () => {
-  const row: Approval = { tenantId: 't1', workspace: 'w', runId: 'r1', runVersion: 7, workflowName: 'wf', revision: 1, nodeId: 'n', kind: 'tool', capability: 'c', installationId: 'i', target: 'x', arguments: [], argumentsDigest: 'a'.repeat(64), expiresAt: '2026-01-01T00:00:00.000Z', bindingDigest: 'b'.repeat(64) };
+  const row: Approval = { tenantId: 't1', workspace: 'w', runId: 'r1', runVersion: 7, workflowName: 'wf', revision: 1, nodeId: 'n', kind: 'tool', capability: 'c', installationId: 'i', target: 'x', arguments: [], facts: [], argumentsDigest: 'a'.repeat(64), expiresAt: '2026-01-01T00:00:00.000Z', bindingDigest: 'b'.repeat(64) };
   test('targets the existing workflow approve command with the row version and digest', () => {
     expect(approvalCommand(row, 'reject')).toEqual({ tenantId: 't1', owner: 'workflow', name: 'approve', expectedVersion: 7, arguments: { id: 'r1', bindingDigest: 'b'.repeat(64), decision: 'reject' } });
   });

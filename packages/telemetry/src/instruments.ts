@@ -21,6 +21,7 @@ export const METRICS = {
   'gen_ai.client.operation.duration': { type: 'histogram', unit: 's', buckets: SECONDS, labels: [...GEN_AI, 'error.type'] },
   'gen_ai.client.token.usage': { type: 'histogram', unit: '{token}', buckets: TOKENS, labels: [...GEN_AI, 'error.type', 'gen_ai.token.type'] },
   'gen_ai.client.cost': { type: 'counter', unit: 'USD', labels: GEN_AI },
+  'workflow.judgment.bands': { type: 'counter', labels: ['tenant_id', 'band', 'question_type'] },
   'mcp.tool.call.duration': { type: 'histogram', unit: 's', buckets: SECONDS, labels: ['tenant_id', 'capability', 'outcome', 'route'] },
   'workflow.effects': { type: 'counter', labels: ['tenant_id', 'state'] },
   'workflow.circuit.transitions': { type: 'counter', labels: ['tenant_id', 'kind', 'state'] },
@@ -28,6 +29,8 @@ export const METRICS = {
   'connector.agent.requests': { type: 'counter', labels: ['tenant_id', 'operation', 'outcome'] },
   'memory.retrievals': { type: 'counter', labels: ['tenant_id', 'status'] },
   'memory.proposals': { type: 'counter', labels: ['tenant_id', 'state'] },
+  'memory.summaries': { type: 'counter', labels: ['tenant_id', 'outcome'] },
+  'memory.consolidation': { type: 'counter', labels: ['tenant_id', 'decision', 'path'] },
   'workflow.dispatch.recovered': { type: 'counter', labels: [] },
 } as const;
 

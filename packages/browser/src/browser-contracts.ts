@@ -15,7 +15,7 @@ export const COMMANDS = {
   deployment: ['deploy', 'restore', 'teardown'],
   portfolio: ['start-run', 'reset-run', 'publish-evidence', 'score-run'],
   vendor: ['start-assessment', 'decide-assessment', 'supersede-assessment', 'request-grant', 'approve-grant', 'provision-grant', 'revoke-grant', 'expire-grant', 'reconcile-grant'],
-  workflow: ['check', 'publish', 'start', 'approve', 'grant', 'certify', 'reconcile', 'enroll', 'rotate', 'revoke', 'provision-webhook-credential', 'rotate-webhook-credential', 'disable-webhook-credential', 'test-webhook', 'import-memory', 'revoke-memory-import', 'withdraw-memory', 'hold-memory', 'release-memory-hold', 'set-memory-expiry', 'delete-memory', 'correct-memory', 'invalidate-memory-source', 'configure-model-settings'],
+  workflow: ['check', 'publish', 'start', 'approve', 'cancel', 'retire-installation', 'grant', 'certify', 'reconcile', 'enroll', 'rotate', 'revoke', 'provision-webhook-credential', 'rotate-webhook-credential', 'disable-webhook-credential', 'test-webhook', 'import-memory', 'revoke-memory-import', 'withdraw-memory', 'hold-memory', 'release-memory-hold', 'set-memory-expiry', 'delete-memory', 'correct-memory', 'invalidate-memory-source', 'configure-model-settings'],
   governance: ['create-group', 'add-tenant', 'remove-tenant', 'add-admin', 'remove-admin', 'set-billing-tenant'],
 } as const;
 export type CommandOwner = keyof typeof COMMANDS;
@@ -34,7 +34,7 @@ const forbidden = /(?:token|secret|password|credential|payload|api.?key|private.
 const argumentKeys: Readonly<Record<string, readonly string[]>> = Object.freeze({
   'studio.create-draft': ['id', 'draft'], 'studio.save-draft': ['id', 'draft'], 'studio.run-checks': ['id'], 'studio.simulate': ['id', 'fixtureId'], 'studio.evaluate': ['id', 'suiteId'], 'studio.submit': ['id'],
   'lifecycle.review': ['id', 'decision', 'reason'], 'lifecycle.sign': ['id'], 'lifecycle.publish': ['id', 'visibility'],
-  'workflow.check': ['id'], 'workflow.publish': ['id', 'reviewDigest'], 'workflow.start': ['id', 'input'], 'workflow.approve': ['id', 'bindingDigest', 'decision'],
+  'workflow.check': ['id'], 'workflow.publish': ['id', 'reviewDigest'], 'workflow.start': ['id', 'input'], 'workflow.approve': ['id', 'bindingDigest', 'decision', 'reason'], 'workflow.cancel': ['id'], 'workflow.retire-installation': ['id'],
   'workflow.grant': ['id', 'nodeId', 'installationId', 'capability'], 'workflow.certify': ['id', 'installation'],
   'workflow.reconcile': ['id', 'disposition'], 'workflow.enroll': ['id'], 'workflow.rotate': ['id'], 'workflow.revoke': ['id'],
   'workflow.provision-webhook-credential': ['id'], 'workflow.rotate-webhook-credential': ['id'], 'workflow.disable-webhook-credential': ['id'],
@@ -45,6 +45,7 @@ const argumentKeys: Readonly<Record<string, readonly string[]>> = Object.freeze(
   'governance.create-group': ['name', 'tenantIds', 'billingTenantId'], 'governance.add-tenant': ['tenantId'], 'governance.remove-tenant': ['tenantId'],
   'governance.add-admin': ['userId'], 'governance.remove-admin': ['userId'], 'governance.set-billing-tenant': ['tenantId'],
 });
+const optionalKeys: ReadonlySet<string> = new Set(['workflow.approve.reason']);
 export const hasCommandArgumentSchema = (owner: string, name: string): boolean => Object.hasOwn(argumentKeys, `${owner}.${name}`);
 
 export class BrowserContractError extends Error { constructor(readonly code: 'INVALID_BROWSER_DTO' | 'UNSUPPORTED_COMMAND') { super('Browser data was not accepted.'); } }
@@ -64,12 +65,12 @@ export function decodeCommandArguments(owner: string, name: string, value: unkno
   const allowed = argumentKeys[`${owner}.${name}`] ?? fail('UNSUPPORTED_COMMAND');
   const parsed = record(value, allowed);
   if (!safe(parsed)) fail();
-  for (const key of allowed) if (!(key in parsed)) fail();
+  for (const key of allowed) if (!(key in parsed) && !optionalKeys.has(`${owner}.${name}.${key}`)) fail();
   if ('id' in parsed) id(parsed['id']);
   if ('fixtureId' in parsed) string(parsed['fixtureId']);
   if ('suiteId' in parsed) string(parsed['suiteId']);
   if ('decision' in parsed) oneOf(parsed['decision'], ['approve', 'reject']);
-  if ('reason' in parsed) string(parsed['reason']);
+  if ('reason' in parsed && string(parsed['reason']).length > 1000) fail();
   if ('visibility' in parsed) oneOf(parsed['visibility'], ['tenant', 'catalog']);
   if ('installationId' in parsed) id(parsed['installationId']);
   if ('sourceDefinitionId' in parsed) id(parsed['sourceDefinitionId']);

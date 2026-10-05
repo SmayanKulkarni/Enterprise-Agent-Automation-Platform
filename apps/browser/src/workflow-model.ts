@@ -327,3 +327,19 @@ export function setMemoryProposals(config: Record<string, unknown>, enabled: boo
   else delete nextProperties['memoryProposals'];
   return { ...config, responseSchema: { ...schema, properties: nextProperties, required } };
 }
+
+const text = (value: unknown): string => typeof value === 'string' ? value : '';
+const decimal = (value: unknown): string => typeof value === 'number' ? value.toFixed(2) : '?';
+
+export function memoryProvenance(item: Record<string, unknown>): string {
+  if (item['schemaVersion'] !== 2) return 'legacy item';
+  const subjects = Array.isArray(item['subjects']) && item['subjects'].length ? item['subjects'].map(String).join(', ') : 'none';
+  const consolidation = typeof item['consolidation'] === 'object' && item['consolidation'] !== null ? item['consolidation'] as Record<string, unknown> : undefined;
+  const decision = consolidation ? ` · consolidation ${text(consolidation['decision'])} via ${text(consolidation['path'])}${text(consolidation['targetId']) ? ` → ${text(consolidation['targetId'])}` : ''}` : '';
+  return `subjects ${subjects} · observed ${text(item['observedAt']).slice(0, 10) || 'unknown'}${text(item['predecessorId']) ? ` · supersedes ${text(item['predecessorId'])}` : ''}${text(item['supersededBy']) ? ` · superseded by ${text(item['supersededBy'])}` : ''}${decision}`;
+}
+
+export function retrievalRank(entry: Record<string, unknown>): string {
+  const rank = Array.isArray(entry['rank']) ? entry['rank'] as Record<string, unknown>[] : [];
+  return rank.length ? rank.map((item) => `${text(item['id'])} (relevance ${decimal(item['score'])}, recency ${decimal(item['recency'])}, type ${decimal(item['typeWeight'])})`).join('; ') : 'none';
+}

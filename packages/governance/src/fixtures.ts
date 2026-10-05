@@ -52,7 +52,7 @@ export function fixtureApprovals(tenantIds: readonly string[], now: number): Pen
   const tenantId = tenantIds[0];
   if (tenantId === undefined) return [];
   const row = (index: number, kind: 'agent' | 'approval', capability: string, target: string, expiresInMinutes: number): PendingApprovalRow => ({
-    tenantId, workspace: fixtureName(tenantId), runId: `e0000000-0000-4000-8000-${String(index).padStart(12, '0')}`, runVersion: 4 + index, definitionRevision: 2, workflowName: `Fixture workflow ${String(index)}`, waitingKind: kind,
+    tenantId, workspace: fixtureName(tenantId), runId: `e0000000-0000-4000-8000-${String(index).padStart(12, '0')}`, runVersion: 4 + index, definitionRevision: 2, workflowName: `Fixture workflow ${String(index)}`, runLabel: `owner/repo#${String(index)} Fixture change`, waitingKind: kind,
     waitingJson: JSON.stringify({ nodeId: kind === 'agent' ? 'agent' : 'approval', bindingDigest: fixtureDigest(String(index)), requestedAt: new Date(now - 10 * FIXTURE_MINUTE).toISOString(), expiresAt: new Date(now + expiresInMinutes * FIXTURE_MINUTE).toISOString(), review: { revision: 2, installationId: 'd0000000-0000-4000-8000-000000000001', capability, target, argumentsDigest: fixtureDigest('a'), arguments: [{ name: 'subject', type: 'string' }, { name: 'amount', type: 'number' }] } }),
   });
   return [row(1, 'approval', 'send-invoice', 'billing', 30), row(2, 'agent', 'update-record', 'crm', 55)];

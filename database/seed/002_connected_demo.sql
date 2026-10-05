@@ -61,9 +61,11 @@ IF NOT EXISTS (SELECT 1 FROM [case].cases WHERE tenant_id = @alpha AND id = @ven
   INSERT INTO [case].cases (tenant_id, id, state, data_json) VALUES (@alpha, @vendor_case, N'awaiting-approval', N'{"kind":"vendor-risk-access","classification":"fixture"}');
 
 DECLARE @expires_at datetime2(7) = DATEADD(day, 1, SYSUTCDATETIME());
+IF NOT EXISTS (SELECT 1 FROM [projection].snapshots WHERE tenant_id = @alpha AND collection = N'packages')
 EXEC [projection].publish_snapshot @tenant_id = @alpha, @collection = N'packages',
   @records_json = N'[{"id":"c3333333-3333-4333-8333-333333333333","name":"Technical Implementation","classification":"fixture"},{"id":"d4444444-4444-4444-8444-444444444444","name":"Vendor Risk and Access","classification":"fixture"}]',
   @watermark = 1, @completeness = N'full', @classification = N'fixture', @redaction = N'none', @expires_at = @expires_at;
+IF NOT EXISTS (SELECT 1 FROM [projection].snapshots WHERE tenant_id = @alpha AND collection = N'cases')
 EXEC [projection].publish_snapshot @tenant_id = @alpha, @collection = N'cases',
   @records_json = N'[{"id":"e5555555-5555-4555-8555-555555555555","state":"awaiting-approval","classification":"fixture"},{"id":"f6666666-6666-4666-8666-666666666666","state":"awaiting-approval","classification":"fixture"}]',
   @watermark = 1, @completeness = N'partial', @classification = N'fixture', @redaction = N'none', @expires_at = @expires_at;

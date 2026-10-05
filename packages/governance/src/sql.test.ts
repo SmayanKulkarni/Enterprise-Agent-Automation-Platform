@@ -103,9 +103,9 @@ test.each([
 
 test('maps read_pending_approvals rows without touching the stored waiting text', async () => {
   state.error = undefined;
-  state.recordsets = [[{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', slug: 'alpha', run_id: 'BBBBBBBB-2222-4222-8222-222222222222', run_version: '5', definition_revision: '2', workflow_name: null, waiting_json: '{"nodeId":"agent"}', waiting_kind: 'agent' }]];
+  state.recordsets = [[{ tenant_id: 'AAAAAAAA-1111-4111-8111-111111111111', slug: 'alpha', run_id: 'BBBBBBBB-2222-4222-8222-222222222222', run_version: '5', definition_revision: '2', workflow_name: null, run_label: 'o/r#7', waiting_json: '{"nodeId":"agent"}', waiting_kind: 'agent' }]];
 
-  expect(await new AzureSqlGovernanceStore('pending-test').pendingApprovals(context)).toEqual([{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', workspace: 'alpha', runId: 'bbbbbbbb-2222-4222-8222-222222222222', runVersion: '5', definitionRevision: '2', workflowName: null, waitingJson: '{"nodeId":"agent"}', waitingKind: 'agent' }]);
+  expect(await new AzureSqlGovernanceStore('pending-test').pendingApprovals(context)).toEqual([{ tenantId: 'aaaaaaaa-1111-4111-8111-111111111111', workspace: 'alpha', runId: 'bbbbbbbb-2222-4222-8222-222222222222', runVersion: '5', definitionRevision: '2', workflowName: null, runLabel: 'o/r#7', waitingJson: '{"nodeId":"agent"}', waitingKind: 'agent' }]);
   expect(state.calls.at(-1)).toEqual({ procedure: 'governance.read_pending_approvals', inputs: { group_id: context.groupId, user_id: context.userId, group_epoch: 4, admin_epoch: 2 } });
 });
 

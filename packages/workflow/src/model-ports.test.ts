@@ -14,8 +14,9 @@ const environment = { UPSTASH_VECTOR_REST_URL: 'https://vector.test', UPSTASH_VE
 const storeWith = (settings?: ModelSettings): WorkflowStore => ({
   workerRead: (_tenant: string, kind: string) => Promise.resolve(kind === 'openrouter-connection' ? { id: 'c', kind, version: 1, state: 'ready', data: { provider: 'openrouter', enabled: true, key: crypto.seal(tenant, 'tenant-key') } } : settings ? { id: 's', kind, version: 1, state: 'ready', data: settings } : undefined),
 }) as unknown as WorkflowStore;
-const run = { tenantId: tenant, history: [{ nodeId: 'agent', kind: 'agent', state: 'completed' }] } as unknown as WorkflowRun;
-const chatResponse = (usage: Record<string, unknown>) => Response.json({ choices: [{ message: { content: JSON.stringify({ text: 'summary' }) } }], usage });
+const run = { id: 'run-1', tenantId: tenant, status: 'completed', input: { package: 'zod' }, outputs: { agent: { verdict: 'low risk', memoryProposalIds: ['x'], evidenceComplete: true, note: 'token=abc123', apiKey: 'sk-live' } }, decisions: { gate: { outcome: 'approve', approverId: 'user-secret' } }, history: [{ nodeId: 'agent', kind: 'agent', state: 'completed' }, { nodeId: 'gate', kind: 'approval', state: 'completed' }] } as unknown as WorkflowRun;
+const draft = { salient: true, subjects: ['npm:zod'], outcome: 'zod judged low risk', findings: [{ text: 'verdict low risk', sourceNodeId: 'agent', excerpt: 'low risk' }], status: 'completed' };
+const chatResponse = (usage: Record<string, unknown>) => Response.json({ choices: [{ message: { content: JSON.stringify(draft) } }], usage });
 const item: HostedMemoryItem = { id: '11111111-1111-4111-8111-111111111112', text: 'prefers email', metadata: { stableDefinitionId: 's', definitionId: 'd', producingRevision: 1, type: 'task-fact', sourceId: 'x', sourceDigest: 'a'.repeat(64), state: 'promoted', expiresAt: '2099-01-01T00:00:00.000Z' } };
 
 afterEach(() => { vi.unstubAllGlobals(); resetObservers(); });
@@ -24,7 +25,7 @@ test('summary uses the tenant-selected OpenRouter model and its reported cost', 
   const fetcher = vi.fn().mockResolvedValue(chatResponse({ total_tokens: 100, cost: 0.0042 }));
   vi.stubGlobal('fetch', fetcher);
   const port = new HttpModelPort({}, storeWith({ summary: { provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5' }, embedding: { provider: 'upstash' } }), crypto);
-  expect((await port.summarize(run)).text).toBe('summary');
+  expect(await port.summarize(run)).toEqual(draft);
   const [url, init] = fetcher.mock.calls[0] as [string, RequestInit];
   const body = JSON.parse(init.body as string) as Record<string, unknown>;
   expect(url).toBe('https://openrouter.ai/api/v1/chat/completions');
@@ -279,4 +280,55 @@ test('no prompt, instruction, tool argument or model output reaches any span, me
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('MARKER_ERROR_BODY_11aa', { status: 500 })));
   await expect(new HttpModelPort({}, storeWith(), crypto).complete({ ...telemetryRequest, instructions: 'MARKER_PROMPT_7f3a' })).rejects.toThrow();
   expect(await everything()).not.toContain('MARKER_');
+});
+
+test('the summary prompt carries bounded, redacted evidence and no approver identity or proposal bookkeeping', async () => {
+  const fetcher = vi.fn().mockResolvedValue(chatResponse({ total_tokens: 10, cost: 0 }));
+  vi.stubGlobal('fetch', fetcher);
+  const port = new HttpModelPort({}, storeWith({ summary: { provider: 'openrouter', model: 'a/primary' }, embedding: { provider: 'upstash' } }), crypto);
+  await port.summarize(run);
+  const body = JSON.parse((fetcher.mock.calls[0] as [string, RequestInit])[1].body as string) as { messages: { content: string }[]; response_format: { json_schema: { strict: boolean; schema: { required: string[] } } }; max_completion_tokens: number };
+  const user = JSON.parse(body.messages[1]?.content ?? '{}') as { input: { input: string; outputs: Record<string, string>; decisions: unknown[]; path: unknown[] } };
+  expect(user.input.input).toBe('{"package":"zod"}');
+  expect(user.input.outputs['agent']).toBe('{"apiKey":"[redacted]","note":"[redacted]","verdict":"low risk"}');
+  expect(user.input.decisions).toEqual([{ nodeId: 'gate', outcome: 'approve' }]);
+  expect(user.input.path).toHaveLength(2);
+  expect(body.max_completion_tokens).toBeGreaterThanOrEqual(2000);
+  expect(body.messages[0]?.content).toContain('workflow-summary-v2');
+  expect(body.response_format.json_schema).toMatchObject({ strict: true, schema: { required: ['salient', 'subjects', 'outcome', 'findings', 'status'] } });
+  expect(JSON.stringify(body)).not.toContain('user-secret');
+});
+
+test('a malformed summary draft is rejected instead of being trusted', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ choices: [{ message: { content: JSON.stringify({ salient: true }) } }], usage: { total_tokens: 1, cost: 0 } })));
+  const port = new HttpModelPort({}, storeWith({ summary: { provider: 'openrouter', model: 'a/primary' }, embedding: { provider: 'upstash' } }), crypto);
+  await expect(port.summarize(run)).rejects.toThrow('INVALID_SUMMARY');
+});
+
+test('consolidation uses the tenant summary model with a strict decision schema and falls back like the summary does', async () => {
+  const answer = (value: Record<string, unknown>) => Response.json({ choices: [{ message: { content: JSON.stringify(value) } }], usage: { total_tokens: 5, cost: 0 } });
+  const fetcher = vi.fn().mockResolvedValueOnce(new Response('down', { status: 503 })).mockResolvedValueOnce(answer({ decision: 'supersede', targetId: 'abc' }));
+  vi.stubGlobal('fetch', fetcher);
+  const port = new HttpModelPort({}, storeWith({ summary: { provider: 'openrouter', model: 'a/primary', fallback: 'b/backup' }, embedding: { provider: 'upstash' } }), crypto);
+  await expect(port.consolidate({ tenantId: tenant, runId: 'run-1', item: { text: 'new', observedAt: '2026-10-05T00:00:00.000Z' }, candidates: [{ id: 'abc', text: 'old' }] })).resolves.toEqual({ decision: 'supersede', targetId: 'abc', model: 'b/backup', promptVersion: 'memory-consolidate-v1' });
+  const body = JSON.parse((fetcher.mock.calls[1] as [string, RequestInit])[1].body as string) as { model: string; max_completion_tokens: number; response_format: { json_schema: { strict: boolean } } };
+  expect(body).toMatchObject({ model: 'b/backup', max_completion_tokens: 1500, response_format: { json_schema: { strict: true } } });
+});
+
+test('consolidation treats an empty target as none and rejects a missing decision', async () => {
+  const answer = (value: Record<string, unknown>) => Response.json({ choices: [{ message: { content: JSON.stringify(value) } }], usage: { total_tokens: 5, cost: 0 } });
+  const port = new HttpModelPort({}, storeWith({ summary: { provider: 'openrouter', model: 'a/primary' }, embedding: { provider: 'upstash' } }), crypto);
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(answer({ decision: 'add', targetId: '' })).mockResolvedValueOnce(answer({ targetId: '' })));
+  const request = { tenantId: tenant, runId: 'run-1', item: { text: 'new' }, candidates: [{ id: 'abc', text: 'old' }] };
+  expect(await port.consolidate(request)).not.toHaveProperty('targetId');
+  await expect(port.consolidate(request)).rejects.toThrow('INVALID_CONSOLIDATION');
+});
+
+test('the vector query serialises subject membership and escapes quotes and backslashes', async () => {
+  const fetcher = vi.fn().mockResolvedValue(Response.json({ result: [] }));
+  vi.stubGlobal('fetch', fetcher);
+  const upstash = new UpstashVectorMemoryPort({ ...environment, UPSTASH_VECTOR_DIMENSION: '3' });
+  await upstash.query(`tenant-${tenant}`, 'zod', 3, { state: 'promoted', subjects: { contains: "npm:zo'd\\" } });
+  const body = JSON.parse((fetcher.mock.calls[0] as [string, RequestInit])[1].body as string) as { filter: string };
+  expect(body.filter).toContain("subjects CONTAINS 'npm:zo\\'d\\\\'");
 });

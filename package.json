@@ -11,7 +11,8 @@
     "pnpm": "10.15.1"
   },
   "scripts": {
-    "lint": "eslint .",
+    "lint": "node tools/workspace/lint-ratchet.mjs && node tools/workspace/secret-scan.mjs",
+    "lint:raw": "eslint .",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "workspace:check": "node tools/workspace/check-workspace.mjs",

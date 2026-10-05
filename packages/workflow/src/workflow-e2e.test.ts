@@ -194,16 +194,16 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   const rejectedId = randomUUID(); const rejecting = await toApproval(rejectedId);
   expect((await command(admin, 'workflow.approve', rejecting.version, { id: rejectedId, bindingDigest: rejecting.data.waiting!.bindingDigest, decision: 'reject' })).status).toBe(200);
   expect(await worker.step(tenant, rejectedId, definitionId, 'approval')).toMatchObject({ failed: true });
-  expect(await total('workflow.runs.finished', { status: 'failed', reason: 'REJECTED' })).toBe(1);
+  expect(await total('workflow.runs.finished', { status: 'rejected', reason: 'REJECTED' })).toBe(1);
   expect(await total('workflow.approvals.decided', { decision: 'reject' })).toBe(1);
   expect(events('run.finished').filter((line) => line['run_id'] === rejectedId)).toHaveLength(1);
   const expiringId = randomUUID(); await toApproval(expiringId);
   expect(await worker.expire(tenant, expiringId, 'approval')).toMatchObject({ failed: true });
   expect(await worker.expire(tenant, expiringId, 'approval')).toMatchObject({ failed: true });
   expect(await total('workflow.approvals.expired')).toBe(1);
-  expect(await total('workflow.runs.finished', { status: 'failed', reason: 'APPROVAL_EXPIRED' })).toBe(1);
+  expect(await total('workflow.runs.finished', { status: 'expired', reason: 'APPROVAL_EXPIRED' })).toBe(1);
   expect(events('approval.expired')).toEqual([expect.objectContaining({ run_id: expiringId, node_id: 'approval' })]);
-  expect(events('node.failed').filter((line) => line['run_id'] === expiringId)).toHaveLength(1);
+  expect(events('node.failed').filter((line) => line['run_id'] === expiringId)).toHaveLength(0);
   const staleId = randomUUID(); const staleBefore = await total('workflow.approvals.requested');
   expect((await command(editor, 'workflow.start', 0, { id: definitionId, input: {} }, staleId)).status).toBe(200);
   for (const nodeId of ['trigger', 'agent', 'condition']) await worker.step(tenant, staleId, definitionId, nodeId);
@@ -259,7 +259,7 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   expect(await total('workflow.circuit.transitions', { kind: 'model', state: 'probe' })).toBe(1);
   expect(await total('workflow.circuit.transitions', { kind: 'model', state: 'closed' })).toBe(1);
   expect(await total('workflow.circuit.transitions', { kind: 'model', state: 'open' })).toBe(1);
-  const summaryWorker = new WorkflowWorker(store, { complete: async () => ({ output: {}, model: 'unused', tokens: 0, cost: 0 }), summarize: async () => ({ text: 'Source-linked summary.', sources: ['agent'] }) }, { invoke: async () => ({ outcome: 'not-dispatched' }) }, memory);
+  const summaryWorker = new WorkflowWorker(store, { complete: async () => ({ output: {}, model: 'unused', tokens: 0, cost: 0 }), summarize: async () => ({ salient: true, subjects: ['ticket:demo'], outcome: 'Source-linked summary', findings: [{ text: 'agent approved', sourceNodeId: 'agent', excerpt: 'approve' }], status: 'completed' }) }, { invoke: async () => ({ outcome: 'not-dispatched' }) }, memory);
   await summaryWorker.summarize(tenant, startKey);
   const memoryDraftId = randomUUID();
   const memoryGraph: GraphDraft = { kind: 'graph-v1', nodes: [
@@ -283,7 +283,7 @@ test('authenticated browser journey saves, checks, publishes, waits, approves an
   const importedId = randomUUID();
   expect((await command(editor, 'workflow.start', 0, { id: targetDefinitionId, input: {} }, importedId)).status).toBe(200);
   await memoryWorker.step(tenant, importedId, targetDefinitionId, 'start'); await memoryWorker.step(tenant, importedId, targetDefinitionId, 'memory');
-  expect((await store.workerRead<WorkflowRun>(tenant, 'run', importedId))?.data.outputs['memory']).toMatchObject({ memory: { status: 'success', items: [expect.objectContaining({ text: 'Source-linked summary.' })] } });
+  expect((await store.workerRead<WorkflowRun>(tenant, 'run', importedId))?.data.outputs['memory']).toMatchObject({ memory: { status: 'success', items: [expect.objectContaining({ text: 'ticket:demo: Source-linked summary. agent approved.' })] } });
   const imported = (await projection(editor, 'workflow-memory-imports')).payload['records'] as Record<string, unknown>[];
   const attachment = imported.find((item) => item['targetDefinitionId'] === targetDefinitionId)!;
   expect((await command(editor, 'workflow.revoke-memory-import', Number(attachment['version']), { id: String(attachment['id']), reason: 'no longer needed' })).payload['error']).toMatchObject({ category: 'denied' });

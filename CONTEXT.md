@@ -46,6 +46,34 @@ _Avoid_: MCP annotation, model judgment
 
 ## Durable operation
 
+**Run outcome**:
+The way a Workflow Run ended. `completed` and the four non-failure outcomes (`rejected`, `expired`, `cancelled`, `superseded`) are deliberate; only `failed` and `unknown-outcome` count as failures. Governance success rate is completed runs over runs that were not rejected, expired, cancelled or superseded.
+_Avoid_: Final state, result
+
+**Decision record**:
+What an approver decided and saw: outcome, optional reason, approver, time, binding digest, and the disclosed facts, kept in the run after the decision.
+_Avoid_: Approval log, audit note
+
+**Run label**:
+The text a trigger's `label` template resolves to at admission, used as the run's title in the approvals inbox and Run History.
+_Avoid_: Run name, title
+
+**Subject**:
+The thing a webhook run is about, named by a trigger's `subjectKey` fields and versioned by its `subjectVersion` field (for example a pull request and its head SHA). A newer event for the same subject supersedes the run still in flight.
+_Avoid_: Target, resource
+
+**Finalizer**:
+An MCP step attached to the Trigger by a finalizer edge that runs once when a Workflow Run ends in any status, without approval, and never changes the run's status.
+_Avoid_: Cleanup hook, on-exit
+
+**Evidence completeness**:
+Whether everything an Agent was shown was whole. Truncated tool output fails the Agent by default; if allowed, the output is marked `evidenceComplete: false` and approvers see `evidence: partial`.
+_Avoid_: Confidence, quality
+
+**Capability variant**:
+A Capability in a manifest that calls an underlying tool with fixed arguments (`tool`, `fixed`) so the model cannot choose them.
+_Avoid_: Overload, alias
+
 **Run history**:
 The immutable, ordered evidence of one Workflow Run, including node attempts, model requests, effects, approvals, and results.
 _Avoid_: Memory, logs
@@ -70,6 +98,22 @@ _Avoid_: Memory, audit record
 A source-linked task fact or explicitly stated user preference proposed by an Agent for Operational Memory.
 _Avoid_: Instruction, inferred trait, Run History
 
+**Run Outcome Record**:
+The Run Summary written for a completed run: what the run concluded about its subjects, composed on the server from findings that each quote an exact excerpt of the run input or a node output. A run with no reusable conclusion writes none. It is stored under the `run-summary` item type.
+_Avoid_: Process log, transcript summary
+
+**Subject key**:
+A normalized entity key such as `npm:zod` or `repo:acme/api` carried by a memory item, at most three per item, proposed by the model and validated by the server. Retrieval and Consolidation scope by it.
+_Avoid_: Tag, topic, free-text label
+
+**Consolidation**:
+The decision made when a pending memory item is promoted: add it, treat it as a duplicate of a promoted item, or let it supersede one. Duplicates are found deterministically by score, ambiguous cases go to the summary model, and a failure always adds.
+_Avoid_: Merge, dedupe job, review
+
+**Supersession**:
+A promoted memory item withdrawn because a newer item about the same subject replaced it. The older item stays in SQL with a link to its successor and its vector is removed; it is never hard-deleted and a legal hold blocks it.
+_Avoid_: Deletion, overwrite
+
 **Memory import**:
 An explicit Workflow Definition attachment that makes a source-linked Run Summary available to another workflow's Memory node.
 _Avoid_: Shared tenant memory, implicit recall
@@ -77,6 +121,10 @@ _Avoid_: Shared tenant memory, implicit recall
 **Approval**:
 An administrator's authorization of one exact external effect, bound to its workflow version, capability, target, and arguments digest.
 _Avoid_: Permission, review
+
+**Disclosed argument**:
+An argument of the effect an Approval guards that the workflow author lists on the Approval node so the approver reads its exact value; it is the value the effect will receive, bound by the arguments digest.
+_Avoid_: Review note, summary field
 
 **Node policy**:
 The versioned bounds for one executable node.

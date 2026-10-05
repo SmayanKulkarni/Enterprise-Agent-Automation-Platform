@@ -83,7 +83,7 @@ test('does nothing and does not throw with no provider registered', () => {
 test('defines the whole catalog of the spec', () => {
   expect(Object.keys(METRICS).sort()).toEqual([
     'app.errors', 'auth.denied', 'connector.agent.requests', 'gen_ai.client.cost', 'gen_ai.client.operation.duration', 'gen_ai.client.token.usage',
-    'http.server.request.duration', 'mcp.tool.call.duration', 'memory.proposals', 'memory.retrievals', 'workflow.approval.wait.duration',
+    'http.server.request.duration', 'mcp.tool.call.duration', 'memory.consolidation', 'memory.proposals', 'memory.retrievals', 'memory.summaries', 'workflow.approval.wait.duration',
     'workflow.approvals.decided', 'workflow.approvals.expired', 'workflow.approvals.requested', 'workflow.circuit.transitions', 'workflow.dispatch.recovered',
     'workflow.effects', 'workflow.runs.finished', 'workflow.runs.started', 'workflow.step.duration', 'workflow.webhook.deliveries',
   ]);

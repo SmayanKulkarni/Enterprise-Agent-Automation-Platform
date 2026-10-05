@@ -18,10 +18,10 @@ IF OBJECT_DEFINITION(OBJECT_ID(N'governance.read_pending_approvals')) NOT LIKE N
 
 IF (
   SELECT COUNT(*) FROM sys.dm_exec_describe_first_result_set_for_object(OBJECT_ID(N'governance.read_pending_approvals'), 0)
-  WHERE name IN (N'tenant_id', N'slug', N'run_id', N'run_version', N'definition_revision', N'workflow_name', N'waiting_json', N'waiting_kind')
-) <> 8 OR (
+  WHERE name IN (N'tenant_id', N'slug', N'run_id', N'run_version', N'definition_revision', N'workflow_name', N'run_label', N'waiting_json', N'waiting_kind')
+) <> 9 OR (
   SELECT COUNT(*) FROM sys.dm_exec_describe_first_result_set_for_object(OBJECT_ID(N'governance.read_pending_approvals'), 0)
-) <> 8 THROW 50000, N'read_pending_approvals must expose exactly the allowlisted columns and never data_json.', 1;
+) <> 9 THROW 50000, N'read_pending_approvals must expose exactly the allowlisted columns and never data_json.', 1;
 
 IF OBJECT_ID(N'tempdb..#verify_member') IS NOT NULL DROP PROCEDURE #verify_member;
 IF OBJECT_ID(N'tempdb..#verify_group') IS NOT NULL DROP PROCEDURE #verify_group;
@@ -90,7 +90,7 @@ DECLARE @g uniqueidentifier = NEWID(), @def uniqueidentifier = NEWID();
 DECLARE @run_late uniqueidentifier = NEWID(), @run_soon uniqueidentifier = NEWID(), @run_expired uniqueidentifier = NEWID(), @run_outside uniqueidentifier = NEWID();
 DECLARE @binding char(64) = REPLICATE('c', 64);
 DECLARE @error int;
-DECLARE @pending TABLE (tenant_id uniqueidentifier, slug nvarchar(128), run_id uniqueidentifier, run_version bigint, definition_revision nvarchar(max), workflow_name nvarchar(max), waiting_json nvarchar(max), waiting_kind nvarchar(max), seq int IDENTITY(1,1) NOT NULL);
+DECLARE @pending TABLE (tenant_id uniqueidentifier, slug nvarchar(128), run_id uniqueidentifier, run_version bigint, definition_revision nvarchar(max), workflow_name nvarchar(max), run_label nvarchar(120), waiting_json nvarchar(max), waiting_kind nvarchar(max), seq int IDENTITY(1,1) NOT NULL);
 
 BEGIN TRANSACTION;
 EXEC #verify_group @g, @t1, @u1;
@@ -116,7 +116,7 @@ EXEC #verify_waiting @t2, @run_soon, @def, 30, @binding, N'approval';
 EXEC #verify_waiting @t1, @run_expired, @def, -60, @binding, N'agent';
 EXEC #verify_waiting @t3, @run_outside, @def, 10, @binding, N'agent';
 
-INSERT INTO @pending (tenant_id, slug, run_id, run_version, definition_revision, workflow_name, waiting_json, waiting_kind) EXEC [governance].read_pending_approvals @group_id = @g, @user_id = @u1, @group_epoch = 1, @admin_epoch = 1;
+INSERT INTO @pending (tenant_id, slug, run_id, run_version, definition_revision, workflow_name, run_label, waiting_json, waiting_kind) EXEC [governance].read_pending_approvals @group_id = @g, @user_id = @u1, @group_epoch = 1, @admin_epoch = 1;
 IF (SELECT COUNT(*) FROM @pending) <> 2 THROW 50000, N'read_pending_approvals must return only unexpired waiting runs of member workspaces.', 1;
 IF EXISTS (SELECT 1 FROM @pending WHERE run_id IN (@run_expired, @run_outside)) THROW 50000, N'read_pending_approvals returned an expired run or a run outside the group.', 1;
 IF (SELECT run_id FROM @pending WHERE seq = (SELECT MIN(seq) FROM @pending)) <> @run_soon THROW 50000, N'read_pending_approvals must order by soonest expiry.', 1;

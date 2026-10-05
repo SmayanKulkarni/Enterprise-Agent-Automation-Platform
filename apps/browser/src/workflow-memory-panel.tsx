@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { expiryInstant, localDateTime } from './workflow-model.js';
+import { expiryInstant, localDateTime, memoryProvenance, retrievalRank } from './workflow-model.js';
 import { PlatformApiError, withRef, type PlatformApi, type Projection } from './platform-api.js';
 import { failureNotice } from './error-view.js';
 
@@ -55,6 +55,7 @@ export function WorkflowMemoryPanel({ api, tenantId, definitionId, admin, initia
     {scoped.map((item) => <article key={String(item['id'])}>
       <strong>{String(item['type'])} · {String(item['state'])}</strong>
       <span>Source {String(item['sourceId'])} · digest {String(item['sourceDigest'])} · revision {String(item['producingRevision'])} · owner {item['ownerScoped'] === true ? 'scoped' : 'definition'} · predecessor {String(item['predecessorId'] ?? 'none')} · promoted {String(item['promotedAt'] ?? 'not promoted')} · expiry {String(item['expiresAt'] ?? 'none')} · hold {item['hold'] === true ? 'on' : 'off'} · vector {String(item['vectorState'] ?? 'unavailable')}</span>
+      <span>Memory {memoryProvenance(item)}</span>
       {item['failure'] !== undefined && <span> Failure {String(item['failure'])}</span>}
       {['pending', 'failed', 'rejected'].includes(String(item['state'])) && <span>Not retrievable.</span>}
       {admin && <div>
@@ -68,7 +69,7 @@ export function WorkflowMemoryPanel({ api, tenantId, definitionId, admin, initia
       </div>}
     </article>)}
     <strong>Retrieval history from the loaded Run History page</strong>
-    {initialRunsState === 'failed' && runs === undefined ? <p role="alert">Run History is unavailable.</p> : runs === undefined ? <p>Loading retrieval receipts.</p> : retrievals.length === 0 ? <p>No memory retrieval receipts for this definition.</p> : retrievals.map((item) => <p key={String(item['id'])}>Run {String(item.runId)} · Memory node {String(item['nodeId'])} · {String(item['status'])} · items {Array.isArray(item['itemIds']) && item['itemIds'].length ? item['itemIds'].map(String).join(', ') : 'none'} · imports {Array.isArray(item['importIds']) && item['importIds'].length ? item['importIds'].map(String).join(', ') : 'none'}{item['failure'] ? ` · failure ${String(item['failure'])}` : ''}</p>)}
+    {initialRunsState === 'failed' && runs === undefined ? <p role="alert">Run History is unavailable.</p> : runs === undefined ? <p>Loading retrieval receipts.</p> : retrievals.length === 0 ? <p>No memory retrieval receipts for this definition.</p> : retrievals.map((item) => <p key={String(item['id'])}>Run {String(item.runId)} · Memory node {String(item['nodeId'])} · {String(item['status'])} · items {Array.isArray(item['itemIds']) && item['itemIds'].length ? item['itemIds'].map(String).join(', ') : 'none'} · imports {Array.isArray(item['importIds']) && item['importIds'].length ? item['importIds'].map(String).join(', ') : 'none'} · rank {retrievalRank(item)}{item['failure'] ? ` · failure ${String(item['failure'])}` : ''}</p>)}
     {message && <span role="status">{message}</span>}
   </section>;
 }

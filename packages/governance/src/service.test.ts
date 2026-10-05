@@ -167,16 +167,31 @@ test('serves all three collections as fixtures for exactly the context workspace
 
 const DIGEST = 'a'.repeat(64);
 const waiting = (overrides: Record<string, unknown> = {}): string => JSON.stringify({ nodeId: 'agent', bindingDigest: DIGEST, requestedAt: '2026-09-30T11:50:00.000Z', expiresAt: '2026-09-30T12:30:00.000Z', review: { revision: 2, installationId: 'inst-1', capability: 'write', target: 'crm', argumentsDigest: 'b'.repeat(64), arguments: [{ name: 'subject', type: 'string' }] }, ...overrides });
-const pendingRow = (overrides: Partial<PendingApprovalRow> = {}): PendingApprovalRow => ({ tenantId: tenantA, workspace: 'alpha', runId: 'c0000000-0000-4000-8000-000000000001', runVersion: '5', definitionRevision: '2', workflowName: 'Onboarding', waitingJson: waiting(), waitingKind: 'agent', ...overrides });
+const pendingRow = (overrides: Partial<PendingApprovalRow> = {}): PendingApprovalRow => ({ tenantId: tenantA, workspace: 'alpha', runId: 'c0000000-0000-4000-8000-000000000001', runVersion: '5', definitionRevision: '2', workflowName: 'Onboarding', runLabel: null, waitingJson: waiting(), waitingKind: 'agent', ...overrides });
 const approvals = async (rows: PendingApprovalRow[], query: Record<string, string> = {}) => clocked(stub({ pendingApprovals: () => Promise.resolve(rows) })).read(context, 'approvals', query);
 
 test('the approval projection is an allowlist: stored input, argument values and unknown fields never leave', async () => {
   const leaky = waiting({ input: { secret: 'SECRET_INPUT' }, outputs: { note: 'SECRET_OUTPUT' }, extra: 'x', review: { revision: 2, installationId: 'inst-1', capability: 'write', target: 'crm', argumentsDigest: 'b'.repeat(64), input: 'SECRET_INPUT', arguments: [{ name: 'subject', type: 'string', value: 'SECRET_VALUE' }] } });
   const result = await approvals([pendingRow({ waitingJson: leaky })]);
 
-  expect(result['approvals']).toEqual([{ tenantId: tenantA, workspace: 'alpha', runId: 'c0000000-0000-4000-8000-000000000001', runVersion: 5, workflowName: 'Onboarding', revision: 2, nodeId: 'agent', kind: 'tool', capability: 'write', installationId: 'inst-1', target: 'crm', arguments: [{ name: 'subject', type: 'string' }], argumentsDigest: 'b'.repeat(64), requestedAt: '2026-09-30T11:50:00.000Z', expiresAt: '2026-09-30T12:30:00.000Z', bindingDigest: DIGEST }]);
+  expect(result['approvals']).toEqual([{ tenantId: tenantA, workspace: 'alpha', runId: 'c0000000-0000-4000-8000-000000000001', runVersion: 5, workflowName: 'Onboarding', revision: 2, nodeId: 'agent', kind: 'tool', capability: 'write', installationId: 'inst-1', target: 'crm', arguments: [{ name: 'subject', type: 'string' }], facts: [], argumentsDigest: 'b'.repeat(64), requestedAt: '2026-09-30T11:50:00.000Z', expiresAt: '2026-09-30T12:30:00.000Z', bindingDigest: DIGEST }]);
   expect(JSON.stringify(result)).not.toMatch(/SECRET|extra/u);
   expect(result).toMatchObject({ count: 1, completeness: 'full', classification: 'restricted-operational' });
+});
+
+test('disclosed facts are the only argument values an approval projection carries, bounded and typed as text', async () => {
+  const facts = [{ name: 'title', value: 'Gate: return PR #2' }, { name: 'body', value: 'x'.repeat(5000) }, { name: 'bad', value: 7 }, { name: 'pad', value: 'ok', extra: 'SECRET_EXTRA' }];
+  const review = { revision: 2, installationId: 'inst-1', capability: 'write', target: 'crm', argumentsDigest: 'b'.repeat(64), arguments: [{ name: 'title', type: 'string' }], facts };
+  const result = await approvals([pendingRow({ waitingJson: waiting({ review }) })]);
+  const projected = (result['approvals'] as { facts: { name: string; value: string }[] }[])[0]!.facts;
+
+  expect(projected.map((fact) => fact.name)).toEqual(['title', 'body', 'pad']);
+  expect(projected[1]!.value).toHaveLength(4000);
+  expect(JSON.stringify(result)).not.toContain('SECRET_EXTRA');
+});
+
+test('an approval without disclosed facts projects an empty list', async () => {
+  expect((await approvals([pendingRow()]))['approvals']).toMatchObject([{ facts: [] }]);
 });
 
 test.each([['agent', 'tool'], ['approval', 'step'], [null, 'step']])('maps the waiting history kind %s to %s', async (waitingKind, kind) => {

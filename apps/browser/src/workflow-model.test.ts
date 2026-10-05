@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
-import { createNode, freeSequence, attachTool, conditionFields, conditionSources, connect, connectionError, disconnect, expiryInstant, filterLibrary, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, syncChainGrants, toolError, toolsOf, parseTriggerInput, schemaFieldNameError, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
+import { memoryProvenance, retrievalRank, createNode, freeSequence, attachTool, conditionFields, conditionSources, connect, connectionError, disconnect, expiryInstant, filterLibrary, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, syncChainGrants, toolError, toolsOf, parseTriggerInput, schemaFieldNameError, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
 
 describe('workflow graph', () => {
   test('only creates valid, non-duplicate connections', () => {
@@ -240,4 +240,20 @@ test('a new step never reuses the id of a step loaded from a saved revision', ()
   expect(freeSequence(loaded, 'memory', 1)).toBe(1);
   expect(freeSequence(loaded, 'agent', 2)).toBe(2);
   expect(createNode('mcp', 0, 0, freeSequence(loaded, 'mcp', 1)).id).toBe('mcp-3');
+});
+
+describe('memory provenance for Studio', () => {
+  test('a v2 item shows subjects, observation date, supersession links and the consolidation decision', () => {
+    expect(memoryProvenance({ schemaVersion: 2, subjects: ['npm:zod'], observedAt: '2026-10-04T10:00:00.000Z', predecessorId: 'old-id', consolidation: { decision: 'supersede', path: 'model', targetId: 'old-id' } })).toBe('subjects npm:zod · observed 2026-10-04 · supersedes old-id · consolidation supersede via model → old-id');
+    expect(memoryProvenance({ schemaVersion: 2, subjects: [], supersededBy: 'new-id' })).toBe('subjects none · observed unknown · superseded by new-id');
+  });
+
+  test('a v1 item is labelled legacy and a receipt without rank reads none', () => {
+    expect(memoryProvenance({ type: 'task-fact' })).toBe('legacy item');
+    expect(retrievalRank({})).toBe('none');
+  });
+
+  test('rank inputs are listed per returned item', () => {
+    expect(retrievalRank({ rank: [{ id: 'a', score: 0.8, recency: 0.5, typeWeight: 0.9 }, { id: 'b', score: 'x' }] })).toBe('a (relevance 0.80, recency 0.50, type 0.90); b (relevance ?, recency ?, type ?)');
+  });
 });

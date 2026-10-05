@@ -1,4 +1,4 @@
-export interface FlowEdge { from: string; to: string; role?: 'tool' | undefined; }
+export interface FlowEdge { from: string; to: string; role?: 'tool' | 'finalizer' | undefined; }
 
 export const isFlowEdge = (edge: { role?: unknown }): boolean => edge.role === undefined;
 

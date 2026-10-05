@@ -1,11 +1,11 @@
 import { logEvent } from '../../telemetry/src/events.js';
 import { count, record } from '../../telemetry/src/instruments.js';
-import type { WorkflowRun } from './service.js';
+import type { NonFailureOutcome, WorkflowRun } from './service.js';
 
 const REASON = /^[A-Z][A-Z0-9_]{0,63}$/u;
 
 export type RunTrigger = 'manual' | 'webhook';
-export type FinishedStatus = 'completed' | 'failed' | 'unknown-outcome';
+export type FinishedStatus = 'completed' | 'failed' | 'unknown-outcome' | NonFailureOutcome;
 export type ApprovalKind = 'step' | 'tool';
 export type CircuitState = 'open' | 'probe' | 'closed';
 
@@ -55,4 +55,14 @@ export function circuitTransition(tenantId: string, key: string, state: CircuitS
 export function memoryRetrieved(tenantId: string, runId: string, nodeId: string, status: string, itemCount: number): void {
   count('memory.retrievals', { tenant_id: tenantId, status });
   logEvent('memory.retrieval', { tenant_id: tenantId, run_id: runId, node_id: nodeId, status, item_count: itemCount });
+}
+
+export function memorySummarized(tenantId: string, runId: string, outcome: 'staged' | 'skipped' | 'ungrounded' | 'rejected', findings: number, dropped: number): void {
+  count('memory.summaries', { tenant_id: tenantId, outcome });
+  logEvent('memory.summary', { tenant_id: tenantId, run_id: runId, outcome, findings, dropped }, outcome === 'staged' || outcome === 'skipped' ? 'info' : 'warn');
+}
+
+export function memoryConsolidated(tenantId: string, runId: string, decision: 'add' | 'supersede' | 'noop', path: 'deterministic' | 'model' | 'fallback', candidates: number): void {
+  count('memory.consolidation', { tenant_id: tenantId, decision, path });
+  logEvent('memory.consolidation', { tenant_id: tenantId, run_id: runId, decision, path, candidates });
 }

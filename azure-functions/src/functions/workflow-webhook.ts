@@ -2,7 +2,7 @@ import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } 
 import * as df from 'durable-functions';
 import { AzureSqlWorkflowStore } from '../../../packages/workflow/src/sql.js';
 import { deliverWebhook } from '../../../packages/workflow/src/service.js';
-import { AppError } from '../../../packages/errors/src/app-error.js';
+import { ingressResponse } from '../../../packages/workflow/src/ingress-outcome.js';
 import { withErrorBoundary } from '../../../packages/errors/src/boundary.js';
 import { withFlush } from '../../../packages/telemetry/src/index.js';
 import { durableScheduler } from './workflow-run.js';
@@ -12,11 +12,9 @@ export const workflowWebhook = withFlush(withErrorBoundary(async (request: HttpR
   const eventId = request.headers.get('x-workflow-event-id'); const timestamp = request.headers.get('x-workflow-timestamp'); const signature = request.headers.get('x-workflow-signature');
   const store = new AzureSqlWorkflowStore(process.env['AZURE_SQL_CONNECTION_STRING'] ?? '');
   const fallback = definitionId ? process.env[`WORKFLOW_WEBHOOK_SECRET_${definitionId.replaceAll('-', '').toUpperCase()}`] : undefined;
-  const delivered = await deliverWebhook(store, durableScheduler(context), { tenantId, definitionId, eventId: eventId ?? undefined, timestamp: timestamp ?? undefined, signature: signature ?? undefined, body: new Uint8Array(await request.arrayBuffer()), ...(fallback === undefined ? {} : { fallbackSecret: fallback }) });
-  if (delivered.outcome === 'accepted') return { status: 202, jsonBody: { runId: delivered.runId, status: 'queued' } };
-  if (delivered.outcome === 'replay') return { status: 202, ...(delivered.runId ? { jsonBody: { runId: delivered.runId, status: 'queued' } } : {}) };
-  if (delivered.outcome === 'not-found') throw new AppError('NOT_FOUND');
-  throw new AppError(delivered.outcome === 'invalid-shape' ? 'INVALID' : 'DENIED');
+  const delivered = await deliverWebhook(store, durableScheduler(context), { tenantId, definitionId, eventId: eventId ?? undefined, timestamp: timestamp ?? undefined, signature: signature ?? undefined, body: new Uint8Array(await request.arrayBuffer()), headers: Object.fromEntries(request.headers.entries()), ...(fallback === undefined ? {} : { fallbackSecret: fallback }) });
+  const reply = ingressResponse(delivered);
+  return { status: reply.status, headers: { 'content-type': reply.contentType }, jsonBody: reply.body };
 }));
 
 app.http('workflowWebhook', { methods: ['POST'], authLevel: 'anonymous', route: 'workflow-webhook/{tenantId}/{definitionId}', extraInputs: [df.input.durableClient()], handler: workflowWebhook });

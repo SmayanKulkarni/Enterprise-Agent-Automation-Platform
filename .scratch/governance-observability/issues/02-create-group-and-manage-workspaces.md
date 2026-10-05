@@ -251,3 +251,7 @@ Operator statement (ticket 18 should document it). The runtime database user mus
 ```sql
 ALTER ROLE platform_governance_browser ADD MEMBER platform_identity_app;
 ```
+
+### Follow-up (2026-09-30)
+
+Migrations applied and `sql:verify` passed against the dev database; the "no SQL ran" note above is resolved.

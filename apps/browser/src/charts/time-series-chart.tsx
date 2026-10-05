@@ -58,7 +58,7 @@ export function TimeSeriesChart({ title, series: input, unit, range, area = fals
           {series.map((line, index) => line.points.length === 1 && line.points[0] !== undefined && <span key={line.label} className="chart-dot" style={{ left: `${String(x(line.points[0][0]))}%`, top: `${String(y(line.points[0][1]))}%`, background: colorOf(index) }} />)}
           {moment !== undefined && cursor.active !== undefined && <Tooltip moment={moment} left={crossX} unit={unit} rows={series.map((line, index) => ({ label: line.label, value: grid[index]?.[cursor.active ?? 0], index }))} />}
         </div>
-        <div className="chart-xaxis" aria-hidden="true">{xLabels.map((label) => <span key={label}>{formatTick(label, range)}</span>)}</div>
+        <div className="chart-xaxis" aria-hidden="true">{xLabels.map((label, index) => <span key={index}>{formatTick(label, range)}</span>)}</div>
       </div>
       <Legend series={series} swatch="line" />
       <DataTable title={title} unit={unit} times={times} columns={series.map((line, index) => ({ label: line.label, values: grid[index] ?? [] }))} />

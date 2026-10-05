@@ -34,7 +34,7 @@ function Card({ row, now, busy, canDecide, decide, askReject }: { row: Approval;
   return (
     <article className="approval-card" aria-busy={busy}>
       <header>
-        <div><h3>{row.workflowName}</h3><p>{row.workspace} · revision {row.revision} · {row.kind === 'tool' ? 'Tool call' : 'Approval step'}</p></div>
+        <div><h3>{row.runLabel ?? row.workflowName}</h3><p>{row.runLabel ? `${row.workflowName} · ` : ''}{row.workspace} · revision {row.revision} · {row.kind === 'tool' ? 'Tool call' : 'Approval step'}</p></div>
         <span className={left.expired ? 'status-warn' : 'approval-left'}>{left.expired ? <><i />Expired</> : `${left.text} left`}</span>
       </header>
       <dl>
@@ -47,6 +47,7 @@ function Card({ row, now, busy, canDecide, decide, askReject }: { row: Approval;
         <div><dt>Arguments</dt><dd>{row.arguments.length === 0 ? 'none' : row.arguments.map((argument) => `${argument.name}: ${argument.type}`).join(', ')}</dd></div>
         <div><dt>Arguments digest</dt><dd>{row.argumentsDigest.slice(0, DIGEST_PREFIX)}…</dd></div>
       </dl>
+      {row.facts.length > 0 && <section className="approval-facts" aria-label="Details to review">{row.facts.map((fact) => <div key={fact.name}><h4>{fact.name}</h4><pre>{fact.value}</pre></div>)}</section>}
       <footer>
         <button className="button button-small" disabled={disabled} onClick={() => { decide(row, 'approve'); }}>Approve</button>
         <button className="button-secondary button-small" disabled={disabled} onClick={() => { askReject(row); }}>Reject</button>
@@ -67,7 +68,7 @@ export function ApprovalsInbox({ approvals, completeness, decide, busyRunId, not
       {confirming !== undefined && (
         <Dialog labelledBy="reject-title" onClose={() => { setConfirming(undefined); }} className="reject-dialog">
           <h2 id="reject-title">Reject this approval?</h2>
-          <p>{confirming.workflowName} will not run <strong>{confirming.capability}</strong> against <strong>{confirming.target}</strong>.</p>
+          <p>{confirming.runLabel ?? confirming.workflowName} will not run <strong>{confirming.capability}</strong> against <strong>{confirming.target}</strong>.</p>
           <div className="dialog-actions">
             <button className="button" onClick={() => { const row = confirming; setConfirming(undefined); decide(row, 'reject'); }}>Reject</button>
             <button className="button-secondary" onClick={() => { setConfirming(undefined); }}>Cancel</button>

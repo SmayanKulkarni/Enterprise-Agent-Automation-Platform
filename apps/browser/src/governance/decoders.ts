@@ -21,8 +21,8 @@ export interface Health {
 export interface SeriesLine { label: string; points: readonly (readonly [number, number])[] }
 export interface Series { panel: string; range: RangeKey; status: SeriesStatus; series: readonly SeriesLine[]; completeness: Completeness; classification: Classification }
 export interface Approval {
-  tenantId: string; workspace: string; runId: string; runVersion: number; workflowName: string; revision: number; nodeId: string; kind: 'step' | 'tool';
-  capability: string; installationId: string; target: string; arguments: readonly { name: string; type: string }[]; argumentsDigest: string; requestedAt?: string; expiresAt: string; bindingDigest: string;
+  tenantId: string; workspace: string; runId: string; runVersion: number; workflowName: string; runLabel?: string; revision: number; nodeId: string; kind: 'step' | 'tool';
+  capability: string; installationId: string; target: string; arguments: readonly { name: string; type: string }[]; facts: readonly { name: string; value: string }[]; argumentsDigest: string; requestedAt?: string; expiresAt: string; bindingDigest: string;
 }
 export interface Person { userId: string; name: string }
 export interface Members { workspaces: readonly { tenantId: string; name: string; joinedAt: string; billing: boolean }[]; admins: readonly Person[]; eligible: readonly Person[] }
@@ -150,9 +150,10 @@ export function decodeApprovals(value: unknown): Approvals {
     const digest = (field: string): string => { const text = str(row[field]); return DIGEST.test(text) ? text : malformed(); };
     const requestedAt = row['requestedAt'];
     return {
-      tenantId: str(row['tenantId']), workspace: str(row['workspace']), runId: str(row['runId']), runVersion: int(row['runVersion']), workflowName: str(row['workflowName']), revision: int(row['revision']), nodeId: str(row['nodeId']),
+      tenantId: str(row['tenantId']), workspace: str(row['workspace']), runId: str(row['runId']), runVersion: int(row['runVersion']), workflowName: str(row['workflowName']), ...(row['runLabel'] === undefined ? {} : { runLabel: str(row['runLabel']) }), revision: int(row['revision']), nodeId: str(row['nodeId']),
       kind: oneOf(['step', 'tool'], row['kind']), capability: str(row['capability']), installationId: str(row['installationId']), target: str(row['target']),
       arguments: list(row['arguments']).map((argument) => ({ name: str(obj(argument)['name']), type: str(obj(argument)['type']) })),
+      facts: list(row['facts'] ?? []).map((fact) => ({ name: str(obj(fact)['name']), value: str(obj(fact)['value']) })),
       argumentsDigest: digest('argumentsDigest'), bindingDigest: digest('bindingDigest'), expiresAt: str(row['expiresAt']),
       ...(requestedAt === undefined ? {} : { requestedAt: str(requestedAt) }),
     };

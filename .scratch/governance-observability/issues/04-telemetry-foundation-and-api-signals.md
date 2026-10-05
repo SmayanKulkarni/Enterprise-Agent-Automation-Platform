@@ -20,7 +20,7 @@
 - [x] 401 and 403 responses increment `auth.denied` and emit the `auth.denied` event. Every command emits `command.executed`.
 - [x] `azure-functions/src/telemetry.ts` only calls `startTelemetry`. Activity, HTTP and timer handlers flush before returning. Orchestrator functions emit nothing.
 - [x] `api/v1/[...path].ts` starts telemetry before the transport loads and flushes through `waitUntil`.
-- [ ] `infra/observability/docker-compose.yml` starts `grafana/otel-lgtm`; the completion notes list the Prometheus metric names observed for every instrument this ticket emits. (Compose file written and validated with `docker compose config`; the stack was not started, so no metric names were observed. See notes.)
+- [x] `infra/observability/docker-compose.yml` starts `grafana/otel-lgtm`; the completion notes list the Prometheus metric names observed for every instrument this ticket emits. (Metric names observed 2026-09-30 by running the image and exporting every catalog instrument over OTLP. See "Observed Prometheus names".)
 
 ## Code map (verified 2026-09-30)
 
@@ -255,3 +255,13 @@ Deviations and notes:
 - `command.executed` is emitted only after the handler was reached, so argument validation failures and the stale-epoch guard before the handler do not produce it. `group.changed` is now wired (ticket 02 left it for this ticket). It fires for every successful handler result, including an idempotent replay, because the handler returns only the receipt.
 - The tenant label on `http.server.request.duration` is set on tenant routes and on `/api/v1/session` (authenticated for the tenant the session resolves), not on `/api/v1/tenants`.
 - The Azure invocation span itself ends after the handler returns, so it can miss the in-handler flush; spans created inside the handler are flushed.
+
+### Observed Prometheus names (2026-09-30)
+
+`grafana/otel-lgtm:latest` run with `docker run` (same ports, no dashboards mount) and every `METRICS` instrument exported through the real `startTelemetry` path. Not observed: traces in Tempo, log events in Loki, and instruments emitted by real API requests (synthetic label values were used).
+
+- Names match the expected ones. Histograms give `_bucket`, `_count`, `_sum`. Counters get `_total`. Dots become underscores.
+- `http_server_request_duration_seconds_*` labels: `http_route`, `http_request_method`, `http_response_status_code`, `tenant_id`.
+- `app_errors_total`, `auth_denied_total` (label `reason`).
+- Exporter also adds `job`, `instance`, `service_name`, `service_namespace`, `deployment_environment_name`, `otel_scope_*`, `telemetry_sdk_*`.
+- Docker Desktop (`desktop-linux`) does not share `/media`, so `docker compose up` fails on the `./dashboards` bind mount with "path ... is not shared from the host". Add `/media` under Docker Desktop File Sharing, or move the repo or the dashboards folder under `$HOME`.

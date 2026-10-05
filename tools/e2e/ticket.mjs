@@ -1,0 +1,10 @@
+import { chmodSync, writeFileSync } from 'node:fs';
+import { createClerkClient } from '@clerk/backend';
+import { users } from './clerk.mjs';
+const client = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+const who = process.argv[2];
+const out = process.argv[3] ?? `.ticket-${who}`;
+const t = await client.signInTokens.createSignInToken({ userId: users[who], expiresInSeconds: 900 });
+writeFileSync(out, t.token, { mode: 0o600 });
+chmodSync(out, 0o600);
+console.log(`sign-in token written to ${out} (expires in 15 minutes)`);

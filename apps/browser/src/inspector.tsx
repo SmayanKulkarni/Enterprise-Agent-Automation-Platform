@@ -119,6 +119,7 @@ function ConditionSettings({ node, nodes, edges, updateNode, outputSchemas }: { 
     <p>False → {falseTarget ? falseTarget.title : 'branch not connected'}</p>
   </>;
 }
+const MAX_DISCLOSED = 6;
 function ApprovalSettings({ node, nodes, edges, updateNode }: { node: WorkflowNode; nodes: readonly WorkflowNode[]; edges: readonly WorkflowEdge[]; updateNode: (id: string, patch: Partial<Pick<WorkflowNode, 'config'>>) => void }) {
   const next = nodes.find((candidate) => edges.some((edge) => edge.from === node.id && edge.to === candidate.id));
   const stored = Number(node.config?.['timeoutMs'] ?? 3600000);
@@ -130,8 +131,17 @@ function ApprovalSettings({ node, nodes, edges, updateNode }: { node: WorkflowNo
     if (Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 86400000) { setError(undefined); updateNode(node.id, { config: { ...node.config, timeoutMs: parsed } }); }
     else setError('Enter a value from 1 to 86400000.');
   };
+  const nextArgs = next?.config?.['arguments'];
+  const names = nextArgs !== null && typeof nextArgs === 'object' && !Array.isArray(nextArgs) ? Object.keys(nextArgs) : [];
+  const disclosed = Array.isArray(node.config?.['disclose']) ? (node.config['disclose'] as unknown[]).filter((name): name is string => typeof name === 'string') : [];
+  const disclose = (name: string, on: boolean) => {
+    const chosen = on ? [...disclosed, name] : disclosed.filter((item) => item !== name);
+    const { disclose: _previous, ...rest } = node.config ?? {};
+    updateNode(node.id, { config: chosen.length ? { ...rest, disclose: chosen } : rest });
+  };
   return <>
     <Field label="Approval timeout (ms)" help={`≈ ${Math.round((Number.isFinite(Number(text)) ? Number(text) : stored) / 60000)} minutes`} error={error}><input type="number" min="1" max="86400000" step="1" value={text} onChange={(event) => change(event.target.value)} /></Field>
+    {names.length > 0 && <Field label="Show the approver" help="Argument values shown in full to the approver. They are the exact values the effect will receive; up to six."><>{names.map((name) => <label key={name} className="check-row"><input type="checkbox" checked={disclosed.includes(name)} disabled={!disclosed.includes(name) && disclosed.length >= MAX_DISCLOSED} onChange={(event) => disclose(name, event.target.checked)} />{name}</label>)}</></Field>}
     <p>{next?.kind === 'mcp' ? `This Approval waits for an administrator, then permits the immediately following MCP effect: ${next.title}. The review is bound to this run.` : 'Connect this Approval directly to an MCP effect to publish.'}</p>
     <p>Workspace admins approve or reject in Run History, and group admins can also decide from the Governance approvals inbox. Run History shows the wait deadline, decision, and receipt. Rejections stop the effect, expired or stale decisions must be refreshed, and an unknown external effect needs reconciliation.</p>
   </>;

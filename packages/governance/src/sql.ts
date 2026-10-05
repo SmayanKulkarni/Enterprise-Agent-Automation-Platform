@@ -70,7 +70,7 @@ export class AzureSqlGovernanceStore {
 
   async pendingApprovals(context: GroupContext): Promise<PendingApprovalRow[]> {
     const [pending] = await this.read('governance.read_pending_approvals', context);
-    return rows(pending).map((row) => ({ tenantId: id(row['tenant_id']), workspace: text(row['slug']), runId: id(row['run_id']), runVersion: numeric(row['run_version']), definitionRevision: numeric(row['definition_revision']), workflowName: optionalText(row['workflow_name']), waitingJson: optionalText(row['waiting_json']), waitingKind: optionalText(row['waiting_kind']) }));
+    return rows(pending).map((row) => ({ tenantId: id(row['tenant_id']), workspace: text(row['slug']), runId: id(row['run_id']), runVersion: numeric(row['run_version']), definitionRevision: numeric(row['definition_revision']), workflowName: optionalText(row['workflow_name']), runLabel: optionalText(row['run_label']), waitingJson: optionalText(row['waiting_json']), waitingKind: optionalText(row['waiting_kind']) }));
   }
 
   async health(context: GroupContext): Promise<HealthRows> {

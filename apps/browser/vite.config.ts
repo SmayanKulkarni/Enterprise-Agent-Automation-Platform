@@ -1,7 +1,8 @@
 import '../../packages/telemetry/src/browser-api.js';
 import type { IncomingHttpHeaders } from 'node:http';
 import { defineConfig } from 'vite';
-import { localBrowserTransport } from '../../packages/browser/src/local-browser-host.js';
+import { localBrowserTransport, localWebhookIngress } from '../../packages/browser/src/local-browser-host.js';
+import { ingressResponse } from '../../packages/workflow/src/ingress-outcome.js';
 
 const proxyTarget = process.env['PLATFORM_API_PROXY_TARGET'] || undefined;
 const allowedOrigins = (environment: Readonly<Record<string, string | undefined>>) => (environment['CLERK_AUTHORIZED_PARTIES'] ?? '').split(',').map((origin) => origin.trim()).filter(Boolean);
@@ -36,6 +37,15 @@ export default defineConfig(() => ({
       const environment = process.env;
       const origins = allowedOrigins(environment);
       const transport = process.env['VITEST'] === 'true' ? undefined : localBrowserTransport(environment);
+      server.middlewares.use('/api/workflow-webhook', (request, response) => { void (async () => {
+        const ingress = localWebhookIngress();
+        const [tenantId = '', definitionId = ''] = (request.url ?? '').split('?')[0]!.split('/').filter(Boolean);
+        if (ingress === undefined || request.method !== 'POST') { response.writeHead(ingress === undefined ? 503 : 405); response.end(); return; }
+        const delivered = await ingress({ tenantId, definitionId, headers: headers(request.headers, undefined), body: await readBody(request) });
+        const reply = ingressResponse(delivered);
+        response.writeHead(reply.status, { 'content-type': reply.contentType });
+        response.end(JSON.stringify(reply.body));
+      })().catch((error: unknown) => { console.error('Local webhook ingress failed:', error instanceof Error ? `${'code' in error ? String(error.code) : 'UNKNOWN'} ${error.message}` : 'UNKNOWN'); const reply = ingressResponse(undefined); response.writeHead(reply.status, { 'content-type': reply.contentType }); response.end(JSON.stringify(reply.body)); }); });
       server.middlewares.use('/api/v1', (request, response) => { void (async () => {
         if (transport === undefined) { response.writeHead(503); response.end(); return; }
         const origin = request.headers.origin ?? `http://${request.headers.host ?? ''}`;

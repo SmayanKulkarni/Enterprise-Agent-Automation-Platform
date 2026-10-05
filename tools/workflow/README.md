@@ -22,3 +22,11 @@ pnpm profile:workflow
 Runs the workflow e2e scenario under the V8 CPU profiler and prints the top self-time frames from repository code. `PROFILE_REPEAT` sets the extra iterations (default 200). Profiles are written to the gitignored `outputs/profiles/`; the worker's profile (the larger file) is the interesting one, and opens as a flamegraph in speedscope or Chrome DevTools.
 
 The e2e ports are in-memory, so time spent waiting on SQL, model providers and MCP servers is not represented. Use Application Insights for that.
+
+## Memory report
+
+```sh
+UPSTASH_VECTOR_REST_URL=... UPSTASH_VECTOR_REST_TOKEN=... node tools/workflow/memory-report.mjs <tenant-uuid> [--out outputs/memory-reports/run.json]
+```
+
+Reads one tenant namespace with the read-only Upstash `range` command and prints salience (share of items whose text names one of their subjects), active items per subject, and bytes per item, once for V2 items and once for everything. Precision@k is computed by the offline six-run scenario in `packages/workflow/src/agent-tools.test.ts` with the same `memory-metrics.mjs` functions.

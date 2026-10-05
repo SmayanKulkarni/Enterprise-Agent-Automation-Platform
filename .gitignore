@@ -13,6 +13,7 @@ graphify-out/
 outputs/
 SYSTEM_DESIGN_REPORT.*
 docs/
+.archify/
 issues/
 evidence/
 .vitest/
@@ -24,3 +25,8 @@ skills-lock.json
 .agents
 tests/
 .playwright-mcp/
+tools/e2e/certs/
+tools/e2e/.state.json
+tools/e2e/.state-github.json
+tools/e2e/.state-prgate.json
+.ticket-*

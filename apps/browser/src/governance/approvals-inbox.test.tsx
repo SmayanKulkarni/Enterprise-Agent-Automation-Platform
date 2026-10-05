@@ -6,7 +6,7 @@ import type { Approval } from './decoders.js';
 const NOW = Date.parse('2026-01-01T00:00:00.000Z');
 const row = (overrides: Partial<Approval> = {}): Approval => ({
   tenantId: 't1', workspace: 'Support', runId: 'run-1', runVersion: 4, workflowName: 'Refund flow', revision: 2, nodeId: 'approval', kind: 'tool', capability: 'send-invoice', installationId: 'inst-1', target: 'billing',
-  arguments: [{ name: 'subject', type: 'string' }, { name: 'amount', type: 'number' }], argumentsDigest: 'a'.repeat(64), requestedAt: new Date(NOW - 60_000).toISOString(), expiresAt: new Date(NOW + 30 * 60_000).toISOString(), bindingDigest: 'b'.repeat(64), ...overrides,
+  arguments: [{ name: 'subject', type: 'string' }, { name: 'amount', type: 'number' }], facts: [], argumentsDigest: 'a'.repeat(64), requestedAt: new Date(NOW - 60_000).toISOString(), expiresAt: new Date(NOW + 30 * 60_000).toISOString(), bindingDigest: 'b'.repeat(64), ...overrides,
 });
 const render = (approvals: readonly Approval[], extra: Partial<Parameters<typeof ApprovalsInbox>[0]> = {}) => renderToStaticMarkup(<ApprovalsInbox approvals={approvals} completeness="full" decide={() => undefined} busyRunId={undefined} notice={undefined} canDecide now={NOW} {...extra} />);
 
@@ -14,6 +14,24 @@ describe('ApprovalsInbox', () => {
   test('shows workspace, capability, target and argument names with types', () => {
     const html = render([row()]);
     for (const text of ['Support', 'send-invoice', 'billing', 'subject: string, amount: number', '30 min left']) expect(html).toContain(text);
+  });
+
+  test('titles the card with the run label and keeps the workflow name as context', () => {
+    const html = render([row({ runLabel: 'octo/demo#7 Fix parser' })]);
+    expect(html).toContain('<h3>octo/demo#7 Fix parser</h3>');
+    expect(html).toContain('Refund flow');
+    expect(render([row()])).toContain('<h3>Refund flow</h3>');
+  });
+
+  test('shows disclosed facts as escaped text and nothing else about values', () => {
+    const html = render([row({ facts: [{ name: 'title', value: 'Return PR #2 <img src=x onerror=alert(1)>' }] })]);
+    expect(html).toContain('Details to review');
+    expect(html).toContain('Return PR #2 &lt;img src=x onerror=alert(1)&gt;');
+    expect(html).not.toContain('<img');
+  });
+
+  test('shows no details section without facts', () => {
+    expect(render([row()])).not.toContain('Details to review');
   });
 
   test('has no element for argument values and shortens the digest', () => {

@@ -13,6 +13,7 @@ export const OVERVIEW_PANELS: readonly PanelSpec[] = [
   { id: 'api-latency', title: 'API latency (p50, p95)', unit: 'seconds', kind: 'lines' },
   { id: 'api-error-rate', title: 'API error rate', unit: 'percent', kind: 'lines' },
   { id: 'model-latency', title: 'Model latency by provider (p95)', unit: 'seconds', kind: 'lines' },
+  { id: 'judgment-bands', title: 'Judgment bands (act, review, escalate)', unit: 'count', kind: 'bars' },
   { id: 'mcp-outcomes', title: 'MCP outcomes', unit: 'count', kind: 'bars' },
 ];
 

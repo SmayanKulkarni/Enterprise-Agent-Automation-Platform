@@ -2,10 +2,13 @@
 
 A multi-tenant platform for building, publishing, and operating governed agent workflows. A user draws a workflow on a canvas. An administrator publishes it as an immutable definition. A trigger starts a durable run that calls models, reads memory, waits for approvals, and invokes tenant-owned tools through a certified gateway. Every step leaves evidence.
 
-Status: this is a resume-project implementation, not a production rollout. Code and tests are the source of truth. Fixture data is labelled as fixture and never counts as live-provider evidence.
+![Threadline landing page](assets/readme/landing.png)
+
+Status: this is a resume-project implementation, not a production rollout. Code and tests are the source of truth. Fixture data is labelled as fixture and never counts as live-provider evidence. Every screenshot in this file was captured from the running app against live Azure SQL, Clerk, OpenRouter, Upstash and a private GitHub repository.
 
 ## Index
 
+- [Demo: a human-gated GitHub PR and issue gate](#demo-a-human-gated-github-pr-and-issue-gate)
 1. [Overview](#1-overview)
 2. [Tech stack](#2-tech-stack)
 3. [System architecture](#3-system-architecture)
@@ -25,6 +28,104 @@ Status: this is a resume-project implementation, not a production rollout. Code 
 17. [Testing and verification](#17-testing-and-verification)
 18. [Deployment](#18-deployment)
 19. [Further reading](#19-further-reading)
+20. [Project history](#20-project-history)
+
+---
+
+## Demo: a human-gated GitHub PR and issue gate
+
+One workflow shows most of the platform at work. A GitHub pull request or push becomes a signed event. A reviewer agent reads the diff through the GitHub MCP server and **suggests** accept or return. A workspace administrator **decides**. Only then does the platform merge the PR, or open an issue that returns it to the author. The model never holds the authority to change GitHub; the approval does.
+
+The target is a private demo repository, `SmayanKulkarni/pr-gate-demo`. The workflow is built by `tools/e2e/publish-prgate.mjs` and runs against the real stack, nothing mocked.
+
+### The workflow
+
+```mermaid
+flowchart TD
+    GH["GitHub<br/>pull request or push"] -->|"signed webhook"| IN["Trigger: PR or push event<br/>subject is repo and PR, version is head SHA"]
+    IN --> RV["Agent: Code reviewer<br/>reads the diff through MCP tools"]
+    RV --> AC{"Suggest accept?"}
+    AC -->|"true"| KD{"Is it a PR?"}
+    KD -->|"yes"| AM["Approval: merge?<br/>admin reads repo, PR and reasoning"]
+    AM --> MG["MCP: merge_pull_request, R3"]
+    MG --> EM["End: Merged"]
+    KD -->|"push"| EA["End: Commit accepted"]
+    AC -->|"false"| AR["Approval: return?<br/>admin reads the findings"]
+    AR --> IS["MCP: issue_write, R2"]
+    IS --> ER["End: Returned"]
+    IN -.->|"finalizer, runs on every outcome"| ST["MCP: create_commit_status<br/>context workflow/pr-gate"]
+```
+
+This is the published definition as Studio draws it:
+
+![Studio canvas with the PR gate workflow](assets/readme/studio-pr-gate.png)
+
+*Studio canvas. Dashed edges are Agent tool edges (`pull_request_get_diff`, `get_commit`). The lower-left node is the finalizer that publishes the commit status.*
+
+### What the live run did
+
+| GitHub object | Gate suggestion | Human decision | Result in the repository |
+| --- | --- | --- | --- |
+| PR #1 `feat: free shipping over $50` | accept | approved the merge at `approve_merge` | Squash-merged into `main` (merge commit `0bc45bd`) |
+| PR #2 `feat: quick admin login and rule engine` | return | approved the return at `approve_issue` | Return issues #4, #6 and #7 (see the note below) |
+| PR #3 `fix: tighten free shipping boundary` | return | approved the return | Return issue #8, PR left open |
+| Push, commit `22b26a6` | return | approved the return | Return issue #5 |
+| Push, accepted | accept | none needed, nothing to merge | Run ends at `Commit accepted` |
+
+One run was **rejected** at `approve_issue`. It ended with status `rejected`, changed nothing in GitHub, and the finalizer still posted its commit status.
+
+For PR #2 the reviewer named seven findings with file and line: a hardcoded `sk_live_` key, a loosely compared auth constant, SQL built by string concatenation, `eval` on user input, weakened quantity and discount validation, and a deleted test file. A reject decision ends the run with no change in GitHub.
+
+Re-reviewing PR #2 opened three return issues, because the first version of the gate had no idempotency on `issue_write`. That duplicate is the reason the `dedupeKey` step option exists (6.7).
+
+### What the approver sees
+
+The approver never reads a bare digest. The approval node lists the effect arguments to `disclose` (`repo`, `title`, `body`), and the platform shows exactly those values, which are the values the effect will receive. After the decision, Run History keeps the **decision record**: who decided, when, with which facts on screen.
+
+![Run History decision record for PR 2](assets/readme/run-history-pr-gate.png)
+
+*Run History in the Studio environment drawer, run for PR #2: the disclosed `repo`, `title` and `body` (the reviewer's findings), then the ordered events: intake, reviewer attempts, the diff tool call and its receipt, `approve_issue waiting`, `approve_issue completed`.*
+
+### Group view
+
+A group admin sees every workspace in one place. Run, spend and token numbers come from Azure SQL and are exact. Latency, error and MCP charts come from Prometheus; the capture below was taken with the local telemetry stack stopped, so those panels say so instead of drawing a guess.
+
+![Governance overview](assets/readme/governance-overview.png)
+
+*Governance, 7-day range. The partial-data notice marks runs whose cost was estimated. Rejected, expired, cancelled and superseded runs are left out of the success rate (6.6).*
+
+### Why it behaves safely
+
+| Property | Mechanism |
+| --- | --- |
+| The model only suggests | An effect needs a completed approval bound by digest to this run, capability, target and arguments (6.6) |
+| The approver reads the real values | `disclose` shows the effect's own arguments, so the text cannot differ from what executes |
+| A newer push replaces a stale review | `subjectKey` and `subjectVersion` supersede the in-flight run, and an effect refuses to run if its run is no longer the latest (6.7) |
+| A replayed webhook starts nothing new | The run ID is derived from tenant, definition and event ID. A same-ID, different-payload event gets 422 (6.7) |
+| A reject is not a failure | Statuses `rejected`, `expired`, `cancelled`, `superseded` stay out of failure counts (6.6) |
+| A truncated diff cannot slip through | An agent that read truncated output fails with `EVIDENCE_TRUNCATED` unless it opted in (6.6) |
+| The gate result reaches GitHub | A finalizer posts a commit status on every outcome (6.7) |
+| A second send never happens silently | `possible-send` is written before the call; an unknown outcome stops for reconciliation (6.5) |
+
+### Run it yourself
+
+```sh
+. tools/e2e/env-prgate.sh                 # the logged-in `gh` account's token becomes the installation credential
+node tools/e2e/setup-prgate.mjs           # certify the four GitHub capabilities
+node tools/e2e/publish-prgate.mjs         # draft, grants, check, publish
+node tools/e2e/relay-prgate.mjs provision # webhook credential
+node tools/e2e/relay-prgate.mjs watch     # polls open PRs and main, sends signed webhooks
+node tools/e2e/status-prgate.mjs          # runs and the node each is waiting at
+```
+
+Open Governance, then Approvals, to decide a pending run. Section 15.6 covers the full harness, including the commit-status server and the memory scenario.
+
+### Known limits of this demo
+
+- **Commit status enforcement is untested.** The platform cannot block a merge through the GitHub MCP server, because it has no status or check write tool. A finalizer posts the `workflow/pr-gate` status instead. Whether a repository ruleset can require a status context from a specific source has not been verified. Test in a throwaway repository first.
+- **The relay polls GitHub.** No public tunnel exists in this setup. The GitHub-native ingress (`source: "github"`) is implemented and tested but not yet pointed at a public URL.
+- **No Studio controls yet** for `dedupeKey`, `onTruncation`, `separationOfDuties`, `label`, subject fields and finalizer edges. The gate script sets them through the command API.
+- **Approval is binary.** A human who disagrees with the suggestion cannot attach a note that changes the effect.
 
 ---
 
@@ -63,9 +164,11 @@ Design commitments that shape every module:
 | Model providers | Azure OpenAI (default), OpenRouter (tenant opt-in) |
 | Tool protocol | Model Context Protocol (MCP) over HTTPS |
 | Memory backend | Upstash Vector, server-side REST only |
-| Telemetry | OpenTelemetry, Azure Monitor exporter, Application Insights |
-| Testing | Vitest 5 |
-| Linting | ESLint 10, typescript-eslint 8 |
+| Telemetry | OpenTelemetry (traces, metrics, logs over OTLP), Azure Monitor exporter, Application Insights |
+| Telemetry backends | Grafana LGTM (Prometheus, Loki, Tempo): local `grafana/otel-lgtm` container, Grafana Cloud when deployed |
+| Governance assistant | Provider and model chosen by the admin (Azure OpenAI or OpenRouter), context built server-side |
+| Testing | Vitest 5, plus an opt-in live E2E harness (`tools/e2e/`) |
+| Linting | ESLint 10, typescript-eslint 8, a per-file lint ratchet and a secret scan |
 | Infrastructure | Bicep (`infra/`) |
 
 ## 3. System architecture
@@ -104,6 +207,14 @@ flowchart LR
         ACT["Activities<br/>workflowStep and others"]
     end
 
+    subgraph Governance["Governance"]
+        GV["Group reads, approvals inbox,<br/>assistant"]
+    end
+
+    subgraph Telemetry["Telemetry plane"]
+        TEL["Prometheus, Loki, Tempo<br/>OTLP, Grafana LGTM or Cloud"]
+    end
+
     subgraph External
         LLM["Azure OpenAI / OpenRouter"]
         MCP["Tenant MCP servers"]
@@ -132,7 +243,15 @@ flowchart LR
     ACT --> LLM
     ACT --> MCP
     ACT --> VEC
+    T --> GV
+    GV --> SQL
+    GV -->|"queries"| TEL
+    GV --> LLM
+    T -.->|"OTLP"| TEL
+    ACT -.->|"OTLP"| TEL
 ```
+
+A third host mode exists for development. With `PLATFORM_LOCAL_RUNNER=true` the Vite dev server runs the same orchestration loop in process through `packages/browser/src/local-scheduler.ts`, so a complete run works without Azure Durable Functions (7.6).
 
 ### 3.2 Layering rules
 
@@ -148,35 +267,51 @@ flowchart LR
 .
 ├── api/v1/[...path].ts        Vercel entry point, delegates to browserResponse
 ├── apps/browser/              React and Vite browser shell
+│   └── src/governance/        Governance page, approvals inbox, assistant drawer
+│   └── src/charts/            SVG charts drawn from theme tokens
+├── assets/readme/             Screenshots used by this file
 ├── azure-functions/src/       Azure Function entry points and telemetry bootstrap
 │   └── functions/             browser-api, workflow-webhook, workflow-agent,
 │                              workflow-run (orchestrations), dispatch recovery
 ├── packages/
-│   ├── browser/               browser.v1 transport, commands, projections, local host
+│   ├── browser/               browser.v1 transport, commands, projections, local host,
+│   │                          local scheduler
 │   ├── case/                  Case runtime (durable unit of work)
 │   ├── contracts/             Versioned descriptors, codecs, canonical JSON, digests
 │   ├── deployment/            Deployment manifests and evidence
 │   ├── errors/                AppError, classification, error boundary, reporting
 │   ├── gateway/               Capability Gateway: authority, idempotency, receipts
+│   ├── governance/            Groups, SQL evidence reads, Prometheus, Loki and Tempo
+│   │                          clients, attention (pending approvals, health), assistant
 │   ├── identity/              Tenants, memberships, Azure SQL identity adapter
 │   ├── lifecycle/             Package lifecycle and Studio SQL store
 │   ├── memory/                Memory evaluation and lifecycle
 │   ├── operations/            Operations projections
 │   ├── portfolio/             Reference journeys
 │   ├── providers/             Provider adapters
-│   └── workflow/              Graph compiler, worker, service, ports, SQL store
+│   ├── telemetry/             Metric and event catalog, OTLP setup, flush per invocation
+│   └── workflow/              Graph compiler, worker, service, ports, SQL store,
+│                              GitHub ingress, memory formation, evaluation harness
 ├── database/
-│   ├── migrations/            001 to 009 SQL migrations
+│   ├── migrations/            001 to 020 SQL migrations
 │   ├── verify/                Post-migration verification scripts
-│   ├── seed/                  Demo data
+│   ├── seed/                  Demo data, admin test account, tenant group demo
 │   ├── bootstrap/, erd/       Bootstrap SQL and entity diagrams
-├── docs/                      Architecture, ADRs, decisions, diagrams
-├── infra/                     Bicep templates
-├── tools/                     Workspace verification, SQL tooling, private agent, profiler
+├── infra/
+│   ├── main.bicep             Azure infrastructure
+│   └── observability/         docker-compose for grafana/otel-lgtm and four dashboards
+├── tools/
+│   ├── contracts/             Contract governance check
+│   ├── e2e/                   Live E2E harness: scenarios, PR gate, status MCP server
+│   ├── sql/                   Migrate, verify, status, seed
+│   ├── workflow/              Private agent, CPU profiler, memory report, Upstash certification
+│   └── workspace/             Workspace check, verify, lint ratchet, secret scan
 ├── tests/                     Cross-package tests
 ├── CONTEXT.md                 Domain glossary
-└── AGENTS.md                  Repository instructions
+└── CLAUDE.md                  Repository instructions
 ```
+
+`docs/`, `issues/`, `evidence/` and `outputs/` are local working folders and are gitignored, so the links to `docs/` in section 19 resolve only on a checkout that has them.
 
 ## 5. Domain glossary
 
@@ -195,6 +330,17 @@ flowchart LR
 | Run history | Immutable, ordered evidence of one run. |
 | Operational memory | Validated, source-linked information retained for later runs of one workflow definition. |
 | Private connector agent | Tenant-operated relay inside the tenant network that invokes a private extension. |
+| Agent tool | A capability, or the memory search and save pair, attached to an Agent by a tool edge. The model may call it, one call at a time, during that Agent's step. It is not a step in the flow. |
+| Run outcome | The way a run ended. `completed` and four non-failure outcomes (`rejected`, `expired`, `cancelled`, `superseded`) are deliberate. Only `failed` and `unknown-outcome` count as failures. |
+| Decision record | What an approver decided and saw: outcome, optional reason, approver, time, binding digest and the disclosed facts. Kept in the run after the decision. |
+| Disclosure | The `disclose` list on an approval node: up to six argument names of the following effect whose values the approver may read. |
+| Run label | Text a trigger's `label` template resolves to at admission. Used as the run's title in the inbox and Run History. |
+| Subject | The thing a run is about (for example a PR), named by the trigger's `subjectKey`, with a version (`subjectVersion`, for example the head SHA). A newer version supersedes the run in flight. |
+| Finalizer | An edge with role `finalizer` from the trigger to an MCP step. Runs once when the run ends in any status, for example to publish a commit status. |
+| Capability variant | A manifest entry that names an underlying `tool` and `fixed` arguments the model cannot change. |
+| Dedupe key | Argument names on an MCP step. A second run reaching the same key reuses the first run's recorded result instead of sending again. |
+| Tenant group | An entity that owns several workspaces, managed by group admins in Governance. A workspace is in at most one group. |
+| Evidence plane, telemetry plane | The two data sources Governance reads. SQL is exact. Prometheus, Loki and Tempo are approximate (14.4). |
 
 ## 6. Workflow automation in detail
 
@@ -215,9 +361,10 @@ flowchart TD
     WHK --> RUN
     RUN --> ORC["Durable orchestration workflowRun"]
     ORC --> EX["Sequential node execution"]
-    EX --> DONE["Run completed"]
-    DONE --> SUM["Summary generation<br/>3 retries"]
-    SUM --> PRO["Memory promotion"]
+    EX --> DONE["Run ended"]
+    DONE --> FIN["Finalizer step<br/>runs on every status"]
+    FIN --> SUM["Summary generation<br/>3 retries"]
+    SUM --> PRO["Memory promotion<br/>and consolidation"]
 ```
 
 Key rules:
@@ -235,11 +382,25 @@ V1 executes seven node kinds. There are no loops, schedules, sub-workflows, para
 | --- | --- |
 | `trigger` | Entry point. Declares a typed input schema. Exactly one per graph. |
 | `memory` | Retrieves up to 20 validated, source-linked items for the run. Bounded by item count and total characters. |
-| `agent` | Calls a model with pinned provider, model, prompt version, response schema, and allowed capabilities. |
-| `condition` | Strict equality test on a field from the trigger input or a preceding agent's output. Routes to a `true` or `false` edge. |
-| `approval` | Pauses until an administrator approves or rejects one exact effect. Must directly precede an `mcp` node. |
+| `agent` | Calls a model with pinned provider, model, prompt version, response schema, and allowed capabilities. May carry up to 16 tools through tool edges (6.2.1). |
+| `condition` | Strict equality test on a field from the trigger input or a preceding agent's output. Routes to a `true` or `false` edge. Both branches may join in one node (a branch join). |
+| `approval` | Pauses until an administrator approves or rejects one exact effect. Must directly precede an `mcp` node. May list `disclose` arguments and set `separationOfDuties`. |
 | `mcp` | Invokes one granted capability on one certified installation. |
 | `end` | Terminal node. At least one per graph. |
+
+#### 6.2.1 Tool edges
+
+An edge with role `tool` runs from an Agent to an MCP node, or to a Memory node. It is not a flow edge.
+
+- An MCP node with a tool edge is a tool: exactly one tool edge in, no flow edges, no argument mapping (the model supplies arguments). An MCP without a tool edge stays a chain step.
+- An Agent may have up to 16 tools, each capability at most once, and needs `toolRounds` and `effects` of at least 1 (`TOOL_POLICY_REQUIRED`).
+- A Memory node as a tool gives the Agent `memory_search` and `memory_save` (10.2). At most one per Agent (`DUPLICATE_TOOL`). It adds no capability.
+- `allowedCapabilities` is the union of the authored list and the attached tool capabilities, computed at compile time.
+- One Agent step runs the whole tool loop: model call, one tool call (`parallel_tool_calls: false`), argument check against the pinned input schema, `invokeCapability`, append to a transcript stored on the run. Invalid arguments and unknown tool names go back to the model as tool errors and consume a round.
+- Each call has its own effect ID (`<agent>:tool:<round>`), so a crash after a stored assistant tool call resumes from the transcript.
+- A non-R1 tool call pauses the run in `waiting-approval` with a binding digest that includes the effect ID, so each approval authorizes one call.
+- An R1 (read) tool that fails is fed back to the model as `CAPABILITY_FAILED` and the loop continues. R2 and R3 failures stay fail-closed.
+- Model-facing tool names are `t<index>_<capability>`. An OpenRouter model must advertise `tools` in its catalog entry (`OPENROUTER_TOOLS_UNSUPPORTED`).
 
 Graph validation rejects: more than 100 nodes or 200 edges, duplicate IDs, unknown node kinds, missing or multiple triggers, missing end nodes, unreachable nodes, condition fields that do not exist in the source schema, `mcp` arguments that miss required fields or mismatch types, and non-read-only `mcp` nodes that lack a preceding approval.
 
@@ -276,6 +437,7 @@ sequenceDiagram
             O->>O: race timer vs external event
         end
     end
+    O->>S: workflowFinalize (finalizer step, never changes status)
     O->>S: workflowSummary (retry 3x, 1s)
     O->>S: workflowMemoryPromote (retry 3x, 1s)
 ```
@@ -362,7 +524,31 @@ The gateway writes `possible-send` before it invokes the tool. If the process di
 
 An approval binds to a digest of the run ID, definition digest, capability, installation, target, and arguments digest. An approval for one effect cannot authorize a different target or different arguments.
 
-The browser receives review labels, types, digests, deadlines, and decisions. It never receives raw effect arguments.
+The browser receives review labels, types, digests, deadlines, and decisions. It receives effect argument values only for the names the workflow author listed in the approval node's `disclose` (at most six, scalar values, 4000 characters each). Disclosed values are the exact values the effect will receive, so what the approver reads is what is bound by the arguments digest. Everything else stays redacted. The Governance approvals inbox and Run History render disclosed values as plain text.
+
+An approval ends one of four ways. An administrator can approve or reject (with an optional reason of up to 1000 characters); the deadline can pass; the run's starter or an administrator can cancel it; or a newer event for the same subject can supersede it (6.7). Reject, expiry, cancel and supersede are deliberate outcomes, not failures: the run status is `rejected`, `expired`, `cancelled` or `superseded`, and Governance leaves them out of run counts and the success rate. Every approval decision is kept in the run as a decision record (outcome, reason, approver, time, and the facts the approver saw), so Run History shows after the decision what was shown at the decision. An approval node may set `separationOfDuties: true` to refuse a decision from the person who started the run. The approval timeout is at most 14 days; the durable scheduler waits in timers of at most five days.
+
+Evidence completeness: tool output over 8000 characters is truncated for the model. By default an agent that read truncated output fails with `EVIDENCE_TRUNCATED`. An agent can set `onTruncation: "allow-marked"`; its output then carries `evidenceComplete: false` and the approval shows a fact `evidence: partial`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Waiting: approval node reached
+    Waiting --> Approved: admin approves
+    Waiting --> Rejected: admin rejects, optional reason
+    Waiting --> Expired: deadline passes
+    Waiting --> Cancelled: starter or admin cancels
+    Waiting --> Superseded: newer event for the same subject
+    Approved --> Effect: effect re-checks it is still the latest run
+    Effect --> Completed: effect succeeded
+    Effect --> Failed: capability failed
+    Effect --> Superseded: a newer run took over
+    Rejected --> [*]
+    Expired --> [*]
+    Cancelled --> [*]
+    Superseded --> [*]
+    Completed --> [*]
+    Failed --> [*]
+```
 
 ### 6.7 Triggers
 
@@ -384,6 +570,16 @@ Signed webhook: an external sender posts to `/workflow-webhook/:tenantId/:defini
 | 400 | Invalid shape |
 | 403 | Bad signature, stale timestamp, or disabled credential |
 | 404 | Unknown tenant or definition |
+| 413 | Body over 1 MiB |
+| 422 | Same event id sent again with a different payload |
+
+Errors use `application/problem+json`. One mapper (`ingress-outcome.ts`) serves both the Azure function and the local Vite ingress. The run ID is derived from tenant, definition and event id, so the same event id sent to two definitions starts two runs, and a replay of the same event and payload returns the original run ID.
+
+Trigger options: `label` (a template such as `$input.repo#$input.pr`, shown as the run's title in the inbox and Run History); `subjectKey` and `subjectVersion` (input fields naming the thing a run is about and its version, for example PR and head SHA: a newer event for the same subject supersedes the run still in flight, and an effect is refused with `superseded` if its run is no longer the latest for the subject); `source: "github"` with `inputMap` and `when` (GitHub's own webhook: `X-Hub-Signature-256` over the raw body, `X-GitHub-Delivery` as the event id, the payload mapped to the trigger input, other events and deleted pushes ignored with 202).
+
+Finalizers: an edge with role `finalizer` from the trigger to an MCP step runs that step once when the run ends in any status. Its arguments may read `$input.*`, `$run.outcome` (the End node's `outcome` label, else the run status) and `$run.id`. A failed finalizer is recorded in history and never changes the run status. Used to publish a commit status.
+
+Capabilities in a manifest may declare `tool` and `fixed` (a variant that calls an underlying tool with fixed arguments the model cannot change) and `targetFields` (the arguments that identify what an effect acts on; the compiler rejects an effect whose target fields come from an Agent's output). An MCP step may set `dedupeKey` (argument names): a second run reaching the same key reuses the first run's recorded result instead of sending again. `workflow.retire-installation` revokes an installation of either route.
 
 Credential handling:
 
@@ -459,7 +655,9 @@ stateDiagram-v2
 | Connector offline | Wait durably until the node deadline. |
 | Effect may have been sent, outcome unknown | Stop with `RECONCILIATION_REQUIRED`. An admin records a disposition. Nothing repeats automatically. |
 | Lost connector reply | Same as above. No automatic redelivery. |
+| Read capability (R1) returns an error | Fed back to the model as `CAPABILITY_FAILED`. The loop continues. R2 and R3 stay fail-closed. |
 | Node failure | Stop the run. Keep history and effect receipts. An admin reviews prior effects before starting a new run. |
+| Finalizer fails | Recorded in history. The run status does not change. |
 | Summary generation fails | Run stays completed. Retry three times, then record failure. No memory becomes visible. |
 | Memory provider unavailable | Run stays completed. The memory step returns an explicit unavailable result. |
 
@@ -510,7 +708,7 @@ Error mapping examples: `FEATURE_NOT_READY` returns 501 with the `terminal` cate
 | `workflowRun` | Orchestration | Sequential node execution |
 | `workflowDispatchRecovery` | Timer, every minute | Starts pending run dispatch intents left by webhook admission |
 
-Activities: `workflowDefinitionStart`, `workflowStep`, `workflowExpire`, `workflowSummary`, `workflowSummaryFailed`, `workflowMemoryPromote`, `workflowMemoryRemove`, `workflowMemoryCorrect`.
+Activities: `workflowDefinitionStart`, `workflowStep`, `workflowExpire`, `workflowFinalize`, `workflowSummary`, `workflowSummaryFailed`, `workflowMemoryPromote`, `workflowMemoryRemove`, `workflowMemoryCorrect`.
 
 Auxiliary orchestrations: `workflowMemoryPromotion`, `workflowMemoryRemoval`, `workflowMemoryCorrection`. Each retries its activity three times.
 
@@ -533,6 +731,10 @@ Ports are interfaces (`ModelPort`, `McpPort`, `HostedMemoryPort`), so the end-to
 ### 7.5 SQL connection handling
 
 Azure SQL adapters share one connection-pool promise per connection string. Rejected pools are evicted. Every request still calls a tenant- and epoch-fenced procedure. Runtime reads use a role separate from the projection writer role.
+
+### 7.6 Local runner
+
+`PLATFORM_LOCAL_RUNNER=true` swaps Azure Durable Functions for `packages/browser/src/local-scheduler.ts`, the same orchestration loop in process. It has the same turn cap (1000), runs the finalizer first, retries summary and promotion three times, and retries a step when two walkers collide on a `STALE` write (five tries, 500 ms apart). Approval waits use a single `setTimeout`, which holds up to 2^31 ms. A restart of the dev server would strand in-flight runs, so `recoverLocalRuns` resumes the tenants listed in `PLATFORM_LOCAL_RECOVER_TENANTS`. Vite restarts the server whenever a file under `packages/` changes, so do not edit those files during a live run. The Azure path has no emulator in CI; the local scheduler has contract tests.
 
 ## 8. API reference and routing
 
@@ -620,8 +822,20 @@ Workflow and Studio commands:
 | `workflow.provision-webhook-credential` | admin | Create webhook credential, return secret once |
 | `workflow.rotate-webhook-credential` | admin | Rotate, previous credential valid five minutes |
 | `workflow.disable-webhook-credential` | admin | Fail closed for the definition |
+| `workflow.cancel` | starter or admin | End a run that is queued, running or waiting for approval (status `cancelled`) |
+| `workflow.retire-installation` | admin | Revoke a connector installation of either route |
 
-More commands cover connector installation and enrollment, memory imports, memory correction and withdrawal, run reconciliation, and webhook tests. See `packages/browser/src/workflow-commands.ts` and `studio-commands.ts`.
+Other commands, by area:
+
+| Area | Commands |
+| --- | --- |
+| Studio | `studio.evaluate`, `studio.run-checks`, `studio.simulate`, `studio.submit` |
+| Connectors | `workflow.certify`, `workflow.enroll`, `workflow.rotate`, `workflow.revoke` |
+| Operations | `workflow.reconcile`, `workflow.test-webhook`, `workflow.configure-model-settings` |
+| Memory | `workflow.import-memory`, `workflow.revoke-memory-import`, `workflow.correct-memory`, `workflow.withdraw-memory`, `workflow.delete-memory`, `workflow.hold-memory`, `workflow.release-memory-hold`, `workflow.set-memory-expiry`, `workflow.invalidate-memory-source` |
+| Governance | `governance.create-group`, `governance.add-tenant`, `governance.remove-tenant`, `governance.add-admin`, `governance.remove-admin`, `governance.set-billing-tenant` (8.7) |
+
+See `packages/browser/src/workflow-commands.ts` and `studio-commands.ts`.
 
 ### 8.5 Unified request sequence
 
@@ -745,44 +959,92 @@ flowchart TD
 
 ### 9.5 Inspect a run
 
-Run History shows the pinned definition revision and digest, a redacted input summary (field names and types), chronological node events, condition branches, approval wait and expiry, receipt and argument digests, and reconciliation state. It never shows raw input values or effect arguments.
+Run History shows the pinned definition revision and digest, a redacted input summary (field names and types), chronological node events, condition branches, approval wait and expiry, receipt and argument digests, and reconciliation state. The decision record shows the approver's outcome, reason, time and the disclosed facts the approver saw. It never shows raw input values, and it shows effect arguments only for the names the approval node disclosed.
 
 ## 10. Operational memory
 
-Operational memory lets later runs of a workflow use validated facts from earlier ones. It is separate from Run History.
+Operational memory lets later runs of a workflow use validated facts from earlier ones. It is separate from Run History. Version 2 (2026-10-04) changed how items are formed, merged and recalled.
+
+### 10.1 Pipeline
 
 ```mermaid
 flowchart TD
     subgraph Write path
-        R["Run completes"] --> S["Generate source-linked summary"]
-        AG["Agent proposal<br/>max 3 per step"] --> V
-        S --> V["Server validation<br/>redact, check source, type, scope"]
-        V -->|"invalid"| RJ["Recorded as rejected<br/>never retrievable"]
-        V -->|"valid"| FP{"Fingerprint seen?"}
-        FP -->|"yes"| NO["No-op"]
-        FP -->|"no"| EMB["Embed once, write pending vector"]
-        EMB --> PRM["Promote to retrievable"]
+        R["Run ends"] --> S["Summarize a bounded view<br/>input, node outputs, path, decisions"]
+        S --> FD["Findings checked by exact excerpt<br/>against the unredacted source"]
+        AG["Agent calls memory_save<br/>source, subjects, claim"] --> GR
+        FD --> GR["Grounding check<br/>numbers, ids and quotes appear in the source"]
+        GR -->|"ungrounded"| RJ["Rejected: UNGROUNDED_CLAIM<br/>or INVALID_PROPOSAL"]
+        GR -->|"grounded"| FP{"Fingerprint seen?"}
+        FP -->|"yes"| CO["Record corroboration<br/>at most 20 sources"]
+        FP -->|"no"| ST["Stage pending vector"]
+        ST --> CN["Consolidate<br/>query candidates, recheck in SQL"]
+        CN -->|"add"| PRM["Promote to retrievable"]
+        CN -->|"duplicate"| NO["No-op"]
+        CN -->|"supersede"| SP["Withdraw predecessor, remove vector,<br/>then promote successor"]
     end
     subgraph Read path
-        MN["Memory node"] --> Q["Embed run input, query top K"]
-        Q --> EL["Eligibility recheck in SQL<br/>state, scope, owner, expiry, digest"]
-        EL --> CTX["Bounded, labelled context for agent"]
+        MN["Memory node or memory_search"] --> OF["Over-fetch, limit x 3, cap 30"]
+        OF --> EL["Eligibility recheck in SQL<br/>state, scope, owner, expiry, digest"]
+        EL --> RK["Rank: 0.65 relevance, 0.25 recency, 0.10 type<br/>at most 2 per leading subject"]
+        RK --> CTX["Bounded, labelled context"]
     end
-    PRM --> Q
+    PRM --> OF
+    SP --> OF
 ```
 
-Rules:
+### 10.2 Formation
+
+- **Summary.** `HttpModelPort.summarize` sends a bounded view: the input (4,000 characters), outputs of completed agent, MCP and end nodes (2,000 per node, 8,000 total), the ordered path, decision outcomes without approver identity, and the status. Strings and secret-looking keys are redacted structurally before serialising. The summary record settles in one of `ready`, `skipped`, `ungrounded` or `rejected`. A malformed draft throws `INVALID_SUMMARY`, so the durable activity retries and then marks the summary failed.
+- **Agent tools.** An Agent with a Memory tool edge gets `memory_search({ query, subject? })` and `memory_save({ type, text, excerpt, source, subjects })`. `source` is `input` or the call ID of an earlier tool result. A claim is grounded when every number, id-like token and quoted string appears in the source at a token boundary. An ISO timestamp counts as one token. A failed save returns a typed error to the model (`INVALID_SOURCE` with the valid sources, or the list of `ungroundedClaims`).
+- **Subjects.** A subject key such as `pr:acme/api#42` ties an item to the thing it is about. Retrieval and consolidation use it.
+- **Fingerprints.** V2 fingerprints drop the source and run but keep the owner and subject for a stated preference, so two users' identical preferences never share one item.
+- **Memory schemas** live in the runtime, not in the compiled definition, so adding them changes no definition digest.
+
+### 10.3 Consolidation
+
+- Candidates come from one bounded vector query and are rechecked in SQL. Candidates from the same run are excluded.
+- A duplicate needs a score of at least 0.97, the same type and the same subjects.
+- A model decision inside the band can retire an item of the same type. A durable fact may retire a `run-summary`, and a `run-summary` may be dropped as redundant against a durable fact. A fact is never retired by an episode.
+- The supersede order is withdraw, remove the vector, then promote. A crash in the middle converges on replay and never leaves two live versions.
+- A hold is checked when the decision is made and again when it is applied.
+- A failed or missing candidate query, a missing model port, a model error or an invalid target records `add` with path `fallback` or `deterministic`, so a memory is never lost.
+- The decision record holds scores, IDs, model and prompt version, never text.
+
+### 10.4 Recall
+
+- Each returned item carries a label (`type id observed subjects source`). Whole items that do not fit `maxChars` are skipped.
+- V1 items rank with type weight 0.3.
+- The Memory node query is the input's string values, or the JSON text when the input has none, so a workflow started with `{}` still recalls.
+- The retrieval receipt carries rank inputs and no text. Studio shows them with the supersession chain.
+
+### 10.5 Rules
 
 - Admitted items are task facts supported by validated run input or events, and preferences that an identified user stated explicitly. Inferred traits, unsourced claims, secrets, and new instructions are excluded.
 - Scope defaults to the tenant and the stable workflow definition ID. Items record the producing revision.
 - Cross-workflow use needs an admin-published Memory Import that pins a source summary by run ID and digest. Revocation applies to future retrievals. Imports never cross tenants.
-- Only a Memory node retrieves memory. Agent nodes do not retrieve it implicitly.
+- Only a Memory node, or a Memory tool the author attached to an Agent, retrieves memory. Agent nodes do not retrieve it implicitly.
 - Models are chosen explicitly, never by environment default. Each Agent step names its provider and exact model. A tenant administrator names the summary model (with an optional fallback) and the embedding model in Studio, saved as Model settings. OpenRouter choices come from the live OpenRouter catalog (chat and embeddings), and structured output is checked against it. There is no environment allowlist.
 - Embeddings default to the Upstash index's built-in model. A tenant can instead use OpenRouter or Azure OpenAI embeddings whose vectors match the index dimension; a test call verifies this on save. Each vector is tagged with its embedding profile and queries filter to the current profile, so vectors from different models never mix. There is no cross-provider embedding fallback.
 - Upstash Vector is server-only: one namespace per tenant, deterministic item IDs, server-derived metadata filters, bounded `topK`, and a final SQL eligibility recheck. Azure SQL keeps lifecycle and audit metadata, never memory text or embeddings.
 - Withdrawal, deletion, source invalidation, and correction change the SQL eligibility ledger before vector cleanup, so a stale vector match cannot be recalled.
-- Items expire after 90 days by default. Admins can shorten expiry, never extend it.
+- Items expire by type (90, 30 or 180 days). Admins can shorten expiry, never extend it past the type's maximum.
 - The tenant allowlist is disabled by default. A failed provider leaves the run complete and returns an explicit unavailable result.
+
+### 10.6 Measuring it
+
+`tools/workflow/memory-metrics.mjs` computes four numbers: salience (share of items whose text names one of their subjects), active items per subject, precision@k, and bytes per item. `tools/workflow/memory-report.mjs <tenant-uuid>` reads one tenant namespace with the read-only Upstash `range` command and prints them for V2 items and for all items.
+
+The V1 audit on 2026-10-04 (15 vectors) found salience 0 of 11 summaries, three active items restating one assessment, and no tool-sourced facts. The offline six-run scenario (a test in `packages/workflow/src/agent-tools.test.ts`, scripted model ports) reads salience 1, one active `task-fact` per subject, 100% tool-sourced facts, and precision@5 of 1 for a subject-filtered follow-up. Two active items per subject remain when a durable fact and a run summary describe the same subject, because they are different types. The live six-run scenario (`tools/e2e/memory-scenario.mjs`, opt-in) found four root causes, now fixed with tests:
+
+| Finding | Fix |
+| --- | --- |
+| Summary and consolidation token limits (500, 300) starved a reasoning model, so it returned no content | Raised to 2500 and 1500 |
+| The Agent looped on `memory_save` with a wrong `source` and burned its node deadline | Typed feedback `INVALID_SOURCE` with the valid sources |
+| Every MCP `isError` became `unknown-outcome` and stopped the run | R1 errors are `failed` and fed back to the model |
+| The finalizer ran after the summary retries, so a commit status arrived about a minute late | Finalize runs first |
+
+Precision@5 on live data has not been measured. Phase 5 (lessons) is deferred. Re-run `tools/workflow/upstash-certification.cjs` after deploying consolidation.
 
 ## 11. Security model
 
@@ -817,8 +1079,19 @@ Migrations live in `database/migrations`. Each has a matching verification scrip
 | `007_webhook_admission_and_history` | Webhook admission, run history |
 | `008_openrouter_tenant_connection` | Encrypted tenant OpenRouter connection |
 | `009_bounded_run_history` | Forward-only keyset paging over `(created_at, id)` |
+| `010_model_settings` | Tenant model settings: summary model, fallback, embedding profile |
+| `011_studio_revision_history` | Draft revision list for the Versions tab |
+| `012_tenant_groups` | Tenant groups and the `platform_governance_browser` role |
+| `013_governance_evidence` | `workflow.run_facts`, `usage_estimated`, `governance.command_receipts` |
+| `014_tenant_group_commands` | Create group, add and remove workspace procedures |
+| `015_tenant_group_admins` | Co-admins, billing workspace, `identity.group_admin_grants` |
+| `016_governance_reads` | Overview, run series, workflow portfolio reads |
+| `017_governance_attention` | Pending approvals and health reads, circuit keys |
+| `018_non_failure_terminal_outcomes` | `rejected`, `expired`, `cancelled`, `superseded` are terminal in `run_facts` and excluded from Governance run counts |
+| `019_run_label_in_pending_approvals` | `run_label` column in the pending approvals read |
+| `020_memory_consolidation_records` | `memory-consolidation` record kind for consolidation decisions and corroboration |
 
-Entity diagrams for identity are in `database/erd/`.
+Entity diagrams for identity are in `database/erd/`. Migrations 018 to 020 were applied to the live Azure SQL database and `pnpm sql:verify` passed all 20 on 2026-10-04.
 
 ```sh
 pnpm sql:migrate
@@ -839,12 +1112,16 @@ The browser shell in `apps/browser` is a React 19 and Vite 7 app.
 | Shell and routing | `app.tsx`, `platform-app.tsx`, `platform-routes.ts`, `app-routes.ts` |
 | API client | `platform-api.ts`, `session-state.ts` |
 | Studio | `studio-editor.tsx`, `inspector.tsx`, `workflow-model.ts` |
-| Panels | `connector-panel.tsx`, `webhook-panel.tsx`, `run-history.tsx`, `workflow-memory-panel.tsx`, `memory-import-panel.tsx`, `openrouter-connection-panel.tsx` |
+| Panels | `connector-panel.tsx`, `webhook-panel.tsx`, `run-history.tsx`, `workflow-memory-panel.tsx`, `memory-import-panel.tsx`, `openrouter-connection-panel.tsx`, `model-settings-panel.tsx`, `revision-history-panel.tsx` |
+| Environment drawer | `environment-drawer.tsx`: right-hand drawer with Provider, Models, Connectors, Webhook, Memory and Runs. Hash links `#provider-panel`, `#connector-panel`, `#webhook-panel`, `#memory-panel` and `#run-<id>` open it. |
+| Model choice | `model-picker.tsx`, `model-catalog.ts`: live OpenRouter catalog, curated Azure OpenAI deployments |
 | Governance | `governance/governance-page.tsx`, `governance-route.tsx`, `governance-api.ts`, `governance-source.ts`, `governance-model.ts`, `decoders.ts` |
 | Governance panels | `overview-panel.tsx`, `kpi-row.tsx`, `approvals-inbox.tsx`, `group-admin-panel.tsx`, `create-group.tsx`, `logs-panel.tsx`, `trace-panel.tsx`, `assistant-drawer.tsx`, and the SVG charts in `charts/` |
 
 Behaviors worth knowing:
 
+- Tool ports sit under Agents and over MCP nodes. Tool edges are dashed and vertical. The Versions tab loads an earlier revision onto the canvas without touching the saved revision; a save then appends the next one.
+- Run History shows the run label as the title, the decision record, and disclosed facts as plain text.
 - Clerk tokens stay in Clerk-managed memory and travel only as Bearer headers.
 - The Studio canvas supports pointer and keyboard placement, arrow-key movement, selectable edges, bounded zoom, and a phone layout driven by CSS.
 - Draft state is explicit (`loading`, `ready`, `failed`), so a failed load never looks like an empty draft.
@@ -945,6 +1222,8 @@ On Docker Desktop the repository path must be under a shared folder, or the comp
 | `connector.agent.requests` | counter | none | `tenant_id`, `operation`, `outcome` |
 | `memory.retrievals` | counter | none | `tenant_id`, `status` |
 | `memory.proposals` | counter | none | `tenant_id`, `state` |
+| `memory.summaries` | counter | none | `tenant_id`, `outcome` |
+| `memory.consolidation` | counter | none | `tenant_id`, `decision`, `path` |
 | `workflow.dispatch.recovered` | counter | none | none |
 
 ### 14.7 Event catalog
@@ -968,6 +1247,8 @@ On Docker Desktop the repository path must be under a shared folder, or the comp
 | `webhook.delivery` | `tenant_id`, `definition_id`, `outcome` |
 | `connector.request` | `tenant_id`, `installation_id`, `operation`, `outcome` |
 | `memory.retrieval` | `tenant_id`, `run_id`, `node_id`, `status`, `item_count` |
+| `memory.summary` | `tenant_id`, `run_id`, `outcome`, `findings`, `dropped` |
+| `memory.consolidation` | `tenant_id`, `run_id`, `decision`, `path`, `candidates` |
 | `group.changed` | `group_id`, `action`, `actor_user_id`, `subject_id` |
 | `assistant.asked` | `group_id`, `billing_tenant_id`, `provider`, `model`, `tokens`, `cost`, `outcome` |
 
@@ -1038,7 +1319,9 @@ Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 | Script | Purpose |
 | --- | --- |
 | `pnpm verify` | Workspace check, contracts, lint, typecheck, tests, evidence |
-| `pnpm lint` | ESLint |
+| `pnpm lint` | Per-file lint ratchet against `tools/workspace/lint-baseline.json` (no file may gain errors), then a secret scan |
+| `pnpm lint:raw` | Plain ESLint |
+| `pnpm workspace:check` | Workspace structure check |
 | `pnpm typecheck` | TypeScript project check |
 | `pnpm test` | Vitest |
 | `pnpm contracts` | Build contracts and run governance checks |
@@ -1047,6 +1330,20 @@ Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 | `pnpm certify:upstash` | Certify the Upstash Vector integration |
 | `pnpm profile:workflow` | CPU profile of the workflow scenario |
 | `pnpm sql:migrate`, `sql:verify`, `sql:status`, `sql:seed:demo` | Azure SQL tooling |
+
+### 15.6 Live E2E harness
+
+`tools/e2e/` drives the real stack: Clerk sessions, Azure SQL, OpenRouter, Upstash Vector, MCP servers and the local LGTM stack. Nothing is mocked. `tools/e2e/README.md` has the full steps. Start the dev server with `. tools/e2e/env.sh` (it sets `PLATFORM_LOCAL_RUNNER=true`), then pick a scenario.
+
+| Scenario | What it shows | Entry |
+| --- | --- | --- |
+| Dependency briefing | Agent with four tools and memory, condition, human approval of a report write | `setup.mjs`, `publish.mjs`, `run.mjs` |
+| Signed webhook and OAuth MCP | GitHub MCP behind OAuth, webhook signature negatives (tamper, stale, replay, rotation) | `setup-github.mjs`, `publish-github.mjs`, `webhook.mjs` |
+| PR and commit gate | The demo at the top of this file | `setup-prgate.mjs`, `publish-prgate.mjs`, `relay-prgate.mjs` |
+| Commit status | Finalizer publishes `workflow/pr-gate` through `status-mcp.mjs` | `status-mcp.mjs` |
+| Memory formation | Six runs, then a memory report. Spends OpenRouter and Upstash quota, so it needs `E2E_MEMORY_SCENARIO=1` | `memory-scenario.mjs` |
+
+`ticket.mjs <workflowAdmin|governanceAdmin>` mints a one-time Clerk sign-in ticket into a mode-0600 file and never prints it. The GitHub token is read from `gh auth token` at server start and never written to SQL, logs or disk. Never approve or reject a pending gate run on someone else's behalf; leave it for the administrator in Governance, then Approvals.
 
 ## 16. Configuration reference
 
@@ -1079,6 +1376,10 @@ Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 | `GOVERNANCE_ASSISTANT_MAX_COST` | API | Per-call cost ceiling in USD. Unset or not a positive number: the assistant answers 501. A call that reports more fails the turn |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | API, Functions | Enables OTLP export of traces, metrics and logs |
 | `OTEL_EXPORTER_OTLP_HEADERS` | API, Functions | Standard OTLP header list, for example the Grafana Cloud authorization header |
+| `PLATFORM_LOCAL_RUNNER` | Dev server | `true` runs the orchestration loop in process instead of Durable Functions |
+| `PLATFORM_LOCAL_RECOVER_TENANTS` | Dev server | Tenants whose in-flight runs the local runner resumes after a restart |
+| `WORKFLOW_MCP_ALLOWED_HOSTS` | API, Functions | Hosts a public MCP installation may call |
+| `WORKFLOW_MCP_CREDENTIAL_<INSTALLATIONID>` | API, Functions | Bearer credential for one MCP installation (ID without dashes, uppercase). Read at start, never stored |
 | `DEPLOYMENT_ENVIRONMENT` | API, Functions | Value of the `deployment.environment.name` resource attribute. Unset gives `unknown` |
 
 **Governance database role.** Migration 012 creates the role `platform_governance_browser` and later migrations grant it execute on the governance procedures. No migration adds a login to it, because the runtime user differs per environment. After migrating, an operator adds the user named in `AZURE_SQL_CONNECTION_STRING`:
@@ -1093,14 +1394,33 @@ Never commit `.env.local`, `.env.server.local`, or any file holding real keys. R
 
 ## 17. Testing and verification
 
-`pnpm verify` runs, in order: workspace check, contracts, lint, typecheck, tests. It also builds workspace evidence.
+`pnpm verify` runs, in order: workspace check, contracts, lint, typecheck, tests. It also builds workspace evidence. At the time of writing `pnpm test` runs 112 test files with 1,099 passing tests and 10 skipped (the skipped ones need live services).
 
 Test layers:
 
 - Unit tests sit next to source files.
 - `packages/workflow/src/workflow-e2e.test.ts` drives complete runs through the worker with in-memory ports, covering approvals, connector polling, circuits, reconciliation, memory, and summaries.
-- `packages/browser` tests cover contracts, transport, commands, projections, and the local host.
-- Browser app tests cover routes, API client, session state, and the workflow model.
+- `packages/workflow/src/agent-tools.test.ts` runs the six-run memory scenario offline (10.6).
+- Behaviour tests per rule: approval disclosure, separation of duties, subject supersede, finalizer, effect dedupe, evidence completeness, terminal outcomes, GitHub ingress, webhook identity, capability variants, timers.
+- `packages/browser` tests cover contracts, transport, commands, projections, the local host and the local scheduler.
+- `packages/telemetry/src/coverage.test.ts` fails when an event or instrument in the catalog has no emitter.
+- Browser app tests cover routes, API client, session state, the workflow model, Run History and the approvals inbox.
+- `tools/e2e/` is the live layer (15.6). It is manual and opt-in.
+
+### 17.1 Reviewer evaluation harness
+
+`packages/workflow/src/eval-harness.ts` runs a reviewer-style Agent over `eval-cases.ts` through the real worker with a scripted capability, then reports false accepts, false rejects, runs that failed closed, and cases whose verdict changed between repeats.
+
+| Group | Cases |
+| --- | --- |
+| `easy` | A clean rename (accept), a hardcoded key (return), SQL built from input (return) |
+| `injection` | Instructions hidden in the diff, in the PR title, or as a forged tool result (all return) |
+| `oversize` | A 600-line benign change (accept) and the same change with a hidden secret (return) |
+| `edge` | An empty diff and a binary-only change (both return) |
+
+### 17.2 Lint ratchet and secret scan
+
+`pnpm lint` fails when any file gains lint errors against `tools/workspace/lint-baseline.json`, so the existing backlog does not block work while new errors cannot enter. `tools/workspace/secret-scan.mjs` then scans for keys and tokens. `pnpm lint:raw` is plain ESLint.
 
 Fixture evidence does not prove live cloud or provider operation. Live checks need configured credentials for every agent provider.
 
@@ -1117,8 +1437,28 @@ Fixture evidence does not prove live cloud or provider operation. Live checks ne
 
 - [Architecture](docs/architecture.md)
 - [Architecture decision records](docs/adr/)
-- [Diagram workflow V1 decisions](docs/diagram-workflow-v1-decisions.md)
+- [Diagram workflow V1 decisions](docs/diagram-workflow-v1-decisions.md): every workflow decision, including Governance, approval disclosure, PR gate hardening and memory V2
+- [PR gate failure classes](docs/research/pr-gate-failure-classes.md): the research backlog behind the hardening
+- [Agentic memory V2 spec](issues/agentic-memory-v2/00-memory-formation-spec.md)
+- [Live E2E harness](tools/e2e/README.md)
 - [Browser setup](apps/browser/README.md)
-- [Private agent and profiling](tools/workflow/README.md)
+- [Private agent, profiling and memory report](tools/workflow/README.md)
 - [Domain glossary](CONTEXT.md)
 - [Studio coverage](docs/portfolio/solution-studio-coverage.md)
+
+## 20. Project history
+
+The history below comes from `git log` on `feature/001-workspace` plus the uncommitted working tree.
+
+| Date | Area | What landed |
+| --- | --- | --- |
+| 2026-09-18 to 09-19 | Foundation | Identity ERD, Solution Studio authoring contract, durable Studio store, guarded commands with fixture evidence |
+| 2026-09-25 | Memory and capabilities | Operational memory in Studio, capability and webhook setup, webhook admission and Run History fixes |
+| 2026-09-26 | Governed delivery | Governed workflow delivery, canvas navigation, tenant OpenRouter connections, OpenRouter agents |
+| 2026-09-27 | Performance | Bounded Run History reads (migration 009), shared SQL pools |
+| 2026-09-28 | UI | Threadline UI refresh, truthful public pages, platform shell split into modules |
+| 2026-09-29 | Tooling and errors | Application Insights traces, CPU profile script, error classification and reporting, Agent tool edges, model catalog, memory tool, revision history, admin test account |
+| 2026-09-30 to 10-01 | Governance and observability | Tenant groups, co-admins, billing workspace, OTLP traces, metrics and logs, run facts, overview and charts, approvals inbox, logs and trace tabs, governance assistant, four Grafana dashboards, migrations 012 to 017 |
+| 2026-10-04 (working tree, not committed) | PR gate hardening | Approval disclosure, decision records, non-failure outcomes, subject supersede, finalizers, capability variants, dedupe key, GitHub-native ingress, 14-day approval timers, migrations 018 and 019 |
+| 2026-10-04 (working tree, not committed) | Memory V2 | Grounded summaries, `memory_save` and `memory_search`, consolidation, ranked recall, memory metrics and report, migration 020 |
+| 2026-10-04 (working tree, not committed) | Verification | Live E2E harness, local scheduler, reviewer evaluation harness, lint ratchet and secret scan |

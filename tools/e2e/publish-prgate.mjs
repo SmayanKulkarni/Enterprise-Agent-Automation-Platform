@@ -1,0 +1,20 @@
+import { writeFileSync } from 'node:fs';
+import { workflowAdmin as admin, randomUUID } from './api.mjs';
+import { buildGraph, TOOLS, EFFECTS, STATUS_CAPABILITY } from './graph-prgate.mjs';
+
+const found = (await admin.projection('connector-installations')).find((item) => item.id.toLowerCase() === process.env.PRGATE_MCP_INSTALLATION_ID);
+const installation = { id: found.id.toLowerCase(), digest: found.manifest.digest };
+const nodes = [...TOOLS, ...EFFECTS];
+const grants = Object.fromEntries(nodes.map((item) => [item.id, randomUUID()]));
+const statusFound = process.env.PRGATE_STATUS_INSTALLATION_ID ? (await admin.projection('connector-installations')).find((item) => item.id.toLowerCase() === process.env.PRGATE_STATUS_INSTALLATION_ID) : undefined;
+const status = statusFound ? { installation: { id: statusFound.id.toLowerCase(), digest: statusFound.manifest.digest }, grant: randomUUID() } : undefined;
+const draftId = randomUUID();
+const created = await admin.command('studio', 'create-draft', { id: draftId, draft: buildGraph({ installation, grants, status }) });
+if (status) await admin.command('workflow', 'grant', { id: draftId, nodeId: 'status', installationId: status.installation.id, capability: STATUS_CAPABILITY }, { key: status.grant });
+for (const item of nodes) await admin.command('workflow', 'grant', { id: draftId, nodeId: item.id, installationId: installation.id, capability: item.capability }, { key: grants[item.id] });
+const check = await admin.command('workflow', 'check', { id: draftId }, { expectedVersion: created.revision });
+console.log('check:', check.state, JSON.stringify(check.issues ?? []).slice(0, 900));
+if (check.state !== 'passed') process.exit(1);
+const published = await admin.command('workflow', 'publish', { id: draftId, reviewDigest: check.digest }, { expectedVersion: created.revision });
+console.log('published', published.objectId);
+writeFileSync(new URL('./.state-prgate.json', import.meta.url), JSON.stringify({ draftId, publishedId: published.objectId }, null, 2));

@@ -1,7 +1,7 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, test } from 'vitest';
 import { observe, resetObservers } from '../../telemetry/src/observe.test-support.js';
-import { deliverWebhook, type Scheduler, type WebhookCredential, type WorkflowRun } from './service.js';
+import { deliverWebhook, webhookRunId, type Scheduler, type WebhookCredential, type WorkflowRun } from './service.js';
 import type { PublishedDefinition, WorkflowRecord, WorkflowStore } from './sql.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
@@ -35,9 +35,9 @@ describe('webhook ingress', () => {
     const { records, store, scheduler, starts } = ingress();
     const eventId = randomUUID(); const timestamp = '2026-01-01T00:00:00.000Z'; const body = Buffer.from(JSON.stringify({ ready: true }));
     const signature = `sha256=${createHmac('sha256', secret).update(message(eventId, timestamp, body)).digest('hex')}`;
-    await expect(deliverWebhook(store, scheduler, { tenantId, definitionId, eventId, timestamp, signature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'accepted', runId: eventId });
-    await expect(deliverWebhook(store, scheduler, { tenantId, definitionId, eventId, timestamp, signature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'replay', runId: eventId });
-    expect([...records.values()].filter((record) => record.kind === 'run')).toHaveLength(1); expect(starts).toEqual([eventId]);
+    await expect(deliverWebhook(store, scheduler, { tenantId, definitionId, eventId, timestamp, signature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'accepted', runId: webhookRunId(tenantId, definitionId, eventId) });
+    await expect(deliverWebhook(store, scheduler, { tenantId, definitionId, eventId, timestamp, signature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'replay', runId: webhookRunId(tenantId, definitionId, eventId) });
+    expect([...records.values()].filter((record) => record.kind === 'run')).toHaveLength(1); expect(starts).toEqual([webhookRunId(tenantId, definitionId, eventId)]);
     await expect(deliverWebhook(store, scheduler, { tenantId, definitionId, eventId: randomUUID(), timestamp, signature: `sha256=${'0'.repeat(64)}`, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'signature' });
     const malformedId = randomUUID(); const malformedBody = Buffer.from('{'); const malformedSignature = `sha256=${createHmac('sha256', secret).update(message(malformedId, timestamp, malformedBody)).digest('hex')}`;
     await expect(deliverWebhook(store, scheduler, { tenantId, definitionId, eventId: malformedId, timestamp, signature: malformedSignature, body: malformedBody, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'invalid-shape' });
@@ -50,7 +50,7 @@ describe('webhook ingress', () => {
     const currentSignature = `sha256=${createHmac('sha256', secret).update(message(eventId, timestamp, body)).digest('hex')}`;
     await expect(deliverWebhook(missing.store, missing.scheduler, { tenantId, definitionId, eventId, timestamp, signature: currentSignature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'credential-state' });
     const previousSignature = `sha256=${createHmac('sha256', 'rotated-secret').update(message(eventId, timestamp, body)).digest('hex')}`;
-    await expect(deliverWebhook(rotated.store, rotated.scheduler, { tenantId, definitionId, eventId, timestamp, signature: previousSignature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'accepted', runId: eventId });
+    await expect(deliverWebhook(rotated.store, rotated.scheduler, { tenantId, definitionId, eventId, timestamp, signature: previousSignature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'accepted', runId: webhookRunId(tenantId, definitionId, eventId) });
     await expect(deliverWebhook(rotated.store, rotated.scheduler, { tenantId: '44444444-4444-4444-8444-444444444444', definitionId, eventId: randomUUID(), timestamp, signature: currentSignature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'not-found' });
   });
 
@@ -59,10 +59,10 @@ describe('webhook ingress', () => {
     const eventId = randomUUID(); const timestamp = '2026-01-01T00:00:00.000Z'; const body = Buffer.from(JSON.stringify({ ready: true }));
     const signature = `sha256=${createHmac('sha256', secret).update(message(eventId, timestamp, body)).digest('hex')}`;
     const unavailable: Scheduler = { start: async () => { throw new Error('unavailable'); }, raise: async () => {} };
-    await expect(deliverWebhook(store, unavailable, { tenantId, definitionId, eventId, timestamp, signature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'accepted', runId: eventId });
+    await expect(deliverWebhook(store, unavailable, { tenantId, definitionId, eventId, timestamp, signature, body, now: Date.parse(timestamp) })).resolves.toEqual({ outcome: 'accepted', runId: webhookRunId(tenantId, definitionId, eventId) });
     const { recoverWebhookDispatch } = await import('./service.js');
     await expect(recoverWebhookDispatch(store, { start: async (runId) => { starts.push(runId); }, raise: async () => {} }, tenantId)).resolves.toBe(1);
-    expect(starts).toEqual([eventId]);
+    expect(starts).toEqual([webhookRunId(tenantId, definitionId, eventId)]);
   });
 
   test('counts each delivery outcome, labels the tenant only after the published definition was found, and starts one run per accepted event', async () => {
@@ -78,7 +78,7 @@ describe('webhook ingress', () => {
     expect(deliveries).toEqual(expect.arrayContaining([{ attributes: { tenant_id: tenantId, outcome: 'accepted' }, value: 1 }, { attributes: { tenant_id: tenantId, outcome: 'replay' }, value: 1 }, { attributes: { tenant_id: 'unknown', outcome: 'not-found' }, value: 1 }, { attributes: { tenant_id: 'unknown', outcome: 'invalid-shape' }, value: 1 }]));
     expect(deliveries).toHaveLength(4);
     expect((await points('workflow.runs.started')).map((point) => ({ attributes: point.attributes, value: point.value }))).toEqual([{ attributes: { tenant_id: tenantId, trigger: 'webhook' }, value: 1 }]);
-    expect(events('run.started')).toEqual([expect.objectContaining({ tenant_id: tenantId, run_id: eventId, definition_id: definitionId, trigger: 'webhook' })]);
+    expect(events('run.started')).toEqual([expect.objectContaining({ tenant_id: tenantId, run_id: webhookRunId(tenantId, definitionId, eventId), definition_id: definitionId, trigger: 'webhook' })]);
     expect(events('webhook.delivery').filter((line) => line['outcome'] === 'not-found' || line['outcome'] === 'invalid-shape').every((line) => line['tenant_id'] === undefined && line['definition_id'] === undefined)).toBe(true);
   });
 });
