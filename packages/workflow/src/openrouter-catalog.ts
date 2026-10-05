@@ -1,5 +1,5 @@
 export interface OpenRouterModel { id: string; structuredOutput: boolean; tools: boolean; name?: string; contextLength?: number; promptPrice?: number; completionPrice?: number; }
-export interface OpenRouterCatalog { chat(): Promise<readonly OpenRouterModel[]>; embedding(): Promise<readonly OpenRouterModel[]>; }
+export interface OpenRouterCatalog { chat(): Promise<readonly OpenRouterModel[]>; embedding(): Promise<readonly OpenRouterModel[]>; decisions(): Promise<readonly OpenRouterModel[]>; }
 
 const BASE = 'https://openrouter.ai/api/v1';
 const TTL_MILLISECONDS = 10 * 60 * 1000;
@@ -40,5 +40,5 @@ export function openRouterCatalog(fetcher: typeof fetch = fetch, now: () => numb
       throw error;
     }
   };
-  return { chat: () => load('/models', true), embedding: () => load('/embeddings/models', false) };
+  return { chat: () => load('/models', true), embedding: () => load('/embeddings/models', false), decisions: () => load('/models?output_modalities=decisions', false) };
 }

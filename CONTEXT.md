@@ -50,6 +50,10 @@ _Avoid_: MCP annotation, model judgment
 The way a Workflow Run ended. `completed` and the four non-failure outcomes (`rejected`, `expired`, `cancelled`, `superseded`) are deliberate; only `failed` and `unknown-outcome` count as failures. Governance success rate is completed runs over runs that were not rejected, expired, cancelled or superseded.
 _Avoid_: Final state, result
 
+**Judgment step**:
+A workflow step that asks a decision model up to 16 typed questions about the same mapped state in one call, and records each answer with its probability, confidence, and band, plus an overall band; it produces no text and takes no action.
+_Avoid_: Decision node (Decision means an approver's outcome), classifier
+
 **Decision record**:
 What an approver decided and saw: outcome, optional reason, approver, time, binding digest, and the disclosed facts, kept in the run after the decision.
 _Avoid_: Approval log, audit note

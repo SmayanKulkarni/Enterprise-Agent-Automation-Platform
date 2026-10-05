@@ -376,7 +376,7 @@ Key rules:
 
 ### 6.2 Node types
 
-V1 executes seven node kinds. There are no loops, schedules, sub-workflows, parallel branches, or tenant-uploaded code.
+V1 executes eight node kinds. There are no loops, schedules, sub-workflows, parallel branches, or tenant-uploaded code.
 
 | Node | Behavior |
 | --- | --- |
@@ -385,8 +385,13 @@ V1 executes seven node kinds. There are no loops, schedules, sub-workflows, para
 | `agent` | Calls a model with pinned provider, model, prompt version, response schema, and allowed capabilities. May carry up to 16 tools through tool edges (6.2.1). |
 | `condition` | Strict equality test on a field from the trigger input or a preceding agent's output. Routes to a `true` or `false` edge. Both branches may join in one node (a branch join). |
 | `approval` | Pauses until an administrator approves or rejects one exact effect. Must directly precede an `mcp` node. May list `disclose` arguments and set `separationOfDuties`. |
+| `judgment` | Asks an OpenRouter decision model (default `typesafe/jev-1.13`) 1 to 16 typed questions (choice, score, yes/no) about mapped state in one call. Records each answer with probability, confidence and band (`act`, `review`, `escalate`) plus an overall band, as flat `<question>_answer`, `_band` and `band` fields that a Condition can test. It produces no text and takes no action. See 6.2.2. |
 | `mcp` | Invokes one granted capability on one certified installation. |
 | `end` | Terminal node. At least one per graph. |
+
+#### 6.2.2 Judgment step
+
+A Judgment step sends all its questions to `POST https://openrouter.ai/api/alpha/decisions` with the tenant's OpenRouter key in one request. The model must be an exact (never aliased) slug from the live decisions catalog, such as the default `typesafe/jev-1.13`; the policy token limit must fit the model's context window. Bands are computed in code from the confidence and the node's `thresholds` (per-question overrides allowed); the overall band is the most cautious band among questions that gate. An Approval after a Judgment shows the approver every answer, probability, confidence and band. Judgment outputs are never memory evidence, and an effect target cannot be mapped from one. Deploy the worker and API before the browser, and never publish a Judgment before the worker is deployed.
 
 #### 6.2.1 Tool edges
 

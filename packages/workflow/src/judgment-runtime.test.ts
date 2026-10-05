@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import { observe, resetObservers } from '../../telemetry/src/observe.test-support.js';
-import type { CompiledNode } from './graph.js';
+import type { CompiledNode, WorkflowDefinition } from './graph.js';
 import type { JudgmentRequest, JudgmentResult, ModelPort } from './runtime.js';
 import { DEFINITION, MemoryRecords, POLICY, TENANT, idle, publish, readRun, seedRun, unusedModel, worker } from './worker-harness.test-support.js';
 
@@ -38,7 +38,7 @@ const setup = async (nodeConfig: Record<string, unknown> = config(), patch: Reco
   await seedRun(records, definition, RUN, { body: 'refund me please' }, { outputs: { recall: { memory: { status: 'success', items: [{ id: 'm1', text: 'two refunds' }] } } }, ...patch });
   return { records, definition };
 };
-const modelWith = (judge?: (request: JudgmentRequest) => Promise<JudgmentResult>): ModelPort => ({ ...unusedModel, ...(judge ? { judge } : {}) }) as unknown as ModelPort;
+const modelWith = (judge?: (request: JudgmentRequest) => Promise<JudgmentResult>): ModelPort => ({ ...unusedModel, ...(judge ? { judge } : {}) });
 const step = (records: MemoryRecords, model: ModelPort, runId = RUN) => worker(records, model, idle).step(TENANT, runId, DEFINITION, 'triage');
 
 afterEach(() => { resetObservers(); vi.restoreAllMocks(); });
@@ -48,7 +48,7 @@ test('a 4-question node makes one judge call and completes with flat output, usa
   const judge = vi.fn().mockResolvedValue(result());
   expect(await step(records, modelWith(judge))).toEqual({ next: 'end' });
   expect(judge).toHaveBeenCalledTimes(1);
-  const request = judge.mock.calls[0]![0] as JudgmentRequest;
+  const request: JudgmentRequest = judge.mock.calls.flat()[0] as JudgmentRequest;
   expect(request).toMatchObject({ tenantId: TENANT, model: 'typesafe/jev-1.13', state: { ticket: 'refund me please', history: { status: 'success', items: [{ id: 'm1', text: 'two refunds' }] }, channel: 'email' }, telemetry: { feature: 'judgment', runId: RUN, nodeId: 'triage', attempt: 1 } });
   expect(request.milliseconds).toBeGreaterThan(0);
   expect(Object.keys(request.questions)).toEqual(['team', 'refund', 'urgency', 'abusive']);
@@ -76,7 +76,7 @@ test('the band counter is incremented once per question without question ids', a
   const { points, everything } = observe();
   const { records } = await setup();
   await step(records, modelWith(vi.fn().mockResolvedValue(result())));
-  const counted = (await points('workflow.judgment.bands')).map((point) => ({ band: point.attributes['band'], type: point.attributes['question_type'], value: point.value })).sort((a, b) => `${a.band}${a.type}`.localeCompare(`${b.band}${b.type}`));
+  const counted = (await points('workflow.judgment.bands')).map((point) => ({ band: point.attributes['band'], type: point.attributes['question_type'], value: point.value })).sort((a, b) => String(a.band).concat(String(a.type)).localeCompare(String(b.band).concat(String(b.type))));
   expect(counted).toEqual([{ band: 'act', type: 'choice', value: 1 }, { band: 'act', type: 'noul', value: 2 }, { band: 'escalate', type: 'score', value: 1 }]);
   expect(await everything()).not.toContain('"team"');
 });
@@ -100,7 +100,7 @@ test('exhausted attempts fail the node with INVALID_MODEL_OUTPUT and repeated fa
   const failed = (await readRun(records, RUN)).data;
   expect(failed.status).toBe('failed');
   expect(failed.history.at(-1)).toMatchObject({ state: 'failed', detail: 'INVALID_MODEL_OUTPUT' });
-  await seedRun(records, (await records.workerDefinition(TENANT, DEFINITION))!.definition, SECOND_RUN, { body: 'again' }, { outputs: { recall: { memory: { status: 'empty', items: [] } } } });
+  await seedRun(records, (await records.workerDefinition(TENANT, DEFINITION))?.definition as WorkflowDefinition, SECOND_RUN, { body: 'again' }, { outputs: { recall: { memory: { status: 'empty', items: [] } } } });
   const blocked = await step(records, modelWith(judge), SECOND_RUN);
   expect(blocked).toMatchObject({ waiting: 'circuit' });
   expect(judge).toHaveBeenCalledTimes(3);
@@ -137,7 +137,7 @@ test.each([
   ['an extra question', { ...answers, extra: { type: 'noul', noul: 0.5 } }],
 ])('%s fails the whole step with INVALID_MODEL_OUTPUT and writes no output', async (_name, bad) => {
   const { records } = await setup();
-  expect(await step(records, modelWith(vi.fn().mockResolvedValue(result({ answers: bad as never }))))).toEqual({ failed: true });
+  expect(await step(records, modelWith(vi.fn().mockResolvedValue(result({ answers: bad }))))).toEqual({ failed: true });
   const run = (await readRun(records, RUN)).data;
   expect(run.history.at(-1)).toMatchObject({ detail: 'INVALID_MODEL_OUTPUT' });
   expect(run.outputs['triage']).toBeUndefined();

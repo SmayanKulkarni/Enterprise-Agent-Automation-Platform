@@ -1,4 +1,6 @@
-import { modelValid, policyValid, type JsonSchema, type JsonSchemaProperty, type NodePolicy } from './graph.js';
+import type { JsonSchema, JsonSchemaProperty, NodePolicy, WorkflowDefinition } from './graph.js';
+import { FACT_LIMIT, modelValid, object, policyValid } from './node-policy.js';
+import type { WorkflowRun } from './service.js';
 
 export type Band = 'act' | 'review' | 'escalate';
 export interface Thresholds { act: number; review: number; }
@@ -21,11 +23,10 @@ const CONFIG_FIELDS = ['provider', 'openRouterOptIn', 'model', 'questions', 'sta
 const QUESTION_FIELDS = ['type', 'instructions', 'criteria', 'thresholds', 'gate'];
 const CAUTION: Record<Band, number> = { act: 0, review: 1, escalate: 2 };
 
-const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const only = (value: Record<string, unknown>, names: readonly string[]): boolean => Object.keys(value).every((key) => names.includes(key));
 const unit = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 const criterion = (value: unknown): boolean => typeof value === 'string' && value.length >= 1 && value.length <= MAX_CRITERION;
-const thresholdsValid = (value: unknown): value is Thresholds => object(value) && only(value, ['act', 'review']) && unit(value['act']) && unit(value['review']) && Number(value['review']) <= Number(value['act']);
+const thresholdsValid = (value: unknown): value is Thresholds => object(value) && only(value, ['act', 'review']) && unit(value['act']) && unit(value['review']) && value['review'] <= value['act'];
 
 const criteriaCount = (question: Record<string, unknown>): number => question['type'] === 'choice' && object(question['criteria']) ? Object.keys(question['criteria']).length : question['type'] === 'score' && Array.isArray(question['criteria']) ? question['criteria'].length : 0;
 
@@ -83,28 +84,43 @@ export function normaliseAnswer(question: JudgmentQuestion, raw: unknown): Norma
     return { answer: choice, probability, confidence, probabilities };
   }
   const score = raw['score']; check(typeof score === 'number' && Number.isFinite(score) && score >= 0 && score <= keys.length - 1);
-  const best = keys.filter((key) => probabilities[key] !== undefined).reduce<string | undefined>((top, key) => top === undefined || probabilities[key]! > probabilities[top]! ? key : top, undefined);
-  check(best !== undefined);
-  return { answer: best, probability: probabilities[best]!, confidence, probabilities, score };
+  const top = keys.flatMap((key) => probabilities[key] === undefined ? [] : [{ key, value: probabilities[key] }]).reduce<{ key: string; value: number } | undefined>((best, item) => best === undefined || item.value > best.value ? item : best, undefined);
+  check(top !== undefined);
+  return { answer: top.key, probability: top.value, confidence, probabilities, score };
 }
 
-export function normaliseAnswers(questions: Record<string, JudgmentQuestion>, raw: Record<string, unknown>): Record<string, NormalisedAnswer> {
-  const ids = Object.keys(questions);
-  check(Object.keys(raw).length === ids.length && ids.every((id) => id in raw));
-  return Object.fromEntries(ids.map((id) => [id, normaliseAnswer(questions[id]!, raw[id])]));
+function normaliseEach(questions: Record<string, JudgmentQuestion>, raw: Record<string, unknown>): { id: string; question: JudgmentQuestion; answer: NormalisedAnswer }[] {
+  const entries = Object.entries(questions);
+  check(Object.keys(raw).length === entries.length && entries.every(([id]) => id in raw));
+  return entries.map(([id, question]) => ({ id, question, answer: normaliseAnswer(question, raw[id]) }));
 }
+
+export const normaliseAnswers = (questions: Record<string, JudgmentQuestion>, raw: Record<string, unknown>): Record<string, NormalisedAnswer> => Object.fromEntries(normaliseEach(questions, raw).map(({ id, answer }) => [id, answer]));
+
+export const questionsForModel = (questions: Record<string, JudgmentQuestionConfig>): Record<string, JudgmentQuestion> => Object.fromEntries(Object.entries(questions).map(([id, question]) => [id, Object.fromEntries(Object.entries(question).filter(([key]) => key !== 'thresholds' && key !== 'gate')) as JudgmentQuestion]));
 
 export const bandOf = (confidence: number, thresholds: Thresholds): Band => confidence >= thresholds.act ? 'act' : confidence >= thresholds.review ? 'review' : 'escalate';
 
 export function evaluateJudgment(config: JudgmentConfig, raw: Record<string, unknown>, model: string, requestId?: string): { output: Record<string, unknown>; bands: QuestionBand[] } {
-  const normalised = normaliseAnswers(config.questions, raw);
   const output: Record<string, unknown> = {}; const bands: QuestionBand[] = []; const probabilities: Record<string, Record<string, number>> = {};
   let overall: Band = 'act';
-  for (const [id, question] of Object.entries(config.questions)) {
-    const answer = normalised[id]!; const band = bandOf(answer.confidence, question.thresholds ?? config.thresholds);
+  for (const { id, question, answer } of normaliseEach(config.questions, raw)) {
+    const settings = question as JudgmentQuestionConfig; const band = bandOf(answer.confidence, settings.thresholds ?? config.thresholds);
     Object.assign(output, { [`${id}_answer`]: answer.answer, [`${id}_probability`]: answer.probability, [`${id}_confidence`]: answer.confidence, [`${id}_band`]: band, ...(answer.score === undefined ? {} : { [`${id}_score`]: answer.score }) });
     probabilities[id] = answer.probabilities; bands.push({ id, type: question.type, band });
-    if (question.gate !== false && CAUTION[band] > CAUTION[overall]) overall = band;
+    if (settings.gate !== false && CAUTION[band] > CAUTION[overall]) overall = band;
   }
   return { output: { ...output, band: overall, probabilities, model, ...(requestId ? { requestId } : {}) }, bands };
+}
+
+const MAX_FACTS = 2;
+const fixed = (value: unknown): string => typeof value === 'number' ? value.toFixed(2) : 'unknown';
+
+export function judgmentFacts(definition: Pick<WorkflowDefinition, 'nodes'>, run: Pick<WorkflowRun, 'history' | 'outputs'>): { name: string; value: string }[] {
+  return run.history.filter((item) => item.kind === 'judgment' && item.state === 'completed').slice(-MAX_FACTS).reverse().flatMap((item) => {
+    const node = definition.nodes.find((candidate) => candidate.id === item.nodeId && candidate.kind === 'judgment'); const output = run.outputs[item.nodeId];
+    if (!node || !output) return [];
+    const lines = questionsOf(node.config).map(([id, question]) => `${id}: ${String(output[`${id}_answer`])} · probability ${fixed(output[`${id}_probability`])} · confidence ${fixed(output[`${id}_confidence`])} · band ${String(output[`${id}_band`])}${question['gate'] === false ? ' · not gating' : ''}`);
+    return [{ name: `judgment:${item.nodeId}`, value: [...lines, `overall ${String(output['band'])} · ${String(output['model'])}`].join('\n').slice(0, FACT_LIMIT) }];
+  });
 }

@@ -9,7 +9,7 @@ import { count, record } from '../../telemetry/src/instruments.js';
 import { disclosedFacts, pinFor, validateValue, type CapabilityPin, type CompiledNode, type JsonSchema, type NodePolicy, type WorkflowDefinition } from './graph.js';
 import { NON_FAILURE_OUTCOMES, type Installation, type NonFailureOutcome, type RunEvent, type RunUsage, type WorkflowRun } from './service.js';
 import { checkMemoryProposal, clean, ungroundedClaims, MEMORY_SCHEMA_VERSION, memoryExpiry, memoryFingerprintV2, memoryItemId, namespace, normalizeSubjects, proposalSource, resolveMemoryScope, toolSourceId, type HostedMemoryPort, type MemoryImport, type MemoryItem, type ProposalRejection } from './memory.js';
-import { evaluateJudgment, type JudgmentConfig, type JudgmentQuestion } from './judgment.js';
+import { evaluateJudgment, judgmentFacts, questionsForModel, type JudgmentConfig, type JudgmentQuestion } from './judgment.js';
 import { MemoryConsolidator, type ConsolidationPort } from './memory-consolidation.js';
 import { completedAt, groundOutcome, outcomeDigest, outcomeEvidence, type OutcomeDraft } from './memory-outcome.js';
 import { capPerSubject, memoryLabel, memoryQueryFromInput, orderRanked, overfetch, rankInputs, rankValue, receiptInputs, type RankInputs, type RankedMemory } from './memory-rank.js';
@@ -149,8 +149,7 @@ export class WorkflowWorker {
       if (node.kind === 'agent') return await this.agentStep(tenantId, current, definition, node);
       if (node.kind === 'approval') return await this.approvalStep(tenantId, current, definition, node);
       if (node.kind === 'mcp') return await this.mcpStep(tenantId, current, definition, node);
-      if (node.kind === 'judgment') return await this.judgmentStep(tenantId, current, node);
-      return fail('INVALID');
+      return await this.judgmentStep(tenantId, current, node);
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String(error.code) : 'NODE_FAILED';
       if (code === 'STALE') throw error;
@@ -363,12 +362,12 @@ export class WorkflowWorker {
   private async judgmentStep(tenantId: string, current: WorkflowRecord<WorkflowRun>, node: CompiledNode): Promise<StepResult> {
     const prepared = await this.nodeDeadline(tenantId, current, node);
     if (Date.parse(prepared.deadline) <= Date.now()) return this.stop(tenantId, prepared.run, node, 'NODE_DEADLINE');
-    ensure(this.model.judge, 'PROVIDER_NOT_READY');
+    const judge = this.model.judge?.bind(this.model); ensure(judge, 'PROVIDER_NOT_READY');
     const config = node.config as unknown as JudgmentConfig; const limits = policy(node);
     const state = resolve(prepared.run.data.input, prepared.run.data.outputs, config.state);
-    const questions = Object.fromEntries(Object.entries(config.questions).map(([id, { thresholds: _thresholds, gate: _gate, ...question }]) => [id, question as JudgmentQuestion]));
+    const questions = questionsForModel(config.questions);
     ensure(JSON.stringify(state).length + JSON.stringify(questions).length <= limits.tokens * 4, 'JUDGMENT_STATE_TOO_LARGE');
-    const round = await this.judgmentRound(tenantId, prepared.run, node, { tenantId, model: config.model, questions, state }, prepared.deadline);
+    const round = await this.judgmentRound(tenantId, prepared.run, node, judge, { tenantId, model: config.model, questions, state }, prepared.deadline);
     if (round.wait) return round.wait;
     const { result } = round;
     ensure(result.tokens <= limits.tokens && result.cost <= limits.cost, 'BUDGET_EXCEEDED');
@@ -377,14 +376,14 @@ export class WorkflowWorker {
     return this.complete(tenantId, round.run, node, output, `openrouter:${result.model}:${result.tokens}:${result.cost}`);
   }
 
-  private async judgmentRound(tenantId: string, current: WorkflowRecord<WorkflowRun>, node: CompiledNode, request: Pick<JudgmentRequest, 'tenantId' | 'model' | 'questions' | 'state'>, deadline: string): Promise<{ run: WorkflowRecord<WorkflowRun>; result: JudgmentResult; wait?: undefined } | { wait: StepResult }> {
+  private async judgmentRound(tenantId: string, current: WorkflowRecord<WorkflowRun>, node: CompiledNode, judge: (request: JudgmentRequest) => Promise<JudgmentResult>, request: Pick<JudgmentRequest, 'tenantId' | 'model' | 'questions' | 'state'>, deadline: string): Promise<{ run: WorkflowRecord<WorkflowRun>; result: JudgmentResult; wait?: undefined } | { wait: StepResult }> {
     let run = current;
     for (let attempt = 1; attempt <= policy(node).attempts; attempt += 1) {
       const blocked = await this.beforeCircuit(tenantId, 'judgment:openrouter');
       if (blocked) return { wait: { waiting: 'circuit', deadline: new Date(Math.min(Date.parse(blocked), Date.parse(deadline))).toISOString() } };
       const remaining = Date.parse(deadline) - Date.now(); if (remaining <= 0) fail('NODE_DEADLINE');
       let result: JudgmentResult | undefined;
-      try { result = await this.model.judge!({ ...request, milliseconds: remaining, telemetry: { feature: 'judgment', runId: run.id, nodeId: node.id, attempt } }); } catch (error) { report(error, { site: 'runtime.judgment', tenantId }); }
+      try { result = await judge({ ...request, milliseconds: remaining, telemetry: { feature: 'judgment', runId: run.id, nodeId: node.id, attempt } }); } catch (error) { report(error, { site: 'runtime.judgment', tenantId }); }
       await this.afterCircuit(tenantId, 'judgment:openrouter', result === undefined);
       run = await this.store.workerWrite(tenantId, 'run', run.id, run.version, run.state, { ...run.data, ...(result ? { usage: addUsage(run.data.usage, result) } : {}), history: [...run.data.history, event(node, 'attempted', `openrouter:${request.model}:${attempt}:${result ? 'succeeded' : 'failed'}`)] });
       if (result) return { run, result };
@@ -522,7 +521,7 @@ export class WorkflowWorker {
     const argumentsDigest = await digest(args);
     const bindingDigest = await digest({ runId: current.id, definitionDigest: definition.digest, capability: target.config['capability'], installationId: pin.installationId, target: target.config['target'], argumentsDigest, ...(current.data.subject ? { subject: current.data.subject } : {}) });
     const expiresAt = new Date(Date.now() + Number(node.config['timeoutMs'])).toISOString();
-    const data: WorkflowRun = { ...current.data, status: 'waiting-approval', waiting: { nodeId: node.id, bindingDigest, expiresAt, requestedAt: new Date().toISOString(), review: { revision: definition.revision, installationId: pin.installationId, capability: pin.capability, target: String(target.config['target']), argumentsDigest, arguments: Object.entries(pin.inputSchema.properties).map(([name, value]) => ({ name, type: value.type })), facts: [...disclosedFacts(args, node.config['disclose']), ...partialEvidence(current.data.outputs)] } }, history: [...current.data.history, event(node, 'waiting', bindingDigest)] };
+    const data: WorkflowRun = { ...current.data, status: 'waiting-approval', waiting: { nodeId: node.id, bindingDigest, expiresAt, requestedAt: new Date().toISOString(), review: { revision: definition.revision, installationId: pin.installationId, capability: pin.capability, target: String(target.config['target']), argumentsDigest, arguments: Object.entries(pin.inputSchema.properties).map(([name, value]) => ({ name, type: value.type })), facts: [...disclosedFacts(args, node.config['disclose']), ...partialEvidence(current.data.outputs), ...judgmentFacts(definition, current.data)] } }, history: [...current.data.history, event(node, 'waiting', bindingDigest)] };
     await this.store.workerWrite(tenantId, 'run', current.id, current.version, 'waiting-approval', data);
     approvalRequested(tenantId, current.id, node.id, 'step', pin.capability, expiresAt);
     return { waiting: 'approval', deadline: expiresAt, bindingDigest };

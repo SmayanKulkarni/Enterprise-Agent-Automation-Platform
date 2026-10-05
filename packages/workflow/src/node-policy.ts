@@ -1,0 +1,7 @@
+import type { NodePolicy } from './graph.js';
+
+export const FACT_LIMIT = 4000;
+export const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+export const fields = (value: Record<string, unknown>, names: readonly string[]): boolean => Object.keys(value).every((key) => names.includes(key));
+export const policyValid = (value: unknown): value is NodePolicy => object(value) && fields(value, ['milliseconds', 'attempts', 'tokens', 'cost', 'toolRounds', 'effects']) && Number.isSafeInteger(value['milliseconds']) && Number(value['milliseconds']) > 0 && Number(value['milliseconds']) <= 86400000 && Number.isSafeInteger(value['attempts']) && Number(value['attempts']) > 0 && Number(value['attempts']) <= 5 && Number.isSafeInteger(value['tokens']) && Number(value['tokens']) >= 0 && Number(value['tokens']) <= 100000 && typeof value['cost'] === 'number' && Number.isFinite(value['cost']) && value['cost'] >= 0 && value['cost'] <= 1000 && Number.isSafeInteger(value['toolRounds']) && Number(value['toolRounds']) >= 0 && Number(value['toolRounds']) <= 20 && Number.isSafeInteger(value['effects']) && Number(value['effects']) >= 0 && Number(value['effects']) <= 20;
+export const modelValid = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]*(?:\/[a-zA-Z0-9][a-zA-Z0-9._:-]*)?$/u.test(value);

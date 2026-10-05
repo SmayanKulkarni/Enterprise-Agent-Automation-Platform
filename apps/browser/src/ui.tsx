@@ -18,6 +18,7 @@ const kindIconPaths: Record<string, string> = {
   condition: 'M12 3l9 9-9 9-9-9z',
   approval: 'M9 12l2 2 4-4M12 3a9 9 0 100 18 9 9 0 000-18z',
   mcp: 'M7 8h12l-3-3M17 16H5l3 3',
+  judgment: 'M12 4v16M5 8h14M5 8l-2 6a3 3 0 006 0zM19 8l-2 6a3 3 0 006 0z',
   memory: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6',
   end: 'M6.5 6.5h11v11h-11z',
   skill: 'M13 2L4 14h7l-1 8 9-12h-7z',
@@ -26,7 +27,7 @@ const kindIconPaths: Record<string, string> = {
   webhook: 'M12 10.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zM6 6a8.5 8.5 0 000 12M18 6a8.5 8.5 0 010 12',
 };
 
-export const kindLabels: Record<string, string> = { trigger: 'Trigger', agent: 'Agent', condition: 'Condition', approval: 'Approval', skill: 'Skill', memory: 'Memory', retriever: 'Retriever', mcp: 'MCP tool', http: 'HTTP', webhook: 'Webhook', end: 'End' };
+export const kindLabels: Record<string, string> = { trigger: 'Trigger', agent: 'Agent', condition: 'Condition', approval: 'Approval', skill: 'Skill', memory: 'Memory', retriever: 'Retriever', mcp: 'MCP tool', judgment: 'Judgment', http: 'HTTP', webhook: 'Webhook', end: 'End' };
 
 export function KindIcon({ kind }: { kind: string }) {
   return <i className="kind-icon" data-kind={kind} aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={kindIconPaths[kind] ?? kindIconPaths['end']} /></svg></i>;

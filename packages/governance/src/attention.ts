@@ -24,7 +24,7 @@ const ARGUMENT_LIMIT = 100;
 const NAME_LIMIT = 128;
 const LABEL_LIMIT = 120;
 const FACT_LIMIT = 4000;
-const FACT_COUNT = 6;
+const FACT_COUNT = 9;
 const TEXT_LIMIT = 256;
 const UNTITLED = 'Untitled workflow';
 

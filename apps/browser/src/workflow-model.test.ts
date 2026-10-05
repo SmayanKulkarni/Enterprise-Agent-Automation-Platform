@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
-import { memoryProvenance, retrievalRank, createNode, freeSequence, attachTool, conditionFields, conditionSources, connect, connectionError, disconnect, expiryInstant, filterLibrary, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, syncChainGrants, toolError, toolsOf, parseTriggerInput, schemaFieldNameError, setMemoryProposals, setSchemaField, starterEdges, starterNodes, updateIntegerConfig } from './workflow-model.js';
+import { memoryProvenance, retrievalRank, createNode, freeSequence, attachTool, conditionFields, conditionSources, connect, connectionError, disconnect, expiryInstant, filterLibrary, initialEdges, initialNodes, issueNode, localDateTime, mappingFields, memoryProposalsEnabled, syncChainGrants, toolError, toolsOf, parseTriggerInput, schemaFieldNameError, setMemoryProposals, setSchemaField, starterEdges, starterNodes, stateSources, updateIntegerConfig } from './workflow-model.js';
 
 describe('workflow graph', () => {
   test('only creates valid, non-duplicate connections', () => {
@@ -255,5 +255,47 @@ describe('memory provenance for Studio', () => {
 
   test('rank inputs are listed per returned item', () => {
     expect(retrievalRank({ rank: [{ id: 'a', score: 0.8, recency: 0.5, typeWeight: 0.9 }, { id: 'b', score: 'x' }] })).toBe('a (relevance 0.80, recency 0.50, type 0.90); b (relevance ?, recency ?, type ?)');
+  });
+});
+
+describe('Judgment step in the workflow model', () => {
+  const triggerNode: WorkflowNode = { id: 'trigger', kind: 'trigger', title: 'Start', detail: '', x: 0, y: 0, instructions: '', config: { mode: 'manual', inputSchema: { type: 'object', properties: { count: { type: 'number' }, body: { type: 'string' } }, required: [], additionalProperties: false } } };
+  const judgmentNode = (existing: readonly WorkflowNode[] = [triggerNode]) => createNode('judgment', 10, 20, 1, existing);
+  const chain = (): { nodes: WorkflowNode[]; edges: WorkflowEdge[] } => {
+    const memory: WorkflowNode = { id: 'recall', kind: 'memory', title: 'Recall', detail: '', x: 0, y: 0, instructions: '', config: { limit: 3, maxChars: 100 } };
+    const judgment = judgmentNode();
+    const condition: WorkflowNode = { id: 'cond', kind: 'condition', title: 'Check', detail: '', x: 0, y: 0, instructions: '', config: { source: 'judgment-1', field: 'band', equals: 'act' } };
+    return { nodes: [triggerNode, memory, judgment, condition], edges: [{ id: 'a', from: 'trigger', to: 'recall' }, { id: 'b', from: 'recall', to: 'judgment-1' }, { id: 'c', from: 'judgment-1', to: 'cond' }] };
+  };
+
+  test('a new Judgment has the template text, the pinned Jev model and the first string trigger field mapped', () => {
+    const node = judgmentNode();
+    expect(node).toMatchObject({ id: 'judgment-1', kind: 'judgment', title: 'Judge request', detail: 'Decision model', instructions: '', x: 10, y: 20 });
+    expect(node.config).toMatchObject({ provider: 'openrouter', openRouterOptIn: true, model: 'typesafe/jev-1.13', state: { request: '$input.body' }, thresholds: { act: 0.85, review: 0.6 }, policy: { toolRounds: 0, effects: 0 } });
+  });
+
+  test('a new Judgment without a string trigger field starts with empty state', () => {
+    expect(judgmentNode([]).config?.['state']).toEqual({});
+  });
+
+  test('its output properties reach later Conditions and mappings', () => {
+    const { nodes, edges } = chain();
+    const judgment = nodes[2] as WorkflowNode;
+    expect(conditionFields(judgment).map(([name]) => name)).toEqual(expect.arrayContaining(['intent_answer', 'intent_probability', 'intent_band', 'band', 'model']));
+    expect(conditionSources(nodes, edges, 'cond').map((node) => node.id)).toContain('judgment-1');
+    expect(mappingFields(nodes, edges, 'cond', 'number').map(([value]) => value)).toEqual(expect.arrayContaining(['$node.judgment-1.intent_probability', '$node.judgment-1.intent_confidence']));
+    expect(mappingFields(nodes, edges, 'cond', 'string').map(([value]) => value)).toContain('$node.judgment-1.intent_answer');
+  });
+
+  test('state sources add Memory output but conditions and mappings do not', () => {
+    const { nodes, edges } = chain();
+    expect(stateSources(nodes, edges, 'judgment-1', undefined).map(([node, names]) => [node.id, names])).toEqual([['trigger', ['count', 'body']], ['recall', ['memory']]]);
+    expect(conditionSources(nodes, edges, 'cond').map((node) => node.id)).not.toContain('recall');
+  });
+
+  test('the Judgment connects like a step with one output', () => {
+    const { nodes, edges } = chain();
+    expect(connectionError(nodes, edges, 'judgment-1', 'cond')).toBeDefined();
+    expect(connectionError(nodes, [], 'trigger', 'judgment-1')).toBeUndefined();
   });
 });

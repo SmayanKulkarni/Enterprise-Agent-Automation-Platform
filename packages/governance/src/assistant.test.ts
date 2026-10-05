@@ -27,7 +27,7 @@ const port = (cost = 0.01, output: Record<string, unknown> = { answer: 'Spend ro
   const model: ModelPort = { complete: (request) => { requests.push(request); return Promise.resolve({ output, model: request.model, tokens: 100, cost }); } };
   return { model, requests };
 };
-const catalog = (models: { id: string; structuredOutput: boolean }[] = []) => ({ chat: () => Promise.resolve(models.map((model) => ({ ...model, tools: false }))), embedding: () => Promise.resolve([]) });
+const catalog = (models: { id: string; structuredOutput: boolean }[] = []) => ({ chat: () => Promise.resolve(models.map((model) => ({ ...model, tools: false }))), embedding: () => Promise.resolve([]), decisions: () => Promise.resolve([]) });
 const deps = (overrides: Partial<Parameters<typeof askAssistant>[0]> = {}, stubPort = port()) => ({ service: service(), model: stubPort.model, catalog: catalog(), maxCost: 0.5, now: Date.now, ...overrides });
 
 let seen: ReturnType<typeof observe>;
@@ -139,7 +139,7 @@ test('askAssistant refuses an OpenRouter model missing from the catalog or lacki
 });
 
 test('askAssistant reports FEATURE_NOT_READY when the catalog cannot load', async () => {
-  const broken = { chat: () => Promise.reject(new Error('down')), embedding: () => Promise.resolve([]) };
+  const broken = { chat: () => Promise.reject(new Error('down')), embedding: () => Promise.resolve([]), decisions: () => Promise.resolve([]) };
 
   await expect(askAssistant(deps({ catalog: broken }), context, { ...valid, provider: 'openrouter', model: 'vendor/model' })).rejects.toMatchObject({ code: 'FEATURE_NOT_READY' });
 });

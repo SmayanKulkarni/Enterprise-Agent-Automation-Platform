@@ -2,6 +2,7 @@ import { digest } from '../../contracts/src/index.js';
 import { githubConfigValid } from './github-ingress.js';
 import { labelTemplateValid } from './label.js';
 import { APPROVAL_MAX_TIMEOUT_MS } from './timers.js';
+import { FACT_LIMIT, fields, modelValid, object, policyValid } from './node-policy.js';
 import { judgmentConfigValid, judgmentOutputSchema, judgmentStateMappings } from './judgment.js';
 import { dominators, immediateDominator, isFlowEdge, strictlyDominates } from './flow.js';
 
@@ -17,6 +18,7 @@ export interface JsonSchema { type: 'object'; properties: Record<string, JsonSch
 export interface CompiledNode { id: string; kind: NodeKind; config: Record<string, unknown>; instructions?: string; tools?: string[]; tool?: true; finalizer?: true; finalizers?: string[]; next: string | { true: string | null; false: string | null } | null; }
 export interface WorkflowDefinition { id: string; revision: number; digest: string; start: string; nodes: readonly CompiledNode[]; capabilityPins: readonly CapabilityPin[]; }
 
+export { FACT_LIMIT };
 export const MAX_AGENT_TOOLS = 16;
 const kinds = new Set<NodeKind>(['trigger', 'memory', 'agent', 'condition', 'approval', 'mcp', 'judgment', 'end']);
 const forbidden = /(?:token|secret|password|credential|api.?key|private.?key|authorization|connection.?string|cookie|bearer)/iu;
@@ -34,16 +36,11 @@ const messages: Record<string, string> = {
   INVALID_JUDGMENT: 'A Judgment needs an OpenRouter decision model, 1 to 16 questions, mapped state, confidence bands, and a policy with no tool rounds or effects.',
   INVALID_SUCCESSOR: 'This step has the wrong number of outputs; a Condition needs at least one branch connected.',
 };
-const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const plain = (value: unknown): boolean => value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value) || Array.isArray(value) && value.every(plain) || object(value) && Object.entries(value).every(([key, child]) => (key === 'tokens' || !forbidden.test(key)) && plain(child));
-const fields = (value: Record<string, unknown>, names: readonly string[]): boolean => Object.keys(value).every((key) => names.includes(key));
 export const validateSchema = (value: unknown): value is JsonSchema => object(value) && fields(value, ['type', 'properties', 'required', 'additionalProperties']) && value['type'] === 'object' && value['additionalProperties'] === false && object(value['properties']) && Object.values(value['properties']).every((property) => object(property) && fields(property, ['type']) && ['string', 'number', 'boolean', 'object', 'array'].includes(String(property['type']))) && Array.isArray(value['required']) && value['required'].every((key: unknown) => typeof key === 'string' && key in (value['properties'] as object));
 const schema = validateSchema;
 const proposalSchema = (value: JsonSchema): boolean => value.properties['memoryProposals'] === undefined || value.properties['memoryProposals']?.type === 'array' && !value.required.includes('memoryProposals');
-export const policyValid = (value: unknown): value is NodePolicy => object(value) && fields(value, ['milliseconds', 'attempts', 'tokens', 'cost', 'toolRounds', 'effects']) && Number.isSafeInteger(value['milliseconds']) && Number(value['milliseconds']) > 0 && Number(value['milliseconds']) <= 86400000 && Number.isSafeInteger(value['attempts']) && Number(value['attempts']) > 0 && Number(value['attempts']) <= 5 && Number.isSafeInteger(value['tokens']) && Number(value['tokens']) >= 0 && Number(value['tokens']) <= 100000 && typeof value['cost'] === 'number' && Number.isFinite(value['cost']) && value['cost'] >= 0 && value['cost'] <= 1000 && Number.isSafeInteger(value['toolRounds']) && Number(value['toolRounds']) >= 0 && Number(value['toolRounds']) <= 20 && Number.isSafeInteger(value['effects']) && Number(value['effects']) >= 0 && Number(value['effects']) <= 20;
-export const modelValid = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]*(?:\/[a-zA-Z0-9][a-zA-Z0-9._:-]*)?$/u.test(value);
 const issue = (path: string, code: string): GraphIssue => ({ path, code, message: messages[code] ?? code.toLowerCase().replaceAll('_', ' ') });
-export const FACT_LIMIT = 4000;
 const MAX_DISCLOSED = 6;
 const disclosureValid = (value: unknown, args: unknown): boolean => value === undefined || Array.isArray(value) && value.length <= MAX_DISCLOSED && new Set(value).size === value.length && object(args) && value.every((name: unknown) => typeof name === 'string' && name in args);
 export const disclosedFacts = (args: Record<string, unknown>, names: unknown): { name: string; value: string }[] => (Array.isArray(names) ? names : []).flatMap((name: unknown) => {

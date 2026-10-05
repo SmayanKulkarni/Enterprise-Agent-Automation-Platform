@@ -190,6 +190,15 @@ test('disclosed facts are the only argument values an approval projection carrie
   expect(JSON.stringify(result)).not.toContain('SECRET_EXTRA');
 });
 
+test('an approval keeps six disclosed facts, partial evidence and two Judgment facts, and drops the rest', async () => {
+  const facts = Array.from({ length: 10 }, (_, index) => ({ name: index < 6 ? `arg${String(index)}` : index === 6 ? 'evidence' : index < 9 ? `judgment:step${String(index)}` : 'extra', value: index === 7 ? 'team: billing · probability 0.91\noverall act · typesafe/jev-1.13' : 'v' }));
+  const review = { revision: 2, installationId: 'inst-1', capability: 'write', target: 'crm', argumentsDigest: 'b'.repeat(64), arguments: [], facts };
+  const projected = ((await approvals([pendingRow({ waitingJson: waiting({ review }) })]))['approvals'] as { facts: { name: string; value: string }[] }[]).flatMap((row) => row.facts);
+
+  expect(projected.map((fact) => fact.name)).toEqual(['arg0', 'arg1', 'arg2', 'arg3', 'arg4', 'arg5', 'evidence', 'judgment:step7', 'judgment:step8']);
+  expect(projected[7]?.value).toContain('\noverall act');
+});
+
 test('an approval without disclosed facts projects an empty list', async () => {
   expect((await approvals([pendingRow()]))['approvals']).toMatchObject([{ facts: [] }]);
 });

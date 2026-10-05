@@ -1,7 +1,8 @@
 import { expect, test } from 'vitest';
-import { bandOf, evaluateJudgment, judgmentAnswers, judgmentConfigValid, judgmentOutputSchema, normaliseAnswer, normaliseAnswers, type JudgmentConfig, type JudgmentQuestion } from './judgment.js';
+import { bandOf, evaluateJudgment, judgmentFacts, judgmentAnswers, judgmentConfigValid, judgmentOutputSchema, normaliseAnswer, normaliseAnswers, type JudgmentConfig, type JudgmentQuestion } from './judgment.js';
 import { POLICY } from './worker-harness.test-support.js';
 
+const defined = <T>(value: T | undefined): T => { if (value === undefined) throw new Error('missing'); return value; };
 const NODE_POLICY = { ...POLICY, toolRounds: 0, effects: 0, tokens: 8000 };
 const config = (patch: Record<string, unknown> = {}): Record<string, unknown> => ({
   provider: 'openrouter', openRouterOptIn: true, model: 'typesafe/jev-1.13',
@@ -37,7 +38,7 @@ test('rejects aliases and models without a vendor prefix', () => {
 });
 
 test('question count is limited to 1 through 16 and ids must match the regex', () => {
-  const many = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`q${index}`, choice({ a: 'A', b: 'B' })]));
+  const many = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`q${String(index)}`, choice({ a: 'A', b: 'B' })]));
   expect(valid(config({ questions: {} }))).toBe(false);
   expect(valid(config({ questions: many(1) }))).toBe(true);
   expect(valid(config({ questions: many(16) }))).toBe(true);
@@ -48,7 +49,7 @@ test('question count is limited to 1 through 16 and ids must match the regex', (
 });
 
 test('total criteria across questions is at most 512', () => {
-  const keys = (count: number, prefix: string) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`${prefix}${index}`, 'x']));
+  const keys = (count: number, prefix: string) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`${prefix}${String(index)}`, 'x']));
   expect(valid(config({ questions: { a: choice(keys(255, 'k')), b: choice(keys(255, 'k')), c: choice(keys(2, 'k')) } }))).toBe(true);
   expect(valid(config({ questions: { a: choice(keys(255, 'k')), b: choice(keys(255, 'k')), c: choice(keys(3, 'k')) } }))).toBe(false);
 });
@@ -98,7 +99,7 @@ test('thresholds need 0 <= review <= act <= 1 for the default and each override'
 
 test('state needs 1 to 16 keys with mappings or literals that do not start with $', () => {
   expect(valid(config({ state: {} }))).toBe(false);
-  expect(valid(config({ state: Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`k${index}`, 'x'])) }))).toBe(false);
+  expect(valid(config({ state: Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`k${String(index)}`, 'x'])) }))).toBe(false);
   expect(valid(config({ state: { '1bad': 'x' } }))).toBe(false);
   expect(valid(config({ state: { a: '$bogus' } }))).toBe(false);
   expect(valid(config({ state: { a: 5 } }))).toBe(false);
@@ -169,7 +170,7 @@ test('score rejects out-of-range values, unknown levels and empty probabilities'
 });
 
 test('noul derives its answer, confidence and probabilities from one value', () => {
-  expect(normaliseAnswer(flag, { type: 'noul', noul: 0.8 })).toEqual({ answer: 'yes', probability: 0.8, confidence: 0.8, probabilities: { yes: 0.8, no: expect.closeTo(0.2, 10) } });
+  expect(normaliseAnswer(flag, { type: 'noul', noul: 0.8 })).toEqual({ answer: 'yes', probability: 0.8, confidence: 0.8, probabilities: { yes: 0.8, no: expect.closeTo(0.2, 10) as number } });
   const no = normaliseAnswer(flag, { type: 'noul', noul: 0.25 });
   expect(no.answer).toBe('no');
   expect(no.confidence).toBe(0.75);
@@ -187,7 +188,7 @@ const answers = () => ({
 
 test('normaliseAnswers requires exactly the configured question ids and fails whole on one bad answer', () => {
   expect(Object.keys(normaliseAnswers(set, answers()))).toEqual(['team', 'flag', 'urgency']);
-  const { urgency: _omitted, ...missing } = answers();
+  const missing = { team: answers().team, flag: answers().flag };
   expect(() => normaliseAnswers(set, missing)).toThrow('INVALID_MODEL_OUTPUT');
   expect(() => normaliseAnswers(set, { ...answers(), extra: { type: 'noul', noul: 0.5 } })).toThrow('INVALID_MODEL_OUTPUT');
   expect(() => normaliseAnswers(set, { ...answers(), flag: { type: 'noul', noul: 2 } })).toThrow('INVALID_MODEL_OUTPUT');
@@ -221,10 +222,10 @@ test('evaluate builds the flat output with per-question overrides and a non-gati
 
 test('the overall band is the most cautious gating band and defaults to act when nothing gates', () => {
   const escalating = config();
-  questions(escalating)['team'] = { ...questions(escalating)['team']!, gate: true, thresholds: { act: 0.99, review: 0.95 } };
+  questions(escalating)['team'] = { ...defined(questions(escalating)['team']), gate: true, thresholds: { act: 0.99, review: 0.95 } };
   expect(judged({ questions: questions(escalating) }).output['band']).toBe('escalate');
   const none = config();
-  for (const id of Object.keys(questions(none))) questions(none)[id] = { ...questions(none)[id]!, gate: false };
+  for (const id of Object.keys(questions(none))) questions(none)[id] = { ...defined(questions(none)[id]), gate: false };
   expect(judged({ questions: questions(none) }).output['band']).toBe('act');
 });
 
@@ -235,4 +236,34 @@ test('requestId is omitted when the provider gave none', () => {
     urgency: { type: 'score', score: 0.4, confidence: 0.2, probabilities: { '0': 0.6 } },
   }, 'typesafe/jev-1.13');
   expect('requestId' in output).toBe(false);
+});
+
+const factDefinition = (cfg: Record<string, unknown>) => ({ nodes: [{ id: 'triage', kind: 'judgment' as const, config: cfg, next: null }, { id: 'again', kind: 'judgment' as const, config: cfg, next: null }, { id: 'other', kind: 'agent' as const, config: {}, next: null }] });
+const completed = (nodeId: string, kind = 'judgment') => ({ nodeId, kind, state: 'completed' as const, at: 'now', detail: 'x' });
+
+test('judgment facts list one line per question in config order then an overall line', () => {
+  const { output } = judged();
+  const [fact] = judgmentFacts(factDefinition(config()), { history: [completed('triage')], outputs: { triage: output } });
+  expect(fact?.name).toBe('judgment:triage');
+  expect(fact?.value.split('\n')).toEqual([
+    'team: billing · probability 0.91 · confidence 0.88 · band act',
+    'refund_requested: yes · probability 0.85 · confidence 0.85 · band review',
+    'urgency: 0 · probability 0.60 · confidence 0.20 · band escalate · not gating',
+    'overall review · typesafe/jev-1.13',
+  ]);
+});
+
+test('judgment facts keep the two most recent completed judgments newest first and ignore other steps', () => {
+  const { output } = judged();
+  const facts = judgmentFacts(factDefinition(config()), { history: [completed('triage'), completed('again'), completed('triage'), completed('other', 'agent')], outputs: { triage: output, again: output, other: {} } });
+  expect(facts.map((fact) => fact.name)).toEqual(['judgment:triage', 'judgment:again']);
+});
+
+test('judgment facts skip steps without output and never exceed the fact limit', () => {
+  expect(judgmentFacts(factDefinition(config()), { history: [completed('triage')], outputs: {} })).toEqual([]);
+  const many = Object.fromEntries(Array.from({ length: 16 }, (_, index) => [`question_${String(index)}`, { type: 'noul', instructions: 'x'.repeat(10) }]));
+  const output: Record<string, unknown> = { band: 'act', model: 'm/x' };
+  for (const id of Object.keys(many)) Object.assign(output, { [`${id}_answer`]: 'y'.repeat(2000), [`${id}_probability`]: 1, [`${id}_confidence`]: 1, [`${id}_band`]: 'act' });
+  const [fact] = judgmentFacts(factDefinition(config({ questions: many })), { history: [completed('triage')], outputs: { triage: output } });
+  expect(fact?.value.length).toBe(4000);
 });

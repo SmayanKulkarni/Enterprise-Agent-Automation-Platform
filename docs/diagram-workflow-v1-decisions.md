@@ -256,3 +256,33 @@ Spec: `issues/agentic-memory-v2/00-memory-formation-spec.md`. Phases 0 to 4 are 
 **Phase 4.** Retrieval over-fetches `limit × 3` (cap 30), reads each eligible match by id, scores `0.65 × relevance + 0.25 × recency + 0.10 × type`, keeps at most two per leading subject, skips whole items that do not fit `maxChars`, and puts the label (`type id observed subjects source`) in each returned item. V1 items rank with type weight 0.3 and expire on their TTL. The Memory node query is the input's string values, falling back to the JSON text when the input has none, because an empty query would skip recall for workflows started with `{}`. The retrieval receipt carries rank inputs and no text; Studio shows them with the supersession chain.
 
 **Deviations and gaps.** The subject key pattern allows `#` so the spec's own example `pr:acme/api#42` is valid. Expiry is 90, 30 and 180 days by type; `set-expiry` now caps at the type's maximum instead of a flat 90 days. The admin correction path keeps its V1 fingerprint and now records `supersededBy` on the predecessor. Migration 020 adds the `memory-consolidation` kind to the constraint and to `worker_write_record` only; the browser read procedure is generic, so Studio needed no SQL. Migration 020 was written from the existing procedures and checked by its verify script and by reading; it has not been run against a database in this session. `tools/e2e/memory-scenario.mjs` and `tools/workflow/memory-report.mjs` have not been run against live services. Rerun `tools/workflow/upstash-certification.cjs` after deploying Phase 3, as the spec asks.
+
+## Judgment step (decision models)
+
+- **Kind name.** `judgment`, shown as Judgment step. "Decision" already means an approver's outcome, so no code or UI says "decision node".
+- **No fallback model.** Calibration differs between decision models, so a silent switch would change the error rate of the `act` band. Per-model thresholds must exist first.
+- **Fan-out.** One node asks 1 to 16 questions in a single Decisions API call. Output is flat: `<q>_answer`, `_probability`, `_confidence`, `_band`, `_score` (score questions), plus `band`, `probabilities`, `model`, `requestId`. The overall `band` is the most cautious band among questions with `gate !== false`; with every question non-gating it is `act`. `gate: false` marks speculative questions whose answers are recorded but cannot send the node to review.
+- **No memory evidence.** A probability is not a fact, so Judgment output is not in `EVIDENCE_KINDS` and makes no memory proposals. A Memory step's output can be mapped into Judgment state; the Studio warns above 3 items.
+- **Aliases rejected.** `~vendor/model-latest` slugs fail `INVALID_JUDGMENT`; an alias can move and shift probabilities.
+- **Bands computed in code.** Thresholds and `gate` never leave the workflow. `act` only means the model was confident; R2 and R3 effects still need an Approval and targets still cannot come from a model.
+- **Noul confidence.** The API returns no confidence for yes/no questions, so it is derived as `max(p, 1 - p)`.
+- **Approval facts.** Up to two Judgment facts (one line per question, then an overall line) follow the disclosed facts and partial-evidence fact; the inbox fact limit is 9.
+- **Telemetry.** Each call records a `decide <model>` span, the existing `gen_ai.*` metrics with `feature=judgment`, one `judgment.call` event without state or probabilities, and `workflow.judgment.bands` per question (labels: tenant, band, question type; never the question id). The `judgment-bands` governance panel sits in the overview charts.
+- **Deploy order.** Backend first (worker and validator in `azure-functions` and the API host), then the browser. An older worker fails a `judgment` node with `INVALID`, so never publish a Judgment before the worker is deployed. There is no migration and no new environment variable; cost falls back to `WORKFLOW_OPENROUTER_MAX_COST_PER_1K_TOKENS` when `usage.cost` is missing.
+- **Deviations from the design.** `judgment-bands` uses the step window (`increase(...[step])`, stacked bars) instead of the whole range. `modelValid`, `policyValid` and `FACT_LIMIT` moved to `node-policy.ts` so the browser can import `judgment.ts` without pulling in `node:crypto`. State mappings also require the mapped field to exist on the source.
+
+### Live probe (2026-10-05, not CI)
+
+Same ticket text and three questions (choice, score, yes/no). One request versus three separate requests:
+
+| Model | One request | Three requests | Answers |
+| --- | --- | --- | --- |
+| `typesafe/jev-1.13` | 650 ms, 424 input and 71 output tokens, $0.0000178 | 909 ms in total, $0.0000429 | Agree: refund, score 0.97, yes 0.99 |
+| `jaredpalmer/kev-4b` | 1161 ms, 100 input and 185 output tokens, $0.0000042 | 2369 ms in total, $0.0000067 | Agree: refund, score 1.02 / 1.03, yes 0.91 |
+
+- Fan-out was cheaper (2.4x for Jev, 1.6x for Kev) and faster (1.4x and 2.0x). Calls were sequential, so the saving would be smaller against parallel requests.
+- Response shapes match the design: choice and score carry `confidence` and `probabilities`; yes/no carries only `noul`. Score answers include a `legend`.
+- Errors: a bad key returns HTTP 401 with `{"error":{"message":"Missing Authentication header","code":401}}`, as expected.
+- `togethercomputer/tev1-4b-experimental` accepted the same mixed-type request with HTTP 200. The "choice only" limit in the design was not reproduced, but the Studio help text stays because the catalog does not advertise it.
+- 422, 429 and 529 were not provoked.
+

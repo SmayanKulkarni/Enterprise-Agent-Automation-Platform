@@ -3,7 +3,7 @@ import { digest } from '../../contracts/src/index.js';
 import type { ExecutionContext } from '../../identity/src/index.js';
 import type { StudioStore, StudioStoredDraft } from '../../lifecycle/src/studio-sql.js';
 import type { StudioDraft } from '../../lifecycle/src/studio.js';
-import { compileGraph, validateGraph, type CompiledNode, validateSchema, validateValue, type CapabilityPin, type GraphDraft, type GraphIssue, type JsonSchema, type WorkflowDefinition } from './graph.js';
+import { compileGraph, validateGraph, type CompiledNode, validateSchema, validateValue, type CapabilityPin, type GraphDraft, type GraphIssue, type GraphNode, type JsonSchema, type WorkflowDefinition } from './graph.js';
 import type { ConsolidationRecord } from './memory-consolidation.js';
 import { maxMemoryExpiry, memoryExpiry, memoryFingerprint, memoryItemId, redacted, type HostedMemoryPort, type MemoryImport, type MemoryItem } from './memory.js';
 import type { PublishedDefinition, RunHistoryCursor, WorkflowRecord, WorkflowStore } from './sql.js';
@@ -193,22 +193,35 @@ const memoryFailure = (value: unknown): string | undefined => {
 
 const consolidationView = (record: ConsolidationRecord | undefined): Record<string, unknown> => record ? { consolidation: { decision: record.decision, path: record.path, ...(record.targetId ? { targetId: record.targetId } : {}), corroborations: record.corroboratedBy?.length ?? 0 } } : {};
 
+const judgmentModelIssues = (node: GraphNode, path: string, decisions: readonly OpenRouterModel[] | undefined): GraphIssue[] => {
+  if (!decisions) return [{ path, code: 'OPENROUTER_CATALOG_UNAVAILABLE', message: 'OpenRouter model catalog is unavailable; try again shortly' }];
+  const selected = decisions.find((item) => item.id === node.config['model']);
+  if (!selected) return [{ path, code: 'JUDGMENT_MODEL_NOT_ALLOWED', message: 'select an exact decision model from the catalog' }];
+  const tokens = (node.config['policy'] as { tokens?: unknown } | undefined)?.tokens;
+  if (selected.contextLength !== undefined && typeof tokens === 'number' && tokens > selected.contextLength) return [{ path, code: 'JUDGMENT_CONTEXT_EXCEEDED', message: "the policy token limit is larger than this model's context window" }];
+  return [];
+};
+
 export class WorkflowService {
   constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation) => boolean = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }, private readonly openRouterCatalog?: OpenRouterCatalog) {}
 
   private async providerIssues(context: ExecutionContext, draft: GraphDraft): Promise<GraphIssue[]> {
-    const usesOpenRouter = draft.nodes.some((node) => node.kind === 'agent' && node.config['provider'] === 'openrouter');
+    const openRouterNode = (kind: string): boolean => draft.nodes.some((node) => node.kind === kind && node.config['provider'] === 'openrouter');
+    const usesOpenRouter = openRouterNode('agent') || openRouterNode('judgment');
     const connection = usesOpenRouter ? await this.store.read<OpenRouterConnection>(context, 'openrouter-connection', '00000000-0000-5000-8000-000000000002') : undefined;
-    let catalog: readonly OpenRouterModel[] | undefined;
-    if (usesOpenRouter && this.openRouterCatalog) catalog = await this.openRouterCatalog.chat().catch((error: unknown) => { report(error, { site: 'service.catalog' }); return undefined; });
+    const unavailable = (error: unknown): undefined => { report(error, { site: 'service.catalog' }); return undefined; };
+    let catalog: readonly OpenRouterModel[] | undefined; let decisions: readonly OpenRouterModel[] | undefined;
+    if (openRouterNode('agent') && this.openRouterCatalog) catalog = await this.openRouterCatalog.chat().catch(unavailable);
+    if (openRouterNode('judgment') && this.openRouterCatalog) decisions = await this.openRouterCatalog.decisions().catch(unavailable);
     const toolOwners = new Set(draft.edges.filter((edge) => edge.role === 'tool').map((edge) => edge.from));
     return draft.nodes.flatMap((node, index) => {
-      if (node.kind !== 'agent') return [];
+      if (node.kind !== 'agent' && node.kind !== 'judgment') return [];
       const path = `/nodes/${index}/config`;
       if (!this.availableProviders.includes(String(node.config['provider']))) return [{ path, code: 'PROVIDER_NOT_READY', message: 'provider not ready' }];
       if (node.config['provider'] !== 'openrouter') return [];
       if (!this.openRouter && !this.openRouterCatalog) return [];
       if (!this.openRouter || connection?.state !== 'ready' || !connection.data.enabled || !connection.data.verifiedAt) return [{ path, code: 'OPENROUTER_CONNECTION_NOT_READY', message: 'OpenRouter connection is not ready' }];
+      if (node.kind === 'judgment') return judgmentModelIssues(node, path, decisions);
       if (!catalog) return [{ path, code: 'OPENROUTER_CATALOG_UNAVAILABLE', message: 'OpenRouter model catalog is unavailable; try again shortly' }];
       const selected = catalog.find((item) => item.id === node.config['model']);
       const fallback = node.config['fallback'] === undefined ? undefined : catalog.find((item) => item.id === node.config['fallback']);
@@ -542,8 +555,8 @@ export class WorkflowService {
     else if (collection === 'openrouter-connections') records = (await this.store.list<OpenRouterConnection>(context, 'openrouter-connection')).map((item) => ({ id: item.id, version: item.version, state: item.state, provider: item.data.provider, enabled: item.data.enabled, ...(item.data.verifiedAt ? { verifiedAt: item.data.verifiedAt } : {}) }));
     else if (collection === 'openrouter-models') {
       const catalog = this.openRouterCatalog; const failed = (error: unknown): undefined => { report(error, { site: 'service.catalog' }); return undefined; };
-      const [models, embeddingModels] = catalog ? await Promise.all([catalog.chat().catch(failed), catalog.embedding().catch(failed)]) : [undefined, undefined];
-      records = [{ id: '00000000-0000-5000-8000-000000000003', provider: 'openrouter', models: models ?? [], embeddingModels: embeddingModels ?? [], catalog: models ? 'ready' : 'unavailable', configured: this.openRouter !== undefined && models !== undefined }];
+      const [models, embeddingModels, decisionModels] = catalog ? await Promise.all([catalog.chat().catch(failed), catalog.embedding().catch(failed), catalog.decisions().catch(failed)]) : [undefined, undefined, undefined];
+      records = [{ id: '00000000-0000-5000-8000-000000000003', provider: 'openrouter', models: models ?? [], embeddingModels: embeddingModels ?? [], decisionModels: decisionModels ?? [], catalog: models ? 'ready' : 'unavailable', configured: this.openRouter !== undefined && models !== undefined }];
     }
     else if (collection === 'workflow-model-settings') {
       const stored = await this.store.list<ModelSettings>(context, 'model-settings');

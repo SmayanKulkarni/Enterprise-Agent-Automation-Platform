@@ -1,6 +1,8 @@
+import { defaultJudgmentConfig } from './judgment-model.js';
+import { judgmentOutputSchema } from '../../../packages/workflow/src/judgment.js';
 import { dominators, immediateDominator, isFlowEdge, reaches, strictlyDominates } from '../../../packages/workflow/src/flow.js';
 
-export type WorkflowNodeKind = 'trigger' | 'agent' | 'condition' | 'approval' | 'skill' | 'memory' | 'retriever' | 'mcp' | 'http' | 'webhook' | 'end';
+export type WorkflowNodeKind = 'trigger' | 'agent' | 'condition' | 'approval' | 'skill' | 'memory' | 'retriever' | 'mcp' | 'judgment' | 'http' | 'webhook' | 'end';
 
 export interface WorkflowNode {
   id: string;
@@ -26,6 +28,7 @@ export const templates: Record<WorkflowNodeKind, Pick<WorkflowNode, 'title' | 'd
   skill: { title: 'Use skill', detail: 'Reusable guidance', instructions: 'Apply the attached, versioned skill to the current work item.' },
   memory: { title: 'Read memory', detail: 'Scoped context', instructions: 'Retrieve only the permitted memory scope for this case.' },
   retriever: { title: 'Retrieve evidence', detail: 'Knowledge search', instructions: 'Find relevant, cited knowledge for the current request.' },
+  judgment: { title: 'Judge request', detail: 'Decision model', instructions: '' },
   mcp: { title: 'Call MCP tool', detail: 'Governed tool call', instructions: 'Call the selected MCP tool with validated inputs and preserve the resulting evidence.' },
   http: { title: 'HTTP request', detail: 'External request', instructions: 'Send a validated request through the configured connection.' },
   webhook: { title: 'Send webhook', detail: 'Notify external system', instructions: 'Deliver the selected result to the configured webhook endpoint.' },
@@ -62,11 +65,12 @@ export function freeSequence(nodes: readonly WorkflowNode[], kind: WorkflowNodeK
   return index;
 }
 
-export function createNode(kind: WorkflowNodeKind, x: number, y: number, sequence: number): WorkflowNode {
+export function createNode(kind: WorkflowNodeKind, x: number, y: number, sequence: number, existing: readonly WorkflowNode[] = []): WorkflowNode {
   const template = templates[kind];
   const defaults: Partial<Record<WorkflowNodeKind, Record<string, unknown>>> = {
     trigger: starterNodes[0]!.config!, agent: starterNodes[1]!.config!, end: {},
     memory: { limit: 3, maxChars: 2000, policy: { milliseconds: 30000, attempts: 1, tokens: 0, cost: 0, toolRounds: 0, effects: 0 } },
+    judgment: defaultJudgmentConfig(existing.find((node) => node.kind === 'trigger')),
     condition: { source: 'agent', field: 'result', equals: 'approve' }, approval: { timeoutMs: 3600000 },
     mcp: { installationId: '', capability: '', manifestDigest: '', grantId: '', target: '', arguments: {}, policy: { milliseconds: 30000, attempts: 1, tokens: 0, cost: 0, toolRounds: 0, effects: 1 } },
   };
@@ -180,7 +184,7 @@ export function attachTool(nodes: readonly WorkflowNode[], edges: readonly Workf
 }
 
 function outputProperties(node: WorkflowNode, outputs: OutputSchemas | undefined): Record<string, unknown> {
-  const schema = node.kind === 'trigger' ? node.config?.['inputSchema'] : node.kind === 'agent' ? node.config?.['responseSchema'] : node.kind === 'mcp' ? outputs?.(node) : undefined;
+  const schema = node.kind === 'trigger' ? node.config?.['inputSchema'] : node.kind === 'agent' ? node.config?.['responseSchema'] : node.kind === 'mcp' ? outputs?.(node) : node.kind === 'judgment' ? judgmentOutputSchema(node.config ?? {}) : undefined;
   return record(schema) && record(schema['properties']) ? schema['properties'] : {};
 }
 
@@ -188,7 +192,19 @@ function precedingSources(nodes: readonly WorkflowNode[], edges: readonly Workfl
   const trigger = nodes.find((node) => node.kind === 'trigger');
   if (!trigger) return [];
   const dominated = dominators(edges, trigger.id);
-  return nodes.filter((node) => (node.kind === 'trigger' || node.kind === 'agent' || node.kind === 'mcp') && !isToolNode(edges, node.id) && (node.id === trigger.id || strictlyDominates(dominated, node.id, targetId)));
+  return nodes.filter((node) => (node.kind === 'trigger' || node.kind === 'agent' || node.kind === 'mcp' || node.kind === 'judgment') && !isToolNode(edges, node.id) && (node.id === trigger.id || strictlyDominates(dominated, node.id, targetId)));
+}
+
+export function stateSources(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], targetId: string, outputs: OutputSchemas | undefined): [WorkflowNode, string[]][] {
+  const trigger = nodes.find((node) => node.kind === 'trigger');
+  if (!trigger) return [];
+  const dominated = dominators(edges, trigger.id);
+  return nodes.flatMap((node): [WorkflowNode, string[]][] => {
+    if (isToolNode(edges, node.id) || node.id !== trigger.id && !strictlyDominates(dominated, node.id, targetId)) return [];
+    if (node.kind === 'memory') return [[node, ['memory']]];
+    if (node.kind !== 'trigger' && node.kind !== 'agent' && node.kind !== 'mcp' && node.kind !== 'judgment') return [];
+    return [[node, Object.keys(outputProperties(node, outputs))]];
+  });
 }
 
 export function conditionSources(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], conditionId: string, outputs?: OutputSchemas): readonly WorkflowNode[] {

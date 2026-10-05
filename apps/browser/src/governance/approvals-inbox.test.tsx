@@ -30,6 +30,14 @@ describe('ApprovalsInbox', () => {
     expect(html).not.toContain('<img');
   });
 
+  test('shows a Judgment fact with one line per question beside the disclosed facts', () => {
+    const value = 'intent: refund · probability 0.91 · confidence 0.88 · band act\nurgency: 1 · probability 0.62 · confidence 0.55 · band escalate · not gating\noverall act · typesafe/jev-1.13';
+    const html = render([row({ facts: [{ name: 'orderId', value: 'A-1' }, { name: 'judgment:triage', value }] })]);
+    expect(html).toContain('<h4>orderId</h4><pre>A-1</pre>');
+    expect(html).toContain('<h4>judgment:triage</h4>');
+    expect(html).toContain('urgency: 1 · probability 0.62 · confidence 0.55 · band escalate · not gating\noverall act · typesafe/jev-1.13');
+  });
+
   test('shows no details section without facts', () => {
     expect(render([row()])).not.toContain('Details to review');
   });
