@@ -117,6 +117,11 @@ export function workflowCommandHandlers(studio: StudioStore, store: WorkflowStor
       const tools = await service.discoverTools(command.context, installationId, string(command.arguments['endpoint']));
       return { ...receipt(command, installationId, 0, 'discovered', command.digest), discovery: { tools } };
     },
+    'workflow.instantiate-pr-gate': async (command) => {
+      const value = command.arguments; const draftId = id(value['id']);
+      const result = await service.instantiatePrGate(command.context, draftId, id(value['githubInstallationId']), id(value['statusInstallationId']), command.idempotencyKey);
+      return { ...receipt(command, draftId, 1, result.created ? 'draft' : 'failed', command.digest), ...(result.issues.length ? { issues: result.issues } : {}) };
+    },
     'workflow.certify': async (command) => {
       const value = command.arguments; const installationId = id(value['id']); const data = record(value['installation']) as unknown as Installation;
       if (Object.keys(data).some((key) => !['route', 'endpoint', 'health', 'manifest'].includes(key)) || !data.manifest || typeof data.manifest !== 'object') fail('INVALID');

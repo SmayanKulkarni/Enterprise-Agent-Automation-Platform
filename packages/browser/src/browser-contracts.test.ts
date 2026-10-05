@@ -54,6 +54,16 @@ describe('discover-tools command arguments', () => {
   });
 });
 
+describe('instantiate-pr-gate command arguments', () => {
+  const github = '33333333-3333-4333-8333-333333333333';
+  const status = '66666666-6666-4666-8666-666666666666';
+  test('accepts a draft id and two installation ids only', () => {
+    expect(decodeCommandArguments('workflow', 'instantiate-pr-gate', { id: objectId, githubInstallationId: github, statusInstallationId: status })).toEqual({ id: objectId, githubInstallationId: github, statusInstallationId: status });
+    expect(() => decodeCommandArguments('workflow', 'instantiate-pr-gate', { id: objectId, githubInstallationId: 'nope', statusInstallationId: status })).toThrow(BrowserContractError);
+    expect(() => decodeCommandArguments('workflow', 'instantiate-pr-gate', { id: objectId, githubInstallationId: github })).toThrow(BrowserContractError);
+  });
+});
+
 describe('governance command arguments', () => {
   const create = { name: 'Platform', tenantIds: [tenantId], billingTenantId: null };
   const ids = (count: number) => Array.from({ length: count }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);

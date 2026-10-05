@@ -1,12 +1,12 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { gsap, motionAllowed, useGSAP } from './motion.js';
 
-export const sectionIds = ['provider', 'models', 'connectors', 'webhook', 'memory', 'runs'] as const;
+export const sectionIds = ['provider', 'models', 'connectors', 'templates', 'webhook', 'memory', 'runs'] as const;
 export type SectionId = (typeof sectionIds)[number];
 export interface DrawerSection { id: SectionId; label: string; hint: string; render: () => ReactNode; }
 
 const hashSections: readonly [RegExp, SectionId][] = [
-  [/^#provider-panel$/u, 'provider'], [/^#models-panel$/u, 'models'], [/^#connector-panel$/u, 'connectors'],
+  [/^#provider-panel$/u, 'provider'], [/^#models-panel$/u, 'models'], [/^#connector-panel$/u, 'connectors'], [/^#templates-panel$/u, 'templates'],
   [/^#webhook-panel$/u, 'webhook'], [/^#memory-panel$/u, 'memory'], [/^#(runs-panel|run-.+)$/u, 'runs'],
 ];
 

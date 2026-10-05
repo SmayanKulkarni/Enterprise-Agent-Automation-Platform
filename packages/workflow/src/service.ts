@@ -10,6 +10,7 @@ import type { PublishedDefinition, RunHistoryCursor, WorkflowRecord, WorkflowSto
 import type { AgentProgress, EffectData } from './runtime.js';
 import type { McpCredentialCrypto, McpCredentialRecord } from './mcp-credentials.js';
 import type { DiscoveredTool, McpDiscoveryPort } from './mcp-discovery.js';
+import { PR_GATE_NODE_GRANTS, buildPrGateGraph, prGateIssues, type PrGateInstallation } from './pr-gate-template.js';
 import { OpenRouterConnectionCrypto, type OpenRouterConnection } from './openrouter-connection.js';
 import { DEFAULT_MODEL_SETTINGS, MODEL_SETTINGS_ID, parseModelSettings, type ModelSettings } from './model-settings.js';
 import type { OpenRouterCatalog, OpenRouterModel } from './openrouter-catalog.js';
@@ -49,6 +50,7 @@ const variantValid = (item: { inputSchema: JsonSchema; tool?: unknown; fixed?: u
   const entries = Object.entries(item.fixed);
   return entries.length >= 1 && entries.length <= MAX_FIXED_ARGUMENTS && entries.every(([key, value]) => !(key in item.inputSchema.properties) && ['string', 'number', 'boolean'].includes(typeof value));
 };
+const derivedId = (key: string, name: string): string => { const hash = createHash('sha256').update(`${key}:${name}`).digest('hex'); return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`; };
 const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const id = (value: unknown): string => typeof value === 'string' && uuid.test(value) ? value : fail('INVALID');
@@ -260,6 +262,29 @@ export class WorkflowService {
     const credentialId = id(installationId).toLowerCase();
     try { const url = new URL(endpoint); if (url.protocol !== 'https:' || url.username || url.password || url.hash) fail('INVALID'); } catch { fail('INVALID'); }
     return discovery.listTools(String(context.tenantId), credentialId, endpoint);
+  }
+
+  async instantiatePrGate(context: ExecutionContext, draftId: string, githubInstallationId: string, statusInstallationId: string, key: string): Promise<{ created: boolean; issues: GraphIssue[] }> {
+    await this.store.assertProfile(context, 'admin');
+    const draft = id(draftId); const commandKey = id(key);
+    const load = async (installationId: string): Promise<PrGateInstallation | undefined> => {
+      const record = await this.store.read<Installation>(context, 'installation', id(installationId));
+      if (!record) return undefined;
+      const ready = record.state === 'healthy' && await this.connectorReady(record.data, String(context.tenantId));
+      return { id: record.id, state: ready ? record.state : 'not-ready', manifest: record.data.manifest };
+    };
+    const [github, status] = [await load(githubInstallationId), await load(statusInstallationId)];
+    const issues = prGateIssues(github, status);
+    if (!github || !status || issues.length) return { created: false, issues };
+    const grants = Object.fromEntries(PR_GATE_NODE_GRANTS.map((node) => [node, derivedId(commandKey, node)]));
+    const built = buildPrGateGraph({ github, status, grants });
+    await this.studio.create(context, draft, built, commandKey);
+    for (const nodeId of PR_GATE_NODE_GRANTS) {
+      const config = built.nodes.find((node) => node.id === nodeId)?.config ?? {};
+      const installationId = String(config['installationId']); const capability = String(config['capability']);
+      await this.grant(context, draft, nodeId, installationId, capability, grants[nodeId] ?? '', await digest({ draftId: draft, nodeId, installationId, capability }));
+    }
+    return { created: true, issues: (await this.check(context, draft)).issues };
   }
 
   async mcpCredential(context: ExecutionContext, action: 'connect' | 'rotate' | 'disconnect', installationId: string, expectedVersion: number, key: string, secret?: string): Promise<{ version: number; state: string; digest: string }> {
