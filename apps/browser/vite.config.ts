@@ -2,6 +2,7 @@ import '../../packages/telemetry/src/browser-api.js';
 import type { IncomingHttpHeaders } from 'node:http';
 import { defineConfig } from 'vite';
 import { localBrowserTransport, localWebhookIngress } from '../../packages/browser/src/local-browser-host.js';
+import { handleStatusMcp } from '../../packages/workflow/src/commit-status-connector.js';
 import { ingressResponse } from '../../packages/workflow/src/ingress-outcome.js';
 
 const proxyTarget = process.env['PLATFORM_API_PROXY_TARGET'] || undefined;
@@ -37,6 +38,11 @@ export default defineConfig(() => ({
       const environment = process.env;
       const origins = allowedOrigins(environment);
       const transport = process.env['VITEST'] === 'true' ? undefined : localBrowserTransport(environment);
+      server.middlewares.use('/api/connectors/github-status', (request, response) => { void (async () => {
+        const reply = await handleStatusMcp({ method: request.method ?? 'GET', authorization: request.headers.authorization, body: await readBody(request) }, { targetBase: process.env['PLATFORM_BASE_URL'] });
+        response.writeHead(reply.status, { 'content-type': 'application/json' });
+        response.end(JSON.stringify(reply.body));
+      })().catch((error: unknown) => { console.error('Local status connector failed:', error instanceof Error ? error.message : 'UNKNOWN'); response.writeHead(503); response.end(); }); });
       server.middlewares.use('/api/workflow-webhook', (request, response) => { void (async () => {
         const ingress = localWebhookIngress();
         const [tenantId = '', definitionId = ''] = (request.url ?? '').split('?')[0]!.split('/').filter(Boolean);

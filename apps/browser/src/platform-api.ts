@@ -49,6 +49,8 @@ export class PlatformApi {
   private readonly commandKeys = new Map<string, string>();
   constructor(private readonly getToken: GetToken, private readonly apiOrigin = '') {}
 
+  get publicOrigin(): string { return this.apiOrigin || window.location.origin; }
+
   async session(tenantId?: string, signal?: AbortSignal): Promise<Session> {
     try { return decodeSession(await this.get('/api/v1/session', tenantId, signal)); } catch (error) { if (error instanceof PlatformApiError) throw error; throw new PlatformApiError(500); }
   }

@@ -8,6 +8,7 @@
   "azure-functions/src/functions/browser-api.test.ts": 1,
   "azure-functions/src/functions/browser-api.ts": 1,
   "azure-functions/src/functions/workflow-agent.ts": 1,
+  "azure-functions/src/functions/workflow-connector-status.ts": 1,
   "azure-functions/src/functions/workflow-dispatch-recovery.ts": 1,
   "azure-functions/src/functions/workflow-run.ts": 1,
   "azure-functions/src/functions/workflow-webhook.ts": 1,
