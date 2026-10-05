@@ -6,6 +6,7 @@ import { AzureSqlWorkflowStore } from '../../workflow/src/sql.js';
 import { WorkflowService, deliverWebhook, type Scheduler, type WebhookDelivery } from '../../workflow/src/service.js';
 import { openRouterCatalog } from '../../workflow/src/openrouter-catalog.js';
 import { HttpEmbeddingPort, HttpMcpPort, HttpModelPort, UpstashVectorMemoryPort } from '../../workflow/src/ports.js';
+import { envMcpCredentials } from '../../workflow/src/mcp-credentials.js';
 import { WorkflowWorker } from '../../workflow/src/runtime.js';
 import { localScheduler, recoverLocalRuns } from './local-scheduler.js';
 import { OpenRouterConnectionCrypto } from '../../workflow/src/openrouter-connection.js';
@@ -48,9 +49,10 @@ export function localBrowserTransport(environment: Readonly<Record<string, strin
   const workflowStore = connectionString ? new AzureSqlWorkflowStore(connectionString) : undefined;
   const providers = [environment['AZURE_OPENAI_ENDPOINT'] && environment['AZURE_OPENAI_API_KEY'] ? 'azure-openai' : undefined, environment['WORKFLOW_OPENROUTER_WRAPPING_KEY'] && environment['WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION'] ? 'openrouter' : undefined].filter((provider): provider is string => provider !== undefined);
   const allowedMcpHosts = new Set((environment['WORKFLOW_MCP_ALLOWED_HOSTS'] ?? '').split(',').map((host) => host.trim()).filter(Boolean));
-  const connectorReady = (installation: { id: string; route: string; endpoint?: string; tokenHash?: string }): boolean => {
+  const mcpCredentials = envMcpCredentials(environment);
+  const connectorReady = async (installation: { id: string; route: string; endpoint?: string; tokenHash?: string }, tenantId: string): Promise<boolean> => {
     if (installation.route === 'private') return Boolean(installation.tokenHash);
-    try { return Boolean(installation.endpoint && allowedMcpHosts.has(new URL(installation.endpoint).hostname) && environment[`WORKFLOW_MCP_CREDENTIAL_${installation.id.replaceAll('-', '').toUpperCase()}`]); } catch { return false; }
+    try { return Boolean(installation.endpoint && allowedMcpHosts.has(new URL(installation.endpoint).hostname) && await mcpCredentials.resolve(tenantId, installation.id)); } catch { return false; }
   };
   const crypto = providers.includes('openrouter') ? OpenRouterConnectionCrypto.fromEnvironment(environment) : undefined;
   const memory = new UpstashVectorMemoryPort(environment, new HttpEmbeddingPort(environment, workflowStore, crypto));

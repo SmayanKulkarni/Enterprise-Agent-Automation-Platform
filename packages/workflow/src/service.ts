@@ -203,7 +203,7 @@ const judgmentModelIssues = (node: GraphNode, path: string, decisions: readonly 
 };
 
 export class WorkflowService {
-  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation) => boolean = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }, private readonly openRouterCatalog?: OpenRouterCatalog) {}
+  constructor(private readonly studio: StudioStore, private readonly store: WorkflowStore, private readonly scheduler?: Scheduler, private readonly openRouterTenants: readonly string[] = [], private readonly availableProviders: readonly string[] = ['azure-openai', 'openrouter'], private readonly connectorReady: (installation: Installation, tenantId: string) => boolean | Promise<boolean> = () => true, private readonly memoryReadiness: (tenantId: string) => MemoryReadiness = () => 'disabled', private readonly memory?: HostedMemoryPort, private readonly openRouter?: { crypto: OpenRouterConnectionCrypto; verify: (key: string) => Promise<boolean> }, private readonly openRouterCatalog?: OpenRouterCatalog) {}
 
   private async providerIssues(context: ExecutionContext, draft: GraphDraft): Promise<GraphIssue[]> {
     const openRouterNode = (kind: string): boolean => draft.nodes.some((node) => node.kind === kind && node.config['provider'] === 'openrouter');
@@ -286,8 +286,9 @@ export class WorkflowService {
   async pins(context: ExecutionContext, draftId: string): Promise<CapabilityPin[]> {
     const grants = (await this.store.list<CapabilityGrant>(context, 'grant')).filter((record) => record.state === 'active' && record.data.draftId.toLowerCase() === draftId.toLowerCase());
     const installations = await this.store.list<Installation>(context, 'installation');
+    const ready = new Map(await Promise.all(installations.map(async (item) => [item.id, await this.connectorReady(item.data, context.tenantId)] as const)));
     return grants.flatMap((grant) => {
-      const installation = installations.find((item) => item.id.toLowerCase() === grant.data.installationId.toLowerCase() && item.state === 'healthy' && item.data.manifest.certified && item.data.manifest.digest === grant.data.manifestDigest && this.connectorReady(item.data));
+      const installation = installations.find((item) => item.id.toLowerCase() === grant.data.installationId.toLowerCase() && item.state === 'healthy' && item.data.manifest.certified && item.data.manifest.digest === grant.data.manifestDigest && ready.get(item.id) === true);
       const capability = installation?.data.manifest.capabilities.find((item) => item.name === grant.data.capability);
       return installation && capability ? [{ nodeId: grant.data.nodeId, installationId: installation.id, capability: capability.name, manifestDigest: installation.data.manifest.digest, grantId: grant.id, risk: capability.risk, inputSchema: capability.inputSchema, outputSchema: capability.outputSchema, ...(capability.targetFields ? { targetFields: capability.targetFields } : {}) }] : [];
     });
@@ -391,7 +392,7 @@ export class WorkflowService {
     const draft = graph(await this.draft(context, id(draftId)));
     if (!draft.nodes.some((node) => node.id === nodeId && node.kind === 'mcp')) fail('INVALID');
     const installation = await this.store.read<Installation>(context, 'installation', id(installationId));
-    if (!installation || installation.state !== 'healthy' || !this.connectorReady(installation.data) || !installation.data.manifest.certified || !installation.data.manifest.capabilities.some((item) => item.name === capability)) throw Object.assign(new Error('DENIED'), { code: 'DENIED' });
+    if (!installation || installation.state !== 'healthy' || !await this.connectorReady(installation.data, context.tenantId) || !installation.data.manifest.certified || !installation.data.manifest.capabilities.some((item) => item.name === capability)) throw Object.assign(new Error('DENIED'), { code: 'DENIED' });
     const data: CapabilityGrant = { draftId: id(draftId), nodeId, installationId, capability, manifestDigest: installation.data.manifest.digest };
     await this.store.write(context, 'admin', 'grant', id(key), 0, 'active', data, key, requestDigest, { commandId: key, objectId: key, revision: 1, state: 'active', digest: data.manifestDigest, evidenceIds: [] });
   }

@@ -27,7 +27,7 @@ export type { JudgmentQuestion } from './judgment.js';
 export interface JudgmentRequest { tenantId: string; model: string; questions: Record<string, JudgmentQuestion>; state: Record<string, unknown>; milliseconds: number; telemetry: ModelTelemetry; }
 export interface JudgmentResult { answers: Record<string, Record<string, unknown>>; model: string; requestId?: string; tokens: number; cost: number; promptTokens?: number; completionTokens?: number; }
 export interface ModelPort extends ConsolidationPort { complete(request: ModelRequest): Promise<ModelResult>; summarize?(run: WorkflowRun): Promise<OutcomeDraft>; judge?(request: JudgmentRequest): Promise<JudgmentResult>; }
-export interface McpPort { invoke(installation: Installation, capability: string, args: Record<string, unknown>, effectId: string, deadline: string): Promise<{ outcome: 'succeeded' | 'not-dispatched' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown> }>; }
+export interface McpPort { invoke(installation: Installation & { tenantId?: string }, capability: string, args: Record<string, unknown>, effectId: string, deadline: string): Promise<{ outcome: 'succeeded' | 'not-dispatched' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown> }>; }
 export interface EffectData { runId: string; nodeId: string; agentId?: string; installationId: string; requestDigest: string; argumentsDigest: string; state: 'prepared' | 'queued' | 'possible-send' | 'succeeded' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown>; }
 export interface StepResult { next?: string; waiting?: 'approval' | 'connector' | 'circuit'; deadline?: string; bindingDigest?: string; effectId?: string; completed?: boolean; failed?: boolean; }
 interface CircuitData { failures: number; key?: string; openedUntil?: string; probeUntil?: string; }
@@ -577,7 +577,7 @@ export class WorkflowWorker {
     const blocked = await this.beforeCircuit(tenantId, `connector:${pin.installationId}`);
     if (blocked) return { state: 'waiting', step: { waiting: 'circuit', deadline: new Date(Math.min(Date.parse(blocked), Date.parse(deadline))).toISOString() } };
     effect = await this.writeEffect(tenantId, id, effect.version, 'possible-send', { ...effect.data, state: 'possible-send' });
-    const result = await observeMcpCall(observed, () => this.mcp.invoke(installation.data, pin.capability, args, id, deadline).catch(reported({ outcome: 'unknown-outcome' as const }, 'runtime.mcp')));
+    const result = await observeMcpCall(observed, () => this.mcp.invoke({ ...installation.data, tenantId }, pin.capability, args, id, deadline).catch(reported({ outcome: 'unknown-outcome' as const }, 'runtime.mcp')));
     if (result.outcome === 'unknown-outcome' || result.outcome === 'succeeded' && !result.output) return { state: 'stopped', reason: 'RECONCILIATION_REQUIRED', unknown: true };
     if (result.outcome === 'not-dispatched') await this.afterCircuit(tenantId, `connector:${pin.installationId}`, true);
     if (result.outcome === 'succeeded' && result.output && !validateValue(result.output, pin.outputSchema)) {

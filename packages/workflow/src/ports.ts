@@ -1,4 +1,5 @@
 import type { Installation, WorkflowRun } from './service.js';
+import { envMcpCredentials, type McpCredentialLookup } from './mcp-credentials.js';
 import { trace } from '@opentelemetry/api';
 import type { JsonSchema } from './graph.js';
 import { memoryMetadataSubjects, type HostedMemoryFilter, type HostedMemoryItem, type HostedMemoryMatch, type HostedMemoryPort } from './memory.js';
@@ -160,12 +161,12 @@ const textOutput = (content: unknown): Record<string, unknown> | undefined => {
 };
 
 export class HttpMcpPort implements McpPort {
-  constructor(private readonly environment: Readonly<Record<string, string | undefined>> = process.env) {}
-  async invoke(installation: Installation, capability: string, args: Record<string, unknown>, effectId: string, deadline: string): Promise<{ outcome: 'succeeded' | 'not-dispatched' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown> }> {
+  constructor(private readonly environment: Readonly<Record<string, string | undefined>> = process.env, private readonly credentials: McpCredentialLookup = envMcpCredentials(environment)) {}
+  async invoke(installation: Installation & { tenantId?: string }, capability: string, args: Record<string, unknown>, effectId: string, deadline: string): Promise<{ outcome: 'succeeded' | 'not-dispatched' | 'unknown-outcome' | 'failed'; output?: Record<string, unknown> }> {
     if (installation.route !== 'public' || !installation.endpoint) return { outcome: 'not-dispatched' };
     const url = new URL(installation.endpoint); const allowed = required(this.environment, 'WORKFLOW_MCP_ALLOWED_HOSTS').split(',').map((host) => host.trim());
     if (url.protocol !== 'https:' || !allowed.includes(url.hostname)) return { outcome: 'not-dispatched' };
-    const token = this.environment[`WORKFLOW_MCP_CREDENTIAL_${installation.id.replaceAll('-', '').toUpperCase()}`];
+    const token = await this.credentials.resolve(installation.tenantId ?? '', installation.id);
     if (!token) return { outcome: 'not-dispatched' };
     const spec = installation.manifest.capabilities.find((item) => item.name === capability);
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` };
