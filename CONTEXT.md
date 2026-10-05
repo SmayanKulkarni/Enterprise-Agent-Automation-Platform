@@ -28,6 +28,14 @@ _Avoid_: Parallel merge, fan-in
 A tenant-admin-owned binding of an Extension to its credentials, certified Capability Manifest, network route, and health state.
 _Avoid_: Login, integration setup
 
+**Connector token**:
+The secret an administrator pastes for a Connector Installation. It is stored sealed for that tenant and installation, replaces the server environment variable while active, and is never shown again.
+_Avoid_: API key, password
+
+**Hosted status connector**:
+The Extension the platform itself serves to publish the `workflow/pr-gate` commit status. It uses the tenant's Connector Token as the GitHub token and holds no GitHub secret of its own.
+_Avoid_: Managed connector, status server
+
 **Private connector agent**:
 A tenant-operated relay inside the tenant network that invokes a private Extension.
 _Avoid_: VPN, public proxy

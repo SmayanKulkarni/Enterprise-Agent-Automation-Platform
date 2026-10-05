@@ -54,6 +54,16 @@ describe('PlatformApi', () => {
     expect(JSON.parse(first.body as string)).toMatchObject({ contract: 'browser.v1', tenantId: command.tenantId, payload: { expectedVersion: 2, arguments: command.arguments } });
   });
 
+  test('keeps a pasted token out of the in-memory retry map while still retrying with one idempotency key', async () => {
+    const fetch = vi.fn().mockImplementation(() => new Response(JSON.stringify({ payload: { commandId: '33333333-3333-4333-8333-333333333333', objectId: '22222222-2222-4222-8222-222222222222', revision: 1, state: 'active', digest: 'a'.repeat(64), evidenceIds: [] } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    const api = new PlatformApi(() => Promise.resolve('short-lived'));
+    const command = { tenantId: '11111111-1111-4111-8111-111111111111', owner: 'workflow', name: 'connect-mcp-credential', expectedVersion: 0, arguments: { id: '22222222-2222-4222-8222-222222222222', key: 'pasted-secret-token' } };
+    await api.command(command); await api.command(command);
+    expect([...(api as unknown as { commandKeys: Map<string, string> }).commandKeys.keys()].join('')).not.toContain('pasted-secret-token');
+    expect((fetch.mock.calls[0]?.[1] as RequestInit).headers).toMatchObject({ 'idempotency-key': ((fetch.mock.calls[1]?.[1] as RequestInit).headers as Record<string, string>)['idempotency-key'] });
+  });
+
   test('rejects unsupported commands before a browser request is made', async () => {
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     await expect(new PlatformApi(() => Promise.resolve('short-lived')).command({ tenantId: '11111111-1111-4111-8111-111111111111', owner: 'vendor', name: 'publish', expectedVersion: 0, arguments: {} })).rejects.toMatchObject({ status: 400, category: 'invalid' });

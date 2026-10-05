@@ -1,5 +1,6 @@
 import type { DiscoveredTool } from './discovery-model.js';
 import { clerkAuthorizationHeader } from '../../../packages/browser/src/clerk-authorization-header.js';
+import { digest } from '../../../packages/contracts/src/index.js';
 import { decodeCommandArguments, decodeProjection, decodeSession, decodeTenants, type BrowserProjection, type BrowserSession, type BrowserTenant } from '../../../packages/browser/src/browser-contracts.js';
 
 type GetToken = () => Promise<string | null>;
@@ -69,7 +70,8 @@ export class PlatformApi {
     if (!command.tenantId || !command.owner || !command.name || !Number.isSafeInteger(command.expectedVersion) || command.expectedVersion < 0) throw new PlatformApiError(400, 'invalid');
     let argumentsValue: Record<string, unknown>;
     try { argumentsValue = decodeCommandArguments(command.owner, command.name, command.arguments); } catch { throw new PlatformApiError(400, 'invalid'); }
-    const retryKey = JSON.stringify([command.tenantId, command.owner, command.name, command.expectedVersion, argumentsValue]);
+    const retryArguments = typeof argumentsValue['key'] === 'string' ? { ...argumentsValue, key: await digest(argumentsValue['key']) } : argumentsValue;
+    const retryKey = JSON.stringify([command.tenantId, command.owner, command.name, command.expectedVersion, retryArguments]);
     const idempotencyKey = command.idempotencyKey ?? this.commandKeys.get(retryKey) ?? crypto.randomUUID();
     this.commandKeys.set(retryKey, idempotencyKey);
     const correlationId = command.correlationId ?? crypto.randomUUID();
