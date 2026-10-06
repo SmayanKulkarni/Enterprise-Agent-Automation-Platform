@@ -1,8 +1,10 @@
 import { judgmentAnswers, MAX_QUESTIONS, type JudgmentQuestion } from '../../../packages/workflow/src/judgment.js';
+import type { CatalogModel } from './model-catalog.js';
 import type { WorkflowNode } from './workflow-model.js';
 
 export const QUESTION_LIMIT = MAX_QUESTIONS;
 export const MEMORY_ITEM_ADVICE = 3;
+export const pinnedModels = (models: readonly CatalogModel[]): CatalogModel[] => models.filter((model) => !model.id.startsWith('~'));
 export type QuestionType = JudgmentQuestion['type'];
 export type QuestionConfig = JudgmentQuestion & { thresholds?: { act: number; review: number }; gate?: boolean };
 type Questions = Record<string, QuestionConfig>;

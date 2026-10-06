@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { BandInputs } from './band-inputs.js';
-import { addQuestion, memoryLimitWarning, questionReferences, QUESTION_LIMIT, removeQuestion, renameQuestion, setQuestion, type QuestionConfig } from './judgment-model.js';
+import { addQuestion, memoryLimitWarning, pinnedModels, questionReferences, QUESTION_LIMIT, removeQuestion, renameQuestion, setQuestion, type QuestionConfig } from './judgment-model.js';
 import { QuestionCard } from './judgment-question.js';
 import { ModelPicker, type CatalogModel, type CatalogStatus } from './model-picker.js';
 import { PolicySettings } from './policy-settings.js';
@@ -44,7 +44,7 @@ export function JudgmentSettings({ node, nodes, edges, updateNode, decisionModel
   const setState = (next: Record<string, string>): void => update({ ...config, state: next });
   const referenced = (id: string, action: string): void => { const titles = questionReferences(nodes, node.id, id); setNotice(titles.length === 0 ? undefined : `${id} was ${action}. These steps still read its fields and will fail check until you update them: ${titles.join(', ')}.`); };
   return <>
-    <ModelPicker label="Decision model" value={String(config['model'] ?? '')} models={decisionModels} status={modelsStatus} onRetry={onRetryModels} help="Pin an exact version. Thresholds tuned for one model do not carry over to another. Some open models (for example Tev1) only answer choice questions." onChange={(model) => update({ ...config, model })} />
+    <ModelPicker label="Decision model" value={String(config['model'] ?? '')} models={pinnedModels(decisionModels)} status={modelsStatus} onRetry={onRetryModels} help="Pin an exact version. Thresholds tuned for one model do not carry over to another. Some open models (for example Tev1) only answer choice questions." onChange={(model) => update({ ...config, model })} />
     {openRouterConnectionState !== 'ready' && <Notice tone="warning">OpenRouter isn't ready in this workspace ({openRouterConnectionState}). An admin can connect it in the <a href="#provider-panel">provider panel</a>.</Notice>}
     <fieldset><legend>State</legend>
       <p className="field-help">All questions read the same state. Send only what they need; extra detail lowers accuracy.</p>

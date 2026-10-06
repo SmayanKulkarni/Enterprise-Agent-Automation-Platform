@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { addQuestion, answerValues, changeQuestionType, defaultJudgmentConfig, memoryLimitWarning, nextQuestionId, questionIdError, questionReferences, removeQuestion, renameQuestion, setCriteriaKey, QUESTION_LIMIT } from './judgment-model.js';
+import { addQuestion, answerValues, changeQuestionType, defaultJudgmentConfig, memoryLimitWarning, nextQuestionId, pinnedModels, questionIdError, questionReferences, removeQuestion, renameQuestion, setCriteriaKey, QUESTION_LIMIT } from './judgment-model.js';
 import { judgmentConfigValid } from '../../../packages/workflow/src/judgment.js';
 import { stateOptions, type WorkflowEdge, type WorkflowNode } from './workflow-model.js';
 
@@ -134,5 +134,12 @@ describe('state sources', () => {
     expect(memoryLimitWarning({ history: '$node.recall.memory' }, nodes)).toMatch(/3 items or fewer/u);
     expect(memoryLimitWarning({ history: '$input.body' }, nodes)).toBeUndefined();
     expect(memoryLimitWarning({ history: '$node.recall.memory' }, [trigger, { ...memory, config: { limit: 3 } }])).toBeUndefined();
+  });
+});
+
+describe('pinned decision models', () => {
+  test('drops moving aliases and keeps exact versions', () => {
+    const models = [{ id: '~typesafe/jev-latest', structuredOutput: false }, { id: 'typesafe/jev-1.13', structuredOutput: false }];
+    expect(pinnedModels(models).map((model) => model.id)).toEqual(['typesafe/jev-1.13']);
   });
 });
