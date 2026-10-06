@@ -5,7 +5,7 @@ import { EVENTS } from './event-names.js';
 import { METRICS } from './instruments.js';
 
 const ROOT = join(import.meta.dirname, '../../..');
-const SOURCE_ROOTS = ['packages', 'azure-functions/src', 'api', 'apps/browser/src'];
+const SOURCE_ROOTS = ['packages', 'azure-functions/src', 'apps/browser/src'];
 const SKIPPED = new Set(['node_modules', 'dist']);
 const isSource = (name: string): boolean => /\.tsx?$/u.test(name) && !/\.test(?:-support)?\.tsx?$/u.test(name) && !name.endsWith('.test-support.ts');
 

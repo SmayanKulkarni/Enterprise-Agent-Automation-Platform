@@ -5,7 +5,7 @@
   "outputDirectory": "apps/browser/dist",
   "installCommand": "corepack pnpm install --frozen-lockfile",
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
     {
