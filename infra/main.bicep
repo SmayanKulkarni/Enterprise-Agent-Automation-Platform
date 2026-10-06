@@ -16,6 +16,9 @@ param otlpEndpoint string
 param governancePrometheusUrl string
 param governanceLokiUrl string
 param governanceTempoUrl string
+param governancePrometheusUser string
+param governanceLokiUser string
+param governanceTempoUser string
 param governanceAssistantMaxCost string = ''
 param sqlServerName string = 'auomaionbackenddb'
 param sqlServerResourceGroup string = 'rg-smayan.kulkarni142-9549'
@@ -32,8 +35,6 @@ param openRouterWrappingKey string
 param mcpWrappingKey string
 @secure()
 param otlpHeaders string
-@secure()
-param governanceQueryUser string
 @secure()
 param governanceQueryToken string
 
@@ -94,6 +95,9 @@ var plainSettings = {
   GOVERNANCE_PROMETHEUS_URL: governancePrometheusUrl
   GOVERNANCE_LOKI_URL: governanceLokiUrl
   GOVERNANCE_TEMPO_URL: governanceTempoUrl
+  GOVERNANCE_PROMETHEUS_USER: governancePrometheusUser
+  GOVERNANCE_LOKI_USER: governanceLokiUser
+  GOVERNANCE_TEMPO_USER: governanceTempoUser
   GOVERNANCE_ASSISTANT_MAX_COST: governanceAssistantMaxCost
 }
 
@@ -105,7 +109,6 @@ var secretEnv = [
   { name: 'WORKFLOW_OPENROUTER_WRAPPING_KEY', secretRef: 'workflow-openrouter-wrapping-key' }
   { name: 'WORKFLOW_MCP_WRAPPING_KEY', secretRef: 'workflow-mcp-wrapping-key' }
   { name: 'OTEL_EXPORTER_OTLP_HEADERS', secretRef: 'otel-exporter-otlp-headers' }
-  { name: 'GOVERNANCE_QUERY_USER', secretRef: 'governance-query-user' }
   { name: 'GOVERNANCE_QUERY_TOKEN', secretRef: 'governance-query-token' }
 ]
 
@@ -125,7 +128,6 @@ resource app 'Microsoft.App/containerApps@2026-03-02-preview' = {
         { name: 'workflow-openrouter-wrapping-key', value: openRouterWrappingKey }
         { name: 'workflow-mcp-wrapping-key', value: mcpWrappingKey }
         { name: 'otel-exporter-otlp-headers', value: otlpHeaders }
-        { name: 'governance-query-user', value: governanceQueryUser }
         { name: 'governance-query-token', value: governanceQueryToken }
       ]
     }

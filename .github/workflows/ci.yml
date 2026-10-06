@@ -46,7 +46,9 @@ jobs:
       WORKFLOW_OPENROUTER_WRAPPING_KEY: lint
       WORKFLOW_MCP_WRAPPING_KEY: lint
       OTEL_EXPORTER_OTLP_HEADERS: lint
-      GOVERNANCE_QUERY_USER: lint
+      GOVERNANCE_PROMETHEUS_USER: lint
+      GOVERNANCE_LOKI_USER: lint
+      GOVERNANCE_TEMPO_USER: lint
       GOVERNANCE_QUERY_TOKEN: lint
     steps:
       - uses: actions/checkout@v4

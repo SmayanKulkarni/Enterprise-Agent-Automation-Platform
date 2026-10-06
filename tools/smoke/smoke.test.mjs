@@ -53,7 +53,7 @@ test('gives up with the last error once the retry window is spent', async () => 
   await expect(withRetry(() => Promise.reject(new Error('still down')), 0)).rejects.toThrow('still down');
 });
 
-const grafanaOptions = (token) => ({ web: servers.web.url, api: servers.api.url, origin: ORIGIN, grafana: { urls: { prometheus: servers.grafana.url, loki: servers.grafana.url, tempo: servers.grafana.url }, user: 'stack', token } });
+const grafanaOptions = (token) => ({ web: servers.web.url, api: servers.api.url, origin: ORIGIN, grafana: { urls: { prometheus: servers.grafana.url, loki: servers.grafana.url, tempo: servers.grafana.url }, users: { prometheus: 'stack', loki: 'stack', tempo: 'stack' }, token } });
 
 test('passes the Grafana checks when the query credentials are accepted', async () => {
   const results = await runSmoke(grafanaOptions('token'));
@@ -72,11 +72,17 @@ test('fails each Grafana check when the token is rejected', async () => {
 
 test('reads the Grafana backends from the environment and trims trailing slashes', () => {
   const env = { GOVERNANCE_PROMETHEUS_URL: 'https://p.example/api/prom/', GOVERNANCE_LOKI_URL: 'https://l.example', GOVERNANCE_TEMPO_URL: 'https://t.example/tempo', GOVERNANCE_QUERY_USER: 'stack', GOVERNANCE_QUERY_TOKEN: 'token' };
-  expect(grafanaFromEnv(env)).toEqual({ urls: { prometheus: 'https://p.example/api/prom', loki: 'https://l.example', tempo: 'https://t.example/tempo' }, user: 'stack', token: 'token' });
+  expect(grafanaFromEnv(env)).toEqual({ urls: { prometheus: 'https://p.example/api/prom', loki: 'https://l.example', tempo: 'https://t.example/tempo' }, users: { prometheus: 'stack', loki: 'stack', tempo: 'stack' }, token: 'token' });
 });
 
 test('skips the Grafana checks when any backend setting is missing', () => {
   const env = { GOVERNANCE_PROMETHEUS_URL: 'https://p.example', GOVERNANCE_LOKI_URL: 'https://l.example', GOVERNANCE_QUERY_USER: 'stack', GOVERNANCE_QUERY_TOKEN: 'token' };
   expect(grafanaFromEnv(env)).toBeUndefined();
   expect(grafanaFromEnv({ ...env, GOVERNANCE_TEMPO_URL: 'https://t.example', GOVERNANCE_QUERY_TOKEN: '' })).toBeUndefined();
+});
+
+test('prefers a per-backend user over the shared query user', () => {
+  const env = { GOVERNANCE_PROMETHEUS_URL: 'https://p.example', GOVERNANCE_LOKI_URL: 'https://l.example', GOVERNANCE_TEMPO_URL: 'https://t.example', GOVERNANCE_QUERY_USER: 'stack', GOVERNANCE_LOKI_USER: 'logs', GOVERNANCE_QUERY_TOKEN: 'token' };
+  expect(grafanaFromEnv(env).users).toEqual({ prometheus: 'stack', loki: 'logs', tempo: 'stack' });
+  expect(grafanaFromEnv({ ...env, GOVERNANCE_QUERY_USER: '' })).toBeUndefined();
 });

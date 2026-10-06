@@ -19,11 +19,14 @@ const parseUrl = (name: string, value: string | undefined): string | undefined =
 };
 
 export function backendsFromEnvironment(environment: Readonly<Record<string, string | undefined>>): Backends {
-  const user = environment['GOVERNANCE_QUERY_USER']?.trim();
+  const fallbackUser = environment['GOVERNANCE_QUERY_USER']?.trim();
   const token = environment['GOVERNANCE_QUERY_TOKEN']?.trim();
-  const auth = user && token ? { user, token } : {};
-  const backend = (name: string): QueryBackend => ({ url: parseUrl(name, environment[name]), ...auth });
-  return { prometheus: backend('GOVERNANCE_PROMETHEUS_URL'), loki: backend('GOVERNANCE_LOKI_URL'), tempo: backend('GOVERNANCE_TEMPO_URL') };
+  const backend = (label: string): QueryBackend => {
+    const urlName = `GOVERNANCE_${label}_URL`;
+    const user = environment[`GOVERNANCE_${label}_USER`]?.trim() || fallbackUser;
+    return { url: parseUrl(urlName, environment[urlName]), ...(user && token ? { user, token } : {}) };
+  };
+  return { prometheus: backend('PROMETHEUS'), loki: backend('LOKI'), tempo: backend('TEMPO') };
 }
 
 export async function backendJson(backend: QueryBackend, path: string, params: Readonly<Record<string, string>>, method: 'GET' | 'POST'): Promise<unknown> {

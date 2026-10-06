@@ -72,17 +72,18 @@ const tierTwo = ({ api, origin, tenantId, userId, retryWindowMs = RETRY_WINDOW_M
 
 const GRAFANA_PROBES = { prometheus: '/api/v1/query?query=1', loki: '/loki/api/v1/labels', tempo: '/api/echo' };
 
-const tierThree = ({ grafana: { urls, user, token } }) => Object.entries(GRAFANA_PROBES).map(([name, path]) => check(`grafana ${name} accepts the query credentials`, async () => {
-  const authorization = `Basic ${Buffer.from(`${user}:${token}`).toString('base64')}`;
+const tierThree = ({ grafana: { urls, users, token } }) => Object.entries(GRAFANA_PROBES).map(([name, path]) => check(`grafana ${name} accepts the query credentials`, async () => {
+  const authorization = `Basic ${Buffer.from(`${users[name]}:${token}`).toString('base64')}`;
   expectStatus(await fetch(`${urls[name]}${path}`, { headers: { authorization } }), 200);
 }));
 
 export const grafanaFromEnv = (env) => {
   const urls = { prometheus: env.GOVERNANCE_PROMETHEUS_URL, loki: env.GOVERNANCE_LOKI_URL, tempo: env.GOVERNANCE_TEMPO_URL };
-  const user = env.GOVERNANCE_QUERY_USER;
+  const userFor = (label) => env[`GOVERNANCE_${label}_USER`] || env.GOVERNANCE_QUERY_USER;
+  const users = { prometheus: userFor('PROMETHEUS'), loki: userFor('LOKI'), tempo: userFor('TEMPO') };
   const token = env.GOVERNANCE_QUERY_TOKEN;
-  if (!user || !token || !Object.values(urls).every(Boolean)) return undefined;
-  return { urls: Object.fromEntries(Object.entries(urls).map(([name, url]) => [name, trim(url)])), user, token };
+  if (!token || !Object.values(users).every(Boolean) || !Object.values(urls).every(Boolean)) return undefined;
+  return { urls: Object.fromEntries(Object.entries(urls).map(([name, url]) => [name, trim(url)])), users, token };
 };
 
 export async function runSmoke(options) {
