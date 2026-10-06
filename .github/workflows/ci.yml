@@ -33,9 +33,21 @@ jobs:
   infra-lint:
     runs-on: ubuntu-latest
     env:
+      IMAGE: ghcr.io/lint/lint-api:lint
       CLERK_ISSUER: https://lint.invalid
       CLERK_PUBLISHABLE_KEY: pk_test_lint
       WEB_ORIGIN: https://lint.invalid
+      OTEL_EXPORTER_OTLP_ENDPOINT: https://lint.invalid/otlp
+      GOVERNANCE_PROMETHEUS_URL: https://lint.invalid/api/prom
+      GOVERNANCE_LOKI_URL: https://lint.invalid
+      GOVERNANCE_TEMPO_URL: https://lint.invalid/tempo
+      AZURE_SQL_CONNECTION_STRING: lint
+      CLERK_SECRET_KEY: lint
+      WORKFLOW_OPENROUTER_WRAPPING_KEY: lint
+      WORKFLOW_MCP_WRAPPING_KEY: lint
+      OTEL_EXPORTER_OTLP_HEADERS: lint
+      GOVERNANCE_QUERY_USER: lint
+      GOVERNANCE_QUERY_TOKEN: lint
     steps:
       - uses: actions/checkout@v4
       - run: |
