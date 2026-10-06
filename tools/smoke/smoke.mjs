@@ -6,6 +6,7 @@ const MEDIA_TYPE = 'application/vnd.platform.browser.v1+json';
 const RETRY_WINDOW_MS = 180_000;
 const MAX_BACKOFF_MS = 15_000;
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const trim = (url) => url.replace(/\/+$/u, '');
 
 const check = (name, run) => async () => {
   try { await run(); return { name, ok: true }; } catch (error) { return { name, ok: false, detail: error.message }; }
@@ -69,8 +70,23 @@ const tierTwo = ({ api, origin, tenantId, userId, retryWindowMs = RETRY_WINDOW_M
   }),
 ];
 
+const GRAFANA_PROBES = { prometheus: '/api/v1/query?query=1', loki: '/loki/api/v1/labels', tempo: '/api/echo' };
+
+const tierThree = ({ grafana: { urls, user, token } }) => Object.entries(GRAFANA_PROBES).map(([name, path]) => check(`grafana ${name} accepts the query credentials`, async () => {
+  const authorization = `Basic ${Buffer.from(`${user}:${token}`).toString('base64')}`;
+  expectStatus(await fetch(`${urls[name]}${path}`, { headers: { authorization } }), 200);
+}));
+
+export const grafanaFromEnv = (env) => {
+  const urls = { prometheus: env.GOVERNANCE_PROMETHEUS_URL, loki: env.GOVERNANCE_LOKI_URL, tempo: env.GOVERNANCE_TEMPO_URL };
+  const user = env.GOVERNANCE_QUERY_USER;
+  const token = env.GOVERNANCE_QUERY_TOKEN;
+  if (!user || !token || !Object.values(urls).every(Boolean)) return undefined;
+  return { urls: Object.fromEntries(Object.entries(urls).map(([name, url]) => [name, trim(url)])), user, token };
+};
+
 export async function runSmoke(options) {
-  const checks = [...tierOne(options), ...(options.tenantId && options.userId ? tierTwo(options) : [])];
+  const checks = [...tierOne(options), ...(options.tenantId && options.userId ? tierTwo(options) : []), ...(options.grafana ? tierThree(options) : [])];
   const results = [];
   for (const run of checks) results.push(await run());
   return results;
@@ -79,8 +95,7 @@ export async function runSmoke(options) {
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { values } = parseArgs({ options: { web: { type: 'string' }, api: { type: 'string' }, origin: { type: 'string' } } });
   for (const name of ['web', 'api', 'origin']) if (!values[name]) throw new Error(`Missing --${name}.`);
-  const trim = (url) => url.replace(/\/+$/u, '');
-  const results = await runSmoke({ web: trim(values.web), api: trim(values.api), origin: trim(values.origin), tenantId: process.env.SMOKE_TENANT_ID, userId: process.env.SMOKE_CLERK_USER_ID });
+  const results = await runSmoke({ web: trim(values.web), api: trim(values.api), origin: trim(values.origin), tenantId: process.env.SMOKE_TENANT_ID, userId: process.env.SMOKE_CLERK_USER_ID, grafana: grafanaFromEnv(process.env) });
   for (const { name, ok, detail } of results) console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${ok ? '' : `: ${detail}`}`);
   process.exit(results.every((result) => result.ok) ? 0 : 1);
 }
