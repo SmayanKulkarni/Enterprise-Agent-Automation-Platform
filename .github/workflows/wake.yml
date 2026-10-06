@@ -1,0 +1,24 @@
+name: wake
+
+on:
+  schedule:
+    - cron: '5 */6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    env:
+      STAGING: ${{ vars.STAGING_API_ORIGIN }}
+      PROD: ${{ vars.PROD_API_ORIGIN }}
+    steps:
+      - run: |
+          status=0
+          for origin in "$STAGING" "$PROD"; do
+            [ -n "$origin" ] || continue
+            code="$(curl -s -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 10 --retry-all-errors --max-time 90 "${origin%/}/api/v1/tenants")"
+            [ "$code" = 401 ] || { echo "wake ${origin} answered ${code}"; status=1; }
+          done
+          exit "$status"
