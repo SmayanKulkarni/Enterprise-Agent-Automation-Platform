@@ -45,6 +45,11 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_REPOSITORY: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -57,12 +62,14 @@ jobs:
           set -e
           rm -rf node_modules
           corepack pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
-          zip -qr functions.zip dist host.json package.json node_modules
-      - uses: actions/upload-artifact@v4
-        with:
-          name: functions-zip
-          path: functions.zip
-          if-no-files-found: error
+          docker build -t "ghcr.io/${IMAGE_REPOSITORY,,}-api:${GITHUB_SHA}" .
+      - if: github.event_name == 'push'
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "ghcr.io/${IMAGE_REPOSITORY,,}-api:${GITHUB_SHA}"
 
   preview:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
