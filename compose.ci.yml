@@ -1,0 +1,29 @@
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-CiOnly!Passw0rd-9x}
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  sql-init:
+    image: node:22.14.0-slim
+    depends_on:
+      sql:
+        condition: service_healthy
+    working_dir: /work
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-CiOnly!Passw0rd-9x}
+    volumes:
+      - ./database:/work/database:ro
+      - ./tools/sql:/work/tools/sql:ro
+      - ./package.json:/tmp/root-package.json:ro
+    command:
+      - sh
+      - -c
+      - npm install --silent --no-save --no-package-lock mssql@$$(node -p "require('/tmp/root-package.json').dependencies.mssql.replace(/^[^0-9]*/, '')") && node tools/sql/ci-init.mjs

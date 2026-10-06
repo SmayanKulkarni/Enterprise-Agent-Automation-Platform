@@ -25,6 +25,7 @@ IF NOT EXISTS (
 
 DECLARE @tenant uniqueidentifier = NEWID();
 BEGIN TRANSACTION;
+INSERT INTO [identity].tenants (id, slug, status) VALUES (@tenant, N'verify-' + CONVERT(nvarchar(36), @tenant), N'active');
 INSERT INTO [workflow].records (tenant_id, kind, id, version, state, data_json)
 SELECT @tenant, kind, NEWID(), 1, N'verify', N'{}'
 FROM (VALUES
