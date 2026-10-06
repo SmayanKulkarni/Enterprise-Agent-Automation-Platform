@@ -1,0 +1,110 @@
+name: deploy-environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      run_id:
+        type: string
+        required: true
+      sha:
+        type: string
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      SQL_SERVER: auomaionbackenddb
+      SQL_RESOURCE_GROUP: rg-smayan.kulkarni142-9549
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy infrastructure
+        env:
+          CLERK_ISSUER: ${{ vars.CLERK_ISSUER }}
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          WEB_ORIGIN: ${{ vars.WEB_ORIGIN }}
+        run: >
+          az deployment group create
+          --name "eaa-${{ inputs.environment }}-${{ github.run_id }}"
+          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+          --parameters infra/${{ inputs.environment }}.bicepparam
+      - name: Open SQL firewall for this runner
+        run: |
+          set -e
+          ip="$(curl -fsS https://api.ipify.org)"
+          echo "RULE=gha-${{ github.run_id }}-${{ inputs.environment }}" >> "$GITHUB_ENV"
+          az sql server firewall-rule create --resource-group "$SQL_RESOURCE_GROUP" --server "$SQL_SERVER" \
+            --name "gha-${{ github.run_id }}-${{ inputs.environment }}" --start-ip-address "$ip" --end-ip-address "$ip"
+      - name: Migrate database
+        env:
+          AZURE_SQL_CONNECTION_STRING: ${{ secrets.AZURE_SQL_MIGRATION_CONNECTION_STRING }}
+        run: |
+          for attempt in 1 2 3; do
+            if corepack pnpm sql:migrate; then exit 0; fi
+            sleep 30
+          done
+          exit 1
+      - name: Close SQL firewall
+        if: always()
+        run: az sql server firewall-rule delete --resource-group "$SQL_RESOURCE_GROUP" --server "$SQL_SERVER" --name "$RULE" || true
+      - uses: actions/download-artifact@v4
+        with:
+          name: functions-zip
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ vars.FUNCTION_APP_NAME }}
+          package: functions.zip
+          sku: flexconsumption
+      - run: npm install --global vercel@62
+      - name: Deploy frontend
+        env:
+          VITE_PLATFORM_API_ORIGIN: ${{ vars.API_ORIGIN }}
+          WEB_ORIGIN: ${{ vars.WEB_ORIGIN }}
+          VERCEL_TARGET: ${{ inputs.environment == 'prod' && 'production' || 'preview' }}
+        run: |
+          set -e
+          vercel pull --yes --environment="$VERCEL_TARGET" --token="$VERCEL_TOKEN"
+          if [ "$VERCEL_TARGET" = production ]; then
+            vercel build --prod --token="$VERCEL_TOKEN"
+            vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+          else
+            vercel build --token="$VERCEL_TOKEN"
+            url="$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")"
+            vercel alias set "$url" "${WEB_ORIGIN#https://}" --token="$VERCEL_TOKEN"
+          fi
+      - name: Smoke test
+        env:
+          SMOKE_TENANT_ID: ${{ vars.SMOKE_TENANT_ID }}
+          SMOKE_CLERK_USER_ID: ${{ secrets.SMOKE_CLERK_USER_ID }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+        run: node tools/smoke/smoke.mjs --web "${{ vars.WEB_ORIGIN }}" --api "${{ vars.API_ORIGIN }}" --origin "${{ vars.WEB_ORIGIN }}"
