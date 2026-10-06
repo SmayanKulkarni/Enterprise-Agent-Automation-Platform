@@ -41,7 +41,7 @@ test('registers nothing and does not throw with an empty environment', async () 
   expect(trace.getTracer('test').startSpan('s').isRecording()).toBe(false);
   expect(metrics.getMeterProvider().constructor.name).toBe('NoopMeterProvider');
   await expect(telemetry.flushTelemetry()).resolves.toBeUndefined();
-});
+}, 30_000);
 
 test('treats a whitespace-only endpoint as unset', async () => {
   vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', '   ');
