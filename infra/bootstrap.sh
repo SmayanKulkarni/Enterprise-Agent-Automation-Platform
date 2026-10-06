@@ -3,7 +3,7 @@ set -euo pipefail
 
 : "${CONTACT_EMAIL:?Set CONTACT_EMAIL to the address that receives budget alerts.}"
 
-REPO="${REPO:-SmayanKulkarni/Enterprise-Agent-Automation-Platform}"
+export REPO="${REPO:-SmayanKulkarni/Enterprise-Agent-Automation-Platform}"
 LOCATION="${LOCATION:-centralus}"
 APP_NAME="${APP_NAME:-eaa-github-deploy}"
 SQL_SERVER="${SQL_SERVER:-auomaionbackenddb}"
@@ -42,11 +42,18 @@ client_id="$(az ad app list --display-name "$APP_NAME" --query '[0].appId' -o ts
 [ -n "$client_id" ] || client_id="$(az ad app create --display-name "$APP_NAME" --query appId -o tsv)"
 sp_id="$(az ad sp show --id "$client_id" --query id -o tsv 2>/dev/null || az ad sp create --id "$client_id" --query id -o tsv)"
 
+subject_prefix="$(gh api "repos/$REPO/actions/oidc/customization/sub" --jq '.sub_claim_prefix // "repo:\(env.REPO)"')"
+[ -n "$subject_prefix" ] || { echo "Could not read the repository OIDC subject prefix." >&2; exit 1; }
+
 for environment in "${ENVIRONMENTS[@]}"; do
   name="github-$environment"
+  subject="$subject_prefix:environment:$environment"
+  credential="{\"name\":\"$name\",\"issuer\":\"https://token.actions.githubusercontent.com\",\"subject\":\"$subject\",\"audiences\":[\"api://AzureADTokenExchange\"]}"
   found="$(az ad app federated-credential list --id "$client_id" --query "[?name=='$name'] | length(@)" -o tsv)"
   if [ "$found" = "0" ]; then
-    az ad app federated-credential create --id "$client_id" --parameters "{\"name\":\"$name\",\"issuer\":\"https://token.actions.githubusercontent.com\",\"subject\":\"repo:$REPO:environment:$environment\",\"audiences\":[\"api://AzureADTokenExchange\"]}" -o none
+    az ad app federated-credential create --id "$client_id" --parameters "$credential" -o none
+  else
+    az ad app federated-credential update --id "$client_id" --federated-credential-id "$name" --parameters "$credential" -o none
   fi
   scope="/subscriptions/$subscription_id/resourceGroups/rg-eaa-$environment"
   assign Contributor "$scope"
