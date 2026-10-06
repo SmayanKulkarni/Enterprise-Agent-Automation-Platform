@@ -70,12 +70,7 @@ Store these as GitHub Environment variables on both "staging" and "prod":
   AZURE_TENANT_ID=$tenant_id
   AZURE_SUBSCRIPTION_ID=$subscription_id
   AZURE_RESOURCE_GROUP=rg-eaa-<environment>
-  FUNCTION_APP_NAME=func-eaa-<environment>
 
-Next: set the remaining variables and secrets listed in README section 18, run the deploy
-workflow once so Bicep creates the Key Vaults, then seed each vault:
-  az keyvault secret set --vault-name <vault> --name azure-sql-connection-string --value '<runtime connection string>'
-  az keyvault secret set --vault-name <vault> --name clerk-secret-key --value '<sk_...>'
-  az keyvault secret set --vault-name <vault> --name workflow-openrouter-wrapping-key --value '<key>'
-  az keyvault secret set --vault-name <vault> --name workflow-mcp-wrapping-key --value '<key>'
+Next: set the remaining variables and secrets listed in README section 18, push to main so
+ci.yml publishes the image, make the GHCR package public, then run the deploy workflow.
 OUT
