@@ -1433,10 +1433,36 @@ Fixture evidence does not prove live cloud or provider operation. Live checks ne
 
 | Target | Contents | Configuration |
 | --- | --- | --- |
-| Vercel | Static Vite build from `apps/browser/dist`, plus `api/v1/[...path].ts` | `vercel.json` sets the build and install commands, SPA rewrite, and security headers |
-| Azure Functions | Browser API, webhook ingress, agent ingress, durable orchestrations | `host.json` enables OpenTelemetry mode. Build with `pnpm build:azure`. Entry: `dist/azure-functions/src/index.js` |
-| Azure SQL | Identity, projections, workflow store | Apply migrations with `pnpm sql:migrate` |
-| Infrastructure | Bicep templates | `infra/` |
+| Vercel | Static Vite build from `apps/browser/dist`. No server code | `vercel.json` sets the build and install commands, the SPA rewrite and the security headers. `VITE_PLATFORM_API_ORIGIN` points the SPA at the Azure API |
+| Azure Functions | Browser API, webhook ingress, agent ingress, durable orchestrations | Flex Consumption, Node 22, zip deploy. Build with `pnpm build:azure`. Entry: `dist/azure-functions/src/index.js` |
+| Azure SQL | Identity, projections, workflow store | `pnpm sql:migrate` runs forward-only migrations with digest tracking |
+| Infrastructure | Bicep | `infra/shared.bicep` (subscription), `infra/main.bicep` with `staging.bicepparam` and `prod.bicepparam`, `infra/bootstrap.sh` (one time) |
+
+Two environments, `staging` and `prod`, both in centralus. `automationtestingdb` is staging and `auomation-db` is prod, on the existing server `auomaionbackenddb`. Azure spend is capped by free tiers, two Flex instances at most and a $1 monthly budget with email alerts.
+
+### Pipeline
+
+- `ci.yml` runs on pull requests and on `main`: `pnpm verify`, `compose.ci.yml` (all migrations on SQL Server 2022, applied twice, verified, seeded, contained user created), Bicep lint, the Functions zip, and on pull requests a Vercel preview.
+- `deploy.yml` runs after `ci.yml` succeeds on `main`, or by hand with an optional `artifact_run_id`. It calls `deploy-environment.yml` for `staging`, then for `prod` once the `prod` environment reviewer approves. Each environment applies Bicep, opens a runner-only SQL firewall rule, migrates, deploys the zip, deploys the SPA with the environment's `VITE_PLATFORM_API_ORIGIN`, and runs `tools/smoke/smoke.mjs`.
+- Run the migration check locally with `docker compose -f compose.ci.yml up --exit-code-from sql-init`. Docker Desktop cannot mount from `/media`, so run it from a copy under `$HOME`.
+- Every migration must work with the code that is currently deployed (expand, then contract), because migrations run before the new code ships.
+
+### GitHub configuration
+
+Per environment (`staging`, `prod`), variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `FUNCTION_APP_NAME`, `API_ORIGIN`, `WEB_ORIGIN`, `CLERK_ISSUER`, `SMOKE_TENANT_ID`. Secrets: `AZURE_SQL_MIGRATION_CONNECTION_STRING` (admin login, `Connect Timeout=120`), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `SMOKE_CLERK_USER_ID`. Repository secrets: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`. `prod` needs a required reviewer. `WEB_ORIGIN` for staging must be `https://eaa-staging.vercel.app`; Clerk authorized parties are an exact list, so PR preview URLs render the SPA but cannot sign in.
+
+### First-time setup (owner)
+
+1. Run `CONTACT_EMAIL=you@example.com infra/bootstrap.sh` as subscription Owner.
+2. Create the GitHub environments, variables and secrets above.
+3. Set the Vercel Preview and Production variables `VITE_PLATFORM_API_ORIGIN` and `VITE_CLERK_PUBLISHABLE_KEY`; keep Vercel Git integration off.
+4. Run `deploy.yml` once so Bicep creates the Key Vaults, then seed `azure-sql-connection-string`, `clerk-secret-key`, `workflow-openrouter-wrapping-key` and `workflow-mcp-wrapping-key` with `az keyvault secret set`. Re-run the deploy after seeding.
+5. Run `database/bootstrap/create-platform-identity-user.sql` against both databases and store the runtime connection strings in Key Vault.
+6. Create the Clerk smoke user and add it to the tenant named by `SMOKE_TENANT_ID`.
+
+### Rollback
+
+No down migrations. Roll code back with `vercel rollback` and a `deploy.yml` dispatch carrying a previous `artifact_run_id`. If data changed, use Azure SQL point-in-time restore (7 days).
 
 ## 19. Further reading
 

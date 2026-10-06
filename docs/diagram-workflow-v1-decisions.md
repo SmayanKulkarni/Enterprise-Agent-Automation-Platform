@@ -304,3 +304,18 @@ Goal: a tenant administrator connects GitHub through the product UI, with no ser
 - **Webhook panel.** `PlatformApi.publicOrigin` (`VITE_PLATFORM_API_ORIGIN`, else the page origin) builds the delivery URL, with a copy button and a GitHub hint: content type JSON, the signing secret shown once, and Pull requests and Pushes. The secret handling is unchanged.
 - **PR gate template.** `instantiatePrGate` checks both connectors, creates the draft and one grant per connector node, then runs the normal check. It needs `pull_request_read` (R1), `merge_pull_request` and `issue_write` (R2 or R3) on one connector and `create_commit_status` (R1 or R2) on another, and returns plain-language issues for a missing capability, a wrong risk or a required argument it cannot fill. Only arguments a capability declares are mapped. Grant ids are derived from the command key and node, so a replay completes a half-finished instantiation instead of duplicating it. Merge and issue stay behind approval nodes that disclose the repository and pull request number. The trigger is GitHub-native (`source: github`) and handles `pull_request` events only; a single `inputMap` cannot describe both pull request and push payloads, so push events are ignored. The agent model defaults to `deepseek/deepseek-v4-flash-0731` and may not be in a tenant's catalog; the check then says so and the model can be changed in the editor.
 - **Not done.** Ticket 07 (live end-to-end through the UI) needs GitHub, Azure SQL, a public HTTPS URL and a human approver, none of which this change could drive. See `.scratch/mcp-self-serve/results.md`.
+
+## Azure and Vercel deployment (2026-10-06)
+
+Spec: `docs/superpowers/specs/2026-10-06-azure-vercel-deployment-design.md`.
+
+- The SPA is static on Vercel and calls the Azure Functions API cross-origin through `VITE_PLATFORM_API_ORIGIN` (`apps/browser/src/api-origin.ts`, default same-origin). `api/v1/[...path].ts` and `@vercel/functions` are removed.
+- The recovery timer reads `%WORKFLOW_DISPATCH_RECOVERY_SCHEDULE%`. Azure runs it every 6 hours so the Flex instance and the free SQL offer can idle.
+- `compose.ci.yml` is the first real run of every migration on SQL Server 2022. It found that `database/verify/021_mcp_credential_records.sql` inserted records for a tenant that did not exist; the verify script now creates the tenant inside its rolled-back transaction.
+- The runtime contained user `platform_identity_app` cannot read tables directly, so the CI check only proves it connects and holds `platform_identity_runtime`.
+- Durable Functions has no CI emulator. Azurite and a Functions host container are out of scope.
+- `tools/smoke` and `tools/sql/ci-init.mjs` are excluded from the root typecheck and lint, like `tools/e2e`.
+- `bootstrap.sh` also grants `Reader` on `rg-eaa-shared` and `SQL Server Contributor` on the SQL server, which the spec did not list; Bicep reads Application Insights and the SQL server, and the deploy adds a firewall rule.
+- `CLERK_ISSUER` is a per-environment variable because the backend requires it.
+- Smoke tier 2 on a production Clerk instance (`pk_live_`) uses the backend session API. That path is unverified; only the development-instance path has been exercised.
+
