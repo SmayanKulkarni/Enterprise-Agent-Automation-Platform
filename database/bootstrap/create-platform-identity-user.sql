@@ -1,5 +1,5 @@
 /*
-  Run once as the Azure SQL administrator after 001_identity_tenant_access.sql.
+  Run once as the Azure SQL administrator after all migrations are applied.
   Choose a unique password locally. Do not save it in this repository or paste it into chat.
 */
 SET NOCOUNT ON;
@@ -14,11 +14,16 @@ BEGIN
   EXEC sp_executesql @statement;
 END;
 
-IF NOT EXISTS (
-  SELECT 1
-  FROM sys.database_role_members AS membership
-  INNER JOIN sys.database_principals AS role_principal ON role_principal.principal_id = membership.role_principal_id
-  INNER JOIN sys.database_principals AS member_principal ON member_principal.principal_id = membership.member_principal_id
-  WHERE role_principal.name = N'platform_identity_runtime' AND member_principal.name = N'platform_identity_app'
-)
-  ALTER ROLE platform_identity_runtime ADD MEMBER platform_identity_app;
+DECLARE @roles TABLE (name sysname NOT NULL PRIMARY KEY);
+INSERT INTO @roles (name) VALUES
+  (N'platform_identity_runtime'), (N'platform_projection_writer'), (N'platform_studio_runtime'), (N'platform_connected_runtime'),
+  (N'platform_workflow_browser'), (N'platform_workflow_worker'), (N'platform_governance_browser');
+
+IF EXISTS (SELECT 1 FROM @roles AS r WHERE DATABASE_PRINCIPAL_ID(r.name) IS NULL) THROW 50000, N'Apply all migrations first.', 1;
+
+DECLARE @grants nvarchar(max) = (
+  SELECT STRING_AGG(CONVERT(nvarchar(max), N'ALTER ROLE ' + QUOTENAME(r.name) + N' ADD MEMBER [platform_identity_app];'), N' ')
+  FROM @roles AS r
+  WHERE IS_ROLEMEMBER(r.name, N'platform_identity_app') = 0
+);
+IF @grants IS NOT NULL EXEC sp_executesql @grants;

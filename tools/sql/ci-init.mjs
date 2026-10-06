@@ -34,9 +34,9 @@ try {
 
 const runtime = await new sql.ConnectionPool(`Server=${server};Database=platform;User Id=platform_identity_app;Password=${runtimePassword};Encrypt=true;TrustServerCertificate=true;Connect Timeout=60`).connect();
 try {
-  const { recordset } = await runtime.request().query("SELECT IS_ROLEMEMBER(N'platform_identity_runtime') AS member");
-  if (recordset[0].member !== 1) throw new Error('Contained user is not in platform_identity_runtime.');
-  console.log('Runtime contained user connects and holds platform_identity_runtime.');
+  const { recordset } = await runtime.request().query("SELECT COUNT(*) AS roles FROM sys.database_principals WHERE name LIKE N'platform[_]%' AND type = N'R' AND IS_ROLEMEMBER(name) = 1");
+  if (recordset[0].roles !== 7) throw new Error(`Contained user holds ${recordset[0].roles} of 7 platform roles.`);
+  console.log('Runtime contained user connects and holds all 7 platform roles.');
 } finally {
   await runtime.close();
 }

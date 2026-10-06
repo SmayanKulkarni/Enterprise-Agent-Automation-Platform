@@ -312,7 +312,7 @@ Spec: `docs/superpowers/specs/2026-10-06-azure-vercel-deployment-design.md`.
 - The SPA is static on Vercel and calls the Azure Functions API cross-origin through `VITE_PLATFORM_API_ORIGIN` (`apps/browser/src/api-origin.ts`, default same-origin). `api/v1/[...path].ts` and `@vercel/functions` are removed.
 - The recovery timer reads `%WORKFLOW_DISPATCH_RECOVERY_SCHEDULE%`. Azure runs it every 6 hours so the Flex instance and the free SQL offer can idle.
 - `compose.ci.yml` is the first real run of every migration on SQL Server 2022. It found that `database/verify/021_mcp_credential_records.sql` inserted records for a tenant that did not exist; the verify script now creates the tenant inside its rolled-back transaction.
-- The runtime contained user `platform_identity_app` cannot read tables directly, so the CI check only proves it connects and holds `platform_identity_runtime`.
+- The runtime contained user `platform_identity_app` cannot read tables directly, so the CI check only proves it connects and holds all seven platform roles (identity, projection writer, studio, connected, workflow browser and worker, governance). The Function App uses one connection string, so the user must hold every role; `create-platform-identity-user.sql` grants them all.
 - Durable Functions has no CI emulator. Azurite and a Functions host container are out of scope.
 - `tools/smoke` and `tools/sql/ci-init.mjs` are excluded from the root typecheck and lint, like `tools/e2e`.
 - `bootstrap.sh` also grants `Reader` on `rg-eaa-shared` and `SQL Server Contributor` on the SQL server, which the spec did not list; Bicep reads Application Insights and the SQL server, and the deploy adds a firewall rule.
