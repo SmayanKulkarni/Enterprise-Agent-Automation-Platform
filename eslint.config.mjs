@@ -8,7 +8,7 @@ const typeCheckedConfigs = tseslint.configs.strictTypeChecked.map((config) => ({
 
 export default [
   {
-    ignores: ['.artifacts/**', '.vercel/**', 'tools/e2e/**', '.scratch/**', '.superpowers/**', 'coverage/**', '**/dist/**', 'node_modules/**'],
+    ignores: ['.artifacts/**', '.vercel/**', 'tools/e2e/**', 'tools/smoke/**', 'tools/sql/ci-init.mjs', '.scratch/**', '.superpowers/**', 'coverage/**', '**/dist/**', 'node_modules/**'],
   },
   eslint.configs.recommended,
   ...typeCheckedConfigs,

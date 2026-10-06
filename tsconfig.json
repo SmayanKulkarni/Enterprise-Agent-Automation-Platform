@@ -11,5 +11,5 @@
     "types": ["node", "vitest/globals"]
   },
   "include": ["apps/**/*.ts", "eslint.config.mjs", "tools/**/*.mjs", "tests/**/*.mjs", "tests/**/*.ts", "packages/**/*.ts"],
-  "exclude": ["tools/e2e"]
+  "exclude": ["tools/e2e", "tools/smoke", "tools/sql/ci-init.mjs"]
 }

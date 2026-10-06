@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm verify
+
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f compose.ci.yml up --exit-code-from sql-init
+
+  infra-lint:
+    runs-on: ubuntu-latest
+    env:
+      CLERK_ISSUER: https://lint.invalid
+      CLERK_PUBLISHABLE_KEY: pk_test_lint
+      WEB_ORIGIN: https://lint.invalid
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -e
+          for file in infra/*.bicep; do az bicep build --file "$file" --stdout > /dev/null; done
+          for file in infra/*.bicepparam; do az bicep build-params --file "$file" --stdout > /dev/null; done
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm build:azure
+      - run: |
+          set -e
+          rm -rf node_modules
+          corepack pnpm install --frozen-lockfile --prod --config.node-linker=hoisted
+          zip -qr functions.zip dist host.json package.json node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: functions-zip
+          path: functions.zip
+          if-no-files-found: error
+
+  preview:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: corepack enable
+      - run: npm install --global vercel@62
+      - run: vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
+      - run: vercel build --token="$VERCEL_TOKEN"
+      - id: deploy
+        run: echo "url=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")" >> "$GITHUB_OUTPUT"
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_URL: ${{ steps.deploy.outputs.url }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body "Vercel preview $PREVIEW_URL"
