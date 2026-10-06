@@ -1,3 +1,4 @@
+import { apiOrigin as defaultApiOrigin } from './api-origin.js';
 import type { DiscoveredTool } from './discovery-model.js';
 import { clerkAuthorizationHeader } from '../../../packages/browser/src/clerk-authorization-header.js';
 import { digest } from '../../../packages/contracts/src/index.js';
@@ -48,7 +49,7 @@ export const withRef = (message: string, error: unknown): string => { const ref 
 
 export class PlatformApi {
   private readonly commandKeys = new Map<string, string>();
-  constructor(private readonly getToken: GetToken, private readonly apiOrigin = '') {}
+  constructor(private readonly getToken: GetToken, private readonly apiOrigin = defaultApiOrigin) {}
 
   get publicOrigin(): string { return this.apiOrigin || window.location.origin; }
 

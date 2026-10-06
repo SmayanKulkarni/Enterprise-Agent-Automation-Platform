@@ -1,3 +1,4 @@
+import { apiOrigin as defaultApiOrigin } from '../api-origin.js';
 import { clerkAuthorizationHeader } from '../../../../packages/browser/src/clerk-authorization-header.js';
 import { decodeCommandArguments } from '../../../../packages/browser/src/browser-contracts.js';
 import { PlatformApiError, commandReceipt, mediaType, parseResponse, type CommandReceipt } from '../platform-api.js';
@@ -10,7 +11,7 @@ export interface GroupCommand { groupId?: string; name: GroupCommandName; expect
 
 export class GovernanceApi {
   private readonly commandKeys = new Map<string, string>();
-  constructor(private readonly getToken: () => Promise<string | null>, private readonly apiOrigin = '') {}
+  constructor(private readonly getToken: () => Promise<string | null>, private readonly apiOrigin = defaultApiOrigin) {}
 
   groups(signal?: AbortSignal): Promise<readonly Group[]> {
     return this.get('/api/v1/groups', decodeGroups, signal);
