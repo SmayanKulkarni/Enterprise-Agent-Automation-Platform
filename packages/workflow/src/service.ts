@@ -610,7 +610,7 @@ export class WorkflowService {
     else if (collection === 'openrouter-models') {
       const catalog = this.openRouterCatalog; const failed = (error: unknown): undefined => { report(error, { site: 'service.catalog' }); return undefined; };
       const [models, embeddingModels, decisionModels] = catalog ? await Promise.all([catalog.chat().catch(failed), catalog.embedding().catch(failed), catalog.decisions().catch(failed)]) : [undefined, undefined, undefined];
-      records = [{ id: '00000000-0000-5000-8000-000000000003', provider: 'openrouter', models: models ?? [], embeddingModels: embeddingModels ?? [], decisionModels: decisionModels ?? [], catalog: models ? 'ready' : 'unavailable', configured: this.openRouter !== undefined && models !== undefined }];
+      records = [{ id: '00000000-0000-5000-8000-000000000003', provider: 'openrouter', models: models ?? [], embeddingModels: embeddingModels ?? [], decisionModels: decisionModels ?? [], catalog: models ? 'ready' : 'unavailable', decisionCatalog: decisionModels ? 'ready' : 'unavailable', configured: this.openRouter !== undefined && models !== undefined }];
     }
     else if (collection === 'workflow-model-settings') {
       const stored = await this.store.list<ModelSettings>(context, 'model-settings');

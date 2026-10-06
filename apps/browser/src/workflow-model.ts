@@ -359,3 +359,7 @@ export function retrievalRank(entry: Record<string, unknown>): string {
   const rank = Array.isArray(entry['rank']) ? entry['rank'] as Record<string, unknown>[] : [];
   return rank.length ? rank.map((item) => `${text(item['id'])} (relevance ${decimal(item['score'])}, recency ${decimal(item['recency'])}, type ${decimal(item['typeWeight'])})`).join('; ') : 'none';
 }
+
+export function stateOptions(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], targetId: string, outputs: OutputSchemas | undefined): readonly [string, string][] {
+  return stateSources(nodes, edges, targetId, outputs).flatMap(([node, names]) => names.map((name): [string, string] => [node.kind === 'trigger' ? `$input.${name}` : `$node.${node.id}.${name}`, `${node.title} · ${name}`]));
+}

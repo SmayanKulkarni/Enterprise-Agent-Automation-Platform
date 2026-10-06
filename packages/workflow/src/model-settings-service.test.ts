@@ -14,7 +14,7 @@ const catalog: OpenRouterCatalog = {
   decisions: () => Promise.resolve([{ id: 'typesafe/jev-1.13', structuredOutput: false, tools: false, contextLength: 32000 }]),
 };
 const ready = { id: 'c', kind: 'openrouter-connection', version: 1, state: 'ready', data: { provider: 'openrouter', enabled: true, verifiedAt: '2026-01-01T00:00:00.000Z' } };
-const setup = (options: { stored?: ModelSettings; connection?: unknown; memory?: Partial<HostedMemoryPort>; providers?: string[]; assertProfile?: () => Promise<void> } = {}) => {
+const setup = (options: { stored?: ModelSettings; connection?: unknown; memory?: Partial<HostedMemoryPort>; providers?: string[]; assertProfile?: () => Promise<void>; catalog?: OpenRouterCatalog } = {}) => {
   const write = vi.fn().mockResolvedValue({ receipt: {}, replayed: false });
   const store = {
     assertProfile: options.assertProfile ?? vi.fn().mockResolvedValue(undefined),
@@ -22,7 +22,7 @@ const setup = (options: { stored?: ModelSettings; connection?: unknown; memory?:
     list: (_context: unknown, kind: string) => Promise.resolve(kind === 'model-settings' && options.stored ? [{ id: 's', kind, version: 3, state: 'ready', data: options.stored }] : []),
     write,
   };
-  const service = new WorkflowService(undefined as never, store as never, undefined, [], options.providers ?? ['azure-openai', 'openrouter'], () => true, () => 'ready', options.memory as HostedMemoryPort, { crypto: {} as never, verify: () => Promise.resolve(true) }, catalog);
+  const service = new WorkflowService(undefined as never, store as never, undefined, [], options.providers ?? ['azure-openai', 'openrouter'], () => true, () => 'ready', options.memory as HostedMemoryPort, { crypto: {} as never, verify: () => Promise.resolve(true) }, options.catalog ?? catalog);
   return { service, write };
 };
 const valid = { summary: { provider: 'openrouter', model: 'a/structured', fallback: 'c/backup' }, embedding: { provider: 'openrouter', model: 'openai/text-embedding-3-small' } };
@@ -78,7 +78,12 @@ test('projects the default built-in profile until an administrator saves setting
 test('projects saved settings and the live catalog', async () => {
   const { service } = setup({ stored: valid as ModelSettings });
   expect(await firstRecord(service, 'workflow-model-settings')).toMatchObject({ version: 3, summary: { model: 'a/structured' } });
-  expect(await firstRecord(service, 'openrouter-models')).toMatchObject({ catalog: 'ready', configured: true, models: [{ id: 'a/structured', structuredOutput: true }, { id: 'b/plain', structuredOutput: false }, { id: 'c/backup', structuredOutput: true }], embeddingModels: [{ id: 'openai/text-embedding-3-small', structuredOutput: false }], decisionModels: [{ id: 'typesafe/jev-1.13', contextLength: 32000 }] });
+  expect(await firstRecord(service, 'openrouter-models')).toMatchObject({ catalog: 'ready', decisionCatalog: 'ready', configured: true, models: [{ id: 'a/structured', structuredOutput: true }, { id: 'b/plain', structuredOutput: false }, { id: 'c/backup', structuredOutput: true }], embeddingModels: [{ id: 'openai/text-embedding-3-small', structuredOutput: false }], decisionModels: [{ id: 'typesafe/jev-1.13', contextLength: 32000 }] });
+});
+
+test('reports each catalog independently when only the decisions fetch fails', async () => {
+  const { service } = setup({ stored: valid as ModelSettings, catalog: { ...catalog, decisions: () => Promise.reject(new Error('down')) } });
+  expect(await firstRecord(service, 'openrouter-models')).toMatchObject({ catalog: 'ready', decisionCatalog: 'unavailable', decisionModels: [] });
 });
 
 const empty = { type: 'object' as const, properties: {}, required: [], additionalProperties: false as const };

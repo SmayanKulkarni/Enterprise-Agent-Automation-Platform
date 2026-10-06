@@ -21,6 +21,13 @@ describe('Judgment settings form', () => {
     expect(html.match(/Fixed at 0/gu)).toHaveLength(2);
   });
 
+  test('shows the real value of a locked policy field from an imported draft', () => {
+    const config = defaultJudgmentConfig(trigger);
+    const imported = { ...config, policy: { ...(config['policy'] as Record<string, number>), toolRounds: 5 } };
+    const html = render(judgmentNode(imported), [trigger, judgmentNode(imported)]);
+    expect(html).toContain('value="5"');
+  });
+
   test('shows the connection notice only when OpenRouter is not ready', () => {
     const judgment = judgmentNode();
     expect(render(judgment, [trigger, judgment], [], { connection: 'not-connected' })).toContain("OpenRouter isn&#x27;t ready in this workspace (not-connected)");

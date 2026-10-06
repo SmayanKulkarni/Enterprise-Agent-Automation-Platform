@@ -1,5 +1,5 @@
 import { judgmentAnswers, MAX_QUESTIONS, type JudgmentQuestion } from '../../../packages/workflow/src/judgment.js';
-import { stateSources, type OutputSchemas, type WorkflowEdge, type WorkflowNode } from './workflow-model.js';
+import type { WorkflowNode } from './workflow-model.js';
 
 export const QUESTION_LIMIT = MAX_QUESTIONS;
 export const MEMORY_ITEM_ADVICE = 3;
@@ -96,10 +96,6 @@ export function answerValues(config: Record<string, unknown>, field: string): st
   if (field === 'band' || /_band$/u.test(field) && Object.keys(questionsOf(config)).some((id) => field === `${id}_band`)) return BANDS;
   const found = Object.entries(questionsOf(config)).find(([key]) => field === `${key}_answer`);
   return found === undefined ? undefined : judgmentAnswers(found[1]);
-}
-
-export function stateOptions(nodes: readonly WorkflowNode[], edges: readonly WorkflowEdge[], targetId: string, outputs: OutputSchemas | undefined): readonly [string, string][] {
-  return stateSources(nodes, edges, targetId, outputs).flatMap(([node, names]) => names.map((name): [string, string] => [node.kind === 'trigger' ? `$input.${name}` : `$node.${node.id}.${name}`, `${node.title} · ${name}`]));
 }
 
 export function memoryLimitWarning(state: unknown, nodes: readonly WorkflowNode[]): string | undefined {

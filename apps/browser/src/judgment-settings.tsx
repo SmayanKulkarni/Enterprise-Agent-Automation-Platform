@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { BandInputs } from './band-inputs.js';
-import { addQuestion, memoryLimitWarning, questionReferences, QUESTION_LIMIT, removeQuestion, renameQuestion, setQuestion, stateOptions, type QuestionConfig } from './judgment-model.js';
+import { addQuestion, memoryLimitWarning, questionReferences, QUESTION_LIMIT, removeQuestion, renameQuestion, setQuestion, type QuestionConfig } from './judgment-model.js';
 import { QuestionCard } from './judgment-question.js';
 import { ModelPicker, type CatalogModel, type CatalogStatus } from './model-picker.js';
 import { PolicySettings } from './policy-settings.js';
 import { Field, Notice } from './ui.js';
-import type { OutputSchemas, WorkflowEdge, WorkflowNode } from './workflow-model.js';
+import { stateOptions, type OutputSchemas, type WorkflowEdge, type WorkflowNode } from './workflow-model.js';
 
 const STATE_KEY = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/u;
 const MAX_STATE = 16;

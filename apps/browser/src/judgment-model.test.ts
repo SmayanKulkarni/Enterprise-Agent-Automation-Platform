@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { addQuestion, answerValues, changeQuestionType, defaultJudgmentConfig, memoryLimitWarning, nextQuestionId, questionIdError, questionReferences, removeQuestion, renameQuestion, setCriteriaKey, stateOptions, QUESTION_LIMIT } from './judgment-model.js';
+import { addQuestion, answerValues, changeQuestionType, defaultJudgmentConfig, memoryLimitWarning, nextQuestionId, questionIdError, questionReferences, removeQuestion, renameQuestion, setCriteriaKey, QUESTION_LIMIT } from './judgment-model.js';
 import { judgmentConfigValid } from '../../../packages/workflow/src/judgment.js';
-import type { WorkflowEdge, WorkflowNode } from './workflow-model.js';
+import { stateOptions, type WorkflowEdge, type WorkflowNode } from './workflow-model.js';
 
 const node = (id: string, kind: WorkflowNode['kind'], config: Record<string, unknown> = {}, title = id): WorkflowNode => ({ id, kind, title, detail: '', x: 0, y: 0, instructions: '', config });
 const trigger = node('trigger', 'trigger', { mode: 'manual', inputSchema: { type: 'object', properties: { count: { type: 'number' }, body: { type: 'string' }, subject: { type: 'string' } }, required: [], additionalProperties: false } });

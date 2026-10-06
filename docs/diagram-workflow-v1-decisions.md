@@ -270,6 +270,8 @@ Spec: `issues/agentic-memory-v2/00-memory-formation-spec.md`. Phases 0 to 4 are 
 - **Telemetry.** Each call records a `decide <model>` span, the existing `gen_ai.*` metrics with `feature=judgment`, one `judgment.call` event without state or probabilities, and `workflow.judgment.bands` per question (labels: tenant, band, question type; never the question id). The `judgment-bands` governance panel sits in the overview charts.
 - **Deploy order.** Backend first (worker and validator in `azure-functions` and the API host), then the browser. An older worker fails a `judgment` node with `INVALID`, so never publish a Judgment before the worker is deployed. There is no migration and no new environment variable; cost falls back to `WORKFLOW_OPENROUTER_MAX_COST_PER_1K_TOKENS` when `usage.cost` is missing.
 - **Deviations from the design.** `judgment-bands` uses the step window (`increase(...[step])`, stacked bars) instead of the whole range. `modelValid`, `policyValid` and `FACT_LIMIT` moved to `node-policy.ts` so the browser can import `judgment.ts` without pulling in `node:crypto`. State mappings also require the mapped field to exist on the source.
+- **Catalog status.** The `openrouter-models` projection reports `decisionCatalog` next to `catalog`; the Judgment picker uses the former, so a decisions-only outage shows an error and retry rather than an empty list.
+- **Locked policy.** Judgment's `toolRounds` and `effects` show the draft's actual value and are reset to 0 when any other policy field is edited; the server still rejects non-zero values at check.
 
 ### Live probe (2026-10-05, not CI)
 
