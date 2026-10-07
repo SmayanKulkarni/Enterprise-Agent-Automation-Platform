@@ -1,7 +1,11 @@
 import { RANGES, isPanel, isSqlPanel } from '../../../../packages/governance/src/catalog.js';
 import { DEMO_DEFINITION_ID, DEMO_GITHUB_INSTALLATION_ID, DEMO_TENANT_ID, type DemoRun } from '../../../../packages/workflow/src/pr-gate-demo.js';
-import type { Approval, Group, Kpis, LogEntry, RangeKey, Span, Totals } from './decoders.js';
+import { decodeLogs, decodeOverview, decodeSeries, decodeTrace, decodeWorkflows, type Approval, type Group, type Kpis, type LogEntry, type Logs, type Overview, type RangeKey, type Series, type Span, type Totals, type Trace, type Workflows } from './decoders.js';
 import type { GovernanceSource } from './governance-source.js';
+
+export interface DemoRemote {
+  read<T>(collection: string, query: Readonly<Record<string, string>>, decode: (value: unknown) => T, signal: AbortSignal): Promise<T>;
+}
 
 export const DEMO_GROUP: Group = { id: 'demo-group', name: 'Demo group', epoch: 1, adminEpoch: 1, tenantIds: [DEMO_TENANT_ID] };
 const WORKSPACE = 'Demo workspace';
@@ -50,25 +54,42 @@ function spans(run: DemoRun): Span[] {
   }))];
 }
 
-export function demoSource(run: DemoRun | undefined, now: () => number = Date.now): GovernanceSource {
+const preferred = async <T>(remote: DemoRemote | undefined, collection: string, query: Readonly<Record<string, string>>, decode: (value: unknown) => T, signal: AbortSignal, usable: (value: T) => boolean): Promise<T | undefined> => {
+  if (remote === undefined) return undefined;
+  try {
+    const value = await remote.read(collection, query, decode, signal);
+    return usable(value) ? value : undefined;
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return undefined;
+  }
+};
+
+export function demoSource(run: DemoRun | undefined, now: () => number = Date.now, remote?: DemoRemote): GovernanceSource {
   const inRange = (range: RangeKey): boolean => run !== undefined && now() - Date.parse(run.startedAt) <= RANGES[range].ms;
-  const kpis = (range: RangeKey): Kpis => ({ ...ZERO, runs: inRange(range) ? 1 : 0, pendingApprovals: run === undefined ? 0 : 1, previous: ZERO });
+  const pending = run === undefined ? 0 : 1;
+  const kpis = (range: RangeKey): Kpis => ({ ...ZERO, runs: inRange(range) ? 1 : 0, pendingApprovals: pending, previous: ZERO });
+  const localOverview = (range: RangeKey, signal: AbortSignal): Promise<Overview> => aborted(signal, () => ({ range, total: kpis(range), workspaces: [{ ...kpis(range), tenantId: DEMO_TENANT_ID, name: WORKSPACE }], completeness: 'full', classification: CLASSIFICATION }));
+  const localWorkflows = (range: RangeKey, signal: AbortSignal): Promise<Workflows> => aborted(signal, () => ({ range, workflows: [{ tenantId: DEMO_TENANT_ID, workspace: WORKSPACE, definitionId: DEMO_DEFINITION_ID, name: WORKFLOW, runs: inRange(range) ? 1 : 0, successRate: null, p95Seconds: null, cost: 0 }], completeness: 'full', classification: CLASSIFICATION }));
+  const localLogs = (query: Readonly<Record<string, string>>, signal: AbortSignal): Promise<Logs> => aborted(signal, () => {
+    const entries = run === undefined ? [] : logEntries(run).filter((entry) => (query['level'] === undefined || entry.level === query['level']) && (query['event'] === undefined || entry.event === query['event']) && (query['run'] === undefined || entry.attributes['run_id'] === query['run']));
+    return { range: (query['range'] ?? '7d') as RangeKey, status: 'ready', entries, completeness: 'full', classification: CLASSIFICATION };
+  });
+  const localTrace = (runId: string, signal: AbortSignal): Promise<Trace> => aborted(signal, () => ({ run: runId, status: 'ready', spans: run !== undefined && run.id === runId ? spans(run) : [], completeness: 'full', classification: CLASSIFICATION }));
+  const localSeries = (panel: string, range: RangeKey, signal: AbortSignal): Promise<Series> => aborted(signal, () => ({ panel, range, status: isPanel(panel) && isSqlPanel(panel) ? 'ready' : 'not-configured', series: [], completeness: 'full', classification: CLASSIFICATION }));
   return {
     fixture: true,
     demo: true,
-    overview: (range, _scope, signal) => aborted(signal, () => ({ range, total: kpis(range), workspaces: [{ ...kpis(range), tenantId: DEMO_TENANT_ID, name: WORKSPACE }], completeness: 'full', classification: CLASSIFICATION })),
-    workflows: (range, _scope, signal) => aborted(signal, () => ({ range, workflows: [{ tenantId: DEMO_TENANT_ID, workspace: WORKSPACE, definitionId: DEMO_DEFINITION_ID, name: WORKFLOW, runs: inRange(range) ? 1 : 0, successRate: null, p95Seconds: null, cost: 0 }], completeness: 'full', classification: CLASSIFICATION })),
+    overview: async (range, _scope, signal) => {
+      const served = await preferred(remote, 'overview', { range }, decodeOverview, signal, () => true);
+      return served === undefined ? localOverview(range, signal) : { ...served, total: { ...served.total, pendingApprovals: pending }, workspaces: served.workspaces.map((workspace) => ({ ...workspace, pendingApprovals: pending })) };
+    },
+    workflows: async (range, _scope, signal) => (await preferred(remote, 'workflows', { range }, decodeWorkflows, signal, () => true)) ?? localWorkflows(range, signal),
     health: (signal) => aborted(signal, () => ({ connectors: [{ tenantId: DEMO_TENANT_ID, workspace: WORKSPACE, healthy: 2, offline: 0, revoked: 0 }], circuits: [], reconciliation: [], completeness: 'full', classification: CLASSIFICATION })),
     approvals: (signal) => aborted(signal, () => ({ approvals: run === undefined ? [] : [demoApproval(run)], count: run === undefined ? 0 : 1, completeness: 'full', classification: CLASSIFICATION })),
     members: (signal) => aborted(signal, () => ({ workspaces: [{ tenantId: DEMO_TENANT_ID, name: WORKSPACE, joinedAt: run?.startedAt ?? new Date(now()).toISOString(), billing: false }], admins: [{ userId: 'demo-visitor', name: 'You (demo)' }], eligible: [] })),
-    logs: (query, signal) => aborted(signal, () => {
-      const entries = run === undefined ? [] : logEntries(run).filter((entry) => (query['level'] === undefined || entry.level === query['level']) && (query['event'] === undefined || entry.event === query['event']) && (query['run'] === undefined || entry.attributes['run_id'] === query['run']));
-      return { range: (query['range'] ?? '7d') as RangeKey, status: 'ready', entries, completeness: 'full', classification: CLASSIFICATION };
-    }),
-    trace: (runId, signal) => aborted(signal, () => ({ run: runId, status: 'ready', spans: run !== undefined && run.id === runId ? spans(run) : [], completeness: 'full', classification: CLASSIFICATION })),
-    series: (panel, range, _scope, signal) => aborted(signal, () => {
-      const ready = isPanel(panel) && isSqlPanel(panel);
-      return { panel, range, status: ready ? 'ready' : 'not-configured', series: [], completeness: 'full', classification: CLASSIFICATION };
-    }),
+    logs: async (query, signal) => (await preferred(remote, 'logs', query, decodeLogs, signal, (value) => value.status === 'ready' && value.entries.length > 0)) ?? localLogs(query, signal),
+    trace: async (runId, signal) => (await preferred(remote, 'trace', { run: runId }, decodeTrace, signal, (value) => value.status === 'ready' && value.spans.length > 0)) ?? localTrace(runId, signal),
+    series: async (panel, range, _scope, signal) => (await preferred(remote, 'series', { panel, range }, decodeSeries, signal, () => true)) ?? localSeries(panel, range, signal),
   };
 }

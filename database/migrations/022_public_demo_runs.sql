@@ -81,8 +81,34 @@ BEGIN
 END;
 ');
 
+EXEC(N'
+CREATE OR ALTER PROCEDURE [public_demo].read_summary
+  @from datetime2(7), @to datetime2(7), @bucket_minutes int
+WITH EXECUTE AS OWNER
+AS
+BEGIN
+  SET NOCOUNT ON;
+  IF @from IS NULL OR @to IS NULL OR @to <= @from OR DATEDIFF_BIG(millisecond, @from, @to) > 2678400000 OR @bucket_minutes IS NULL OR @bucket_minutes NOT IN (1, 5, 60, 180)
+    BEGIN ;THROW 50002, N''INVALID'', 1; END;
+  DECLARE @span_ms bigint = DATEDIFF_BIG(millisecond, @from, @to);
+  DECLARE @previous_from datetime2(7) = DATEADD(millisecond, -CONVERT(int, @span_ms % 1000), DATEADD(second, -CONVERT(int, @span_ms / 1000), @from));
+  SELECT N''bucket'' AS kind, bucket_start, runs FROM (
+    SELECT DATEADD(minute, (DATEDIFF(minute, @from, started_at) / @bucket_minutes) * @bucket_minutes, @from) AS bucket_start, COUNT(*) AS runs
+    FROM [public_demo].runs
+    WHERE started_at >= @from AND started_at < @to
+    GROUP BY DATEADD(minute, (DATEDIFF(minute, @from, started_at) / @bucket_minutes) * @bucket_minutes, @from)
+  ) AS buckets
+  UNION ALL
+  SELECT N''current'', CAST(NULL AS datetime2(7)), COUNT(*) FROM [public_demo].runs WHERE started_at >= @from AND started_at < @to
+  UNION ALL
+  SELECT N''previous'', CAST(NULL AS datetime2(7)), COUNT(*) FROM [public_demo].runs WHERE started_at >= @previous_from AND started_at < @from
+  ORDER BY kind, bucket_start;
+END;
+');
+
 GRANT EXECUTE ON OBJECT::[public_demo].write_run TO platform_workflow_browser;
 GRANT EXECUTE ON OBJECT::[public_demo].read_own_run TO platform_workflow_browser;
 GRANT EXECUTE ON OBJECT::[public_demo].purge_runs TO platform_workflow_browser;
+GRANT EXECUTE ON OBJECT::[public_demo].read_summary TO platform_workflow_browser;
 
 COMMIT TRANSACTION;

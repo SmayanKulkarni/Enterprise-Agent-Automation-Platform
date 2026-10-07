@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { DemoRun } from '../../../../packages/workflow/src/pr-gate-demo.js';
 import { Dialog, Field, Notice } from '../ui.js';
-import { DemoApiError, requestDemoRun } from './demo-api.js';
+import { DemoApiError, requestDemoRun, requestOwnDemoRun } from './demo-api.js';
 
 interface Props { onClose: () => void; onRun: (run: DemoRun) => void }
 
@@ -27,8 +27,11 @@ export function RunDialog({ onClose, onRun }: Props) {
     setProblem(undefined);
     requestDemoRun(githubToken === '' ? {} : { githubToken, pullRequest: address }, next.signal)
       .then(onRun)
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
         if (next.signal.aborted) return;
+        const earlier = error instanceof DemoApiError && error.code === 'DEMO_RUN_USED' ? await requestOwnDemoRun(next.signal).catch(() => undefined) : undefined;
+        if (next.signal.aborted) return;
+        if (earlier !== undefined) { onRun(earlier); return; }
         setProblem(error instanceof DemoApiError ? { text: error.message, used: error.code === 'DEMO_RUN_USED' } : { text: GENERIC_ERROR, used: false });
         setBusy(false);
       });
@@ -38,7 +41,7 @@ export function RunDialog({ onClose, onRun }: Props) {
     <form onSubmit={submit}>
       <h2 id="demo-run-title">Start the demo run</h2>
       <Notice tone="warning"><strong>Rate limited: one run per IP address.</strong> After this run, this address cannot start another.</Notice>
-      <p>The workflow runs on the server with no model calls and none of the owner's credentials. By default it reviews a built-in sample pull request, then waits for a human decision, as it would in production.</p>
+      <p>The workflow runs on the server and makes one call to a small language model, paid for by the project owner, to review the diff. By default it reviews a built-in sample pull request, then waits for a human decision, as it would in production. The result is stored for 30 days, tied to a hash of your IP address and, if you use your own pull request, including its repository name, title, author and the review findings. Your token is never stored.</p>
       <details className="demo-own-pr">
         <summary>Use my own GitHub pull request (optional)</summary>
         <Field label="GitHub token" help="Read access to the pull request is enough. It is sent once to read the pull request and is never stored or logged."><input type="password" autoComplete="off" spellCheck={false} value={token} onChange={(event) => setToken(event.target.value)} /></Field>

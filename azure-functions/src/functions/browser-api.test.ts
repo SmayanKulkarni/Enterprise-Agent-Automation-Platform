@@ -45,8 +45,35 @@ test('an oversized demo body is refused before it is read', async () => {
   expect(reply).toMatchObject({ status: 413 });
 });
 
-test('a demo request is not answered by the authenticated API', async () => {
+const demoGet = (path: string, forwardedFor = '203.0.113.9', origin = WEB) => new Request(`https://api.example.com/api/v1/demo/${path}`, { method: 'GET', headers: { origin, 'x-forwarded-for': forwardedFor } });
+const bodyOf = (reply: unknown): unknown => JSON.parse((reply as { body: string }).body);
+
+test('the demo reads are anonymous and unavailable without a database', async () => {
   vi.stubEnv('CLERK_AUTHORIZED_PARTIES', WEB);
-  const reply = await browserApi(new Request('https://api.example.com/api/v1/demo/run', { method: 'GET', headers: { origin: WEB } }), context);
+  const reply = await browserApi(demoGet('run'), context);
+  expect(reply).toMatchObject({ status: 503, headers: { 'access-control-allow-origin': WEB, 'cache-control': 'no-store' } });
+  expect(bodyOf(reply)).toMatchObject({ error: { code: 'DEMO_UNAVAILABLE' } });
+});
+
+test('the demo reads reject unknown parameters before touching any backend', async () => {
+  vi.stubEnv('CLERK_AUTHORIZED_PARTIES', WEB);
+  vi.stubEnv('AZURE_SQL_CONNECTION_STRING', 'Server=unreachable.invalid;Database=x');
+  const reply = await browserApi(demoGet('governance/overview?range=24h&tenant=a1000000-0000-4000-8000-000000000001'), context);
+  expect(reply).toMatchObject({ status: 400 });
+  expect(bodyOf(reply)).toMatchObject({ error: { code: 'INVALID_INPUT' } });
+});
+
+test('the demo reads are limited per address', async () => {
+  vi.stubEnv('CLERK_AUTHORIZED_PARTIES', WEB);
+  vi.stubEnv('AZURE_SQL_CONNECTION_STRING', 'Server=unreachable.invalid;Database=x');
+  const statuses: number[] = [];
+  for (let attempt = 0; attempt < 62; attempt += 1) statuses.push(((await browserApi(demoGet('governance/overview?x=1', '203.0.113.77'), context)) as { status: number }).status);
+  expect(statuses.slice(0, 60).every((status) => status === 400)).toBe(true);
+  expect(statuses.slice(60)).toEqual([429, 429]);
+});
+
+test('other demo paths still go to the authenticated API', async () => {
+  vi.stubEnv('CLERK_AUTHORIZED_PARTIES', WEB);
+  const reply = await browserApi(demoGet('governance/members'), context);
   expect((reply as { status: number }).status).not.toBe(200);
 });

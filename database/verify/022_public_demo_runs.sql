@@ -4,7 +4,7 @@ SET XACT_ABORT ON;
 IF SCHEMA_ID(N'public_demo') IS NULL THROW 50000, N'The public_demo schema is missing.', 1;
 
 DECLARE @procedure sysname;
-DECLARE procedures CURSOR LOCAL FAST_FORWARD FOR SELECT name FROM (VALUES (N'write_run'), (N'read_own_run'), (N'purge_runs')) AS p(name);
+DECLARE procedures CURSOR LOCAL FAST_FORWARD FOR SELECT name FROM (VALUES (N'write_run'), (N'read_own_run'), (N'purge_runs'), (N'read_summary')) AS p(name);
 OPEN procedures; FETCH NEXT FROM procedures INTO @procedure;
 WHILE @@FETCH_STATUS = 0
 BEGIN
@@ -31,7 +31,7 @@ IF EXISTS (
 ) THROW 50000, N'The browser role must not touch demo tables directly.', 1;
 
 DECLARE @digest char(64) = REPLICATE(N'a', 64), @graph nvarchar(max) = N'{"nodes":[]}', @run nvarchar(max) = N'{"id":"x"}';
-DECLARE @first uniqueidentifier = NEWID(), @second uniqueidentifier = NEWID(), @key char(32) = REPLICATE(N'b', 32), @started datetime2(7) = SYSUTCDATETIME();
+DECLARE @first uniqueidentifier = NEWID(), @second uniqueidentifier = NEWID(), @key char(32) = REPLICATE(N'b', 32), @started datetime2(7) = SYSUTCDATETIME(), @window_from datetime2(7) = DATEADD(hour, -1, SYSUTCDATETIME()), @window_to datetime2(7) = DATEADD(hour, 1, SYSUTCDATETIME());
 DECLARE @bad bit = 0, @third uniqueidentifier = NEWID();
 
 BEGIN TRY EXEC [public_demo].write_run @third, @digest, N'not json', @key, N'sample', N'return', @started, @run; END TRY BEGIN CATCH IF ERROR_NUMBER() = 50002 SET @bad = 1; END CATCH;
@@ -62,6 +62,13 @@ DELETE FROM #own;
 INSERT INTO #own EXEC [public_demo].read_own_run N'cccccccccccccccccccccccccccccccc';
 IF EXISTS (SELECT 1 FROM #own) THROW 50000, N'Another address must not see this run.', 1;
 DROP TABLE #own;
+
+CREATE TABLE #summary (kind nvarchar(8), bucket_start datetime2(7), runs int);
+INSERT INTO #summary EXEC [public_demo].read_summary @window_from, @window_to, 60;
+IF (SELECT ISNULL(SUM(runs), 0) FROM #summary WHERE kind = N'bucket') <> 1 THROW 50000, N'read_summary must bucket the run inside the window.', 1;
+IF (SELECT runs FROM #summary WHERE kind = N'current') <> 1 THROW 50000, N'read_summary must count the run inside the window.', 1;
+IF (SELECT runs FROM #summary WHERE kind = N'previous') <> 0 THROW 50000, N'read_summary counted a run outside the previous window.', 1;
+DROP TABLE #summary;
 ROLLBACK TRANSACTION;
 
 SELECT N'022_public_demo_runs' AS migration, N'passed' AS status;

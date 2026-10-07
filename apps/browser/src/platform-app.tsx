@@ -9,6 +9,7 @@ import { fixtureSource, liveSource } from './governance/governance-source.js';
 import { usePendingApprovals } from './governance/use-pending-approvals.js';
 import { AuthenticatedStudio, StudioEditor } from './studio-editor.js';
 import { DemoPrompt } from './demo/demo-prompt.js';
+import { demoRemote } from './demo/demo-api.js';
 import { DemoStudio } from './demo/demo-studio.js';
 import { enterDemo, leaveDemo, loadDemo, saveDemo, withRun } from './demo/demo-state.js';
 import { DEMO_GROUP, demoSource } from './governance/demo-source.js';
@@ -26,7 +27,7 @@ export function App({ authEnabled }: { authEnabled: boolean }) {
   const groups = account.groups ?? [];
   const groupId = groups.find((group) => group.id === selectedGroupId)?.id ?? groups[0]?.id;
   const governanceApi = account.governanceApi;
-  const demoView = useMemo(() => demoSource(demo.run), [demo.run]);
+  const demoView = useMemo(() => demoSource(demo.run, Date.now, demoRemote()), [demo.run]);
   const source = useMemo(() => demo.active ? demoView : !authEnabled ? fixtureSource() : governanceApi !== undefined && groupId !== undefined ? liveSource(governanceApi, groupId) : undefined, [authEnabled, demo.active, demoView, governanceApi, groupId]);
   const pending = usePendingApprovals(source);
   useEffect(() => saveDemo(demo), [demo]);

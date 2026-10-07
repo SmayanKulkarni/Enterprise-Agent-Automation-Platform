@@ -6,7 +6,7 @@ interface Props { surface: 'studio' | 'governance'; onStart: () => void; onDismi
 export function DemoPrompt({ surface, onStart, onDismiss, signIn }: Props) {
   return <Dialog labelledBy="demo-prompt-title" onClose={onDismiss} className="demo-dialog">
     <h2 id="demo-prompt-title">Just looking around?</h2>
-    <p>{surface === 'studio' ? 'Studio' : 'Governance'} needs a sign-in. If you are reviewing this project, open the demo instead: a read-only PR gate workflow with sample data, no account, and none of the owner's credentials.</p>
+    <p>{surface === 'studio' ? 'Studio' : 'Governance'} needs a sign-in. If you are reviewing this project, open the demo instead: a read-only PR gate workflow with sample data and no account. Your token, if you give one, is never stored.</p>
     <div className="dialog-actions">
       <button className="button-secondary" onClick={onDismiss}>Not now</button>
       {signIn}

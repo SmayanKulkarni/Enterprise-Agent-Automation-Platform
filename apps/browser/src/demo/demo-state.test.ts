@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import { SAMPLE_DIFF, SAMPLE_PULL_REQUEST, runDemo } from '../../../../packages/workflow/src/pr-gate-demo.js';
-import { DemoApiError, requestDemoRun } from './demo-api.js';
+import { DemoApiError, demoRemote, requestDemoRun, requestOwnDemoRun } from './demo-api.js';
 import { emptyDemo, enterDemo, isDemoRun, leaveDemo, loadDemo, saveDemo, withRun, type DemoStorage } from './demo-state.js';
 
 const run = runDemo({ id: 'e0000000-0000-4000-8000-000000000001', now: Date.parse('2026-10-07T10:00:00.000Z'), pullRequest: SAMPLE_PULL_REQUEST, diff: SAMPLE_DIFF, source: 'sample' });
@@ -55,5 +55,33 @@ test('server refusals keep their code and the used-address message', async () =>
   await expect(requestDemoRun({})).rejects.toBeInstanceOf(DemoApiError);
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('network'))));
   await expect(requestDemoRun({})).rejects.toMatchObject({ code: 'DEMO_UNAVAILABLE', status: 0 });
+  vi.unstubAllGlobals();
+});
+
+test('the own run is fetched without credentials and a miss or a damaged answer is just no run', async () => {
+  const fetcher = reply(200, { run });
+  vi.stubGlobal('fetch', fetcher);
+  expect(await requestOwnDemoRun(undefined, 'https://api.example.com')).toEqual(run);
+  const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+  expect(url).toBe('https://api.example.com/api/v1/demo/run');
+  expect(init).toMatchObject({ credentials: 'omit' });
+  expect(init.method).toBeUndefined();
+  vi.stubGlobal('fetch', reply(404, { error: { code: 'NOT_FOUND' } }));
+  expect(await requestOwnDemoRun()).toBeUndefined();
+  vi.stubGlobal('fetch', reply(200, { run: { id: 'x' } }));
+  expect(await requestOwnDemoRun()).toBeUndefined();
+  vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('network'))));
+  expect(await requestOwnDemoRun()).toBeUndefined();
+  vi.unstubAllGlobals();
+});
+
+test('a governance read goes to the anonymous demo path with the query and rejects on a server error', async () => {
+  const fetcher = reply(200, { ok: 1 });
+  vi.stubGlobal('fetch', fetcher);
+  const decode = (value: unknown) => value;
+  expect(await demoRemote('https://api.example.com').read('series', { panel: 'model-latency', range: '24h' }, decode, new AbortController().signal)).toEqual({ ok: 1 });
+  expect((fetcher.mock.calls[0] as unknown as [string])[0]).toBe('https://api.example.com/api/v1/demo/governance/series?panel=model-latency&range=24h');
+  vi.stubGlobal('fetch', reply(429, { error: { code: 'RATE_LIMITED' } }));
+  await expect(demoRemote().read('logs', {}, decode, new AbortController().signal)).rejects.toBeInstanceOf(DemoApiError);
   vi.unstubAllGlobals();
 });

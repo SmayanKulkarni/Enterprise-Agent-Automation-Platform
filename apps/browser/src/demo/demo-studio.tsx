@@ -15,7 +15,7 @@ function Banner({ run, openGovernance }: { run: DemoRun | undefined; openGoverna
   return <section className="demo-banner" aria-label="Demo workspace">
     <div>
       <strong>Demo workspace</strong>
-      <span>The PR gate workflow is loaded read-only with every setting filled in except credentials. Starting it runs it once on the server: no model calls, none of the owner's credentials, one run per IP address.</span>
+      <span>The PR gate workflow is loaded read-only with every setting filled in except credentials. Starting it runs it once on the server with one model call to review the diff, and the run is stored for 30 days. One run per IP address.</span>
     </div>
     {run !== undefined && <div className="demo-result">
       <h2>{run.verdict.accept ? 'Reviewer suggests accepting' : 'Reviewer suggests returning'} {run.pullRequest.owner}/{run.pullRequest.repo}#{run.pullRequest.pullNumber}</h2>

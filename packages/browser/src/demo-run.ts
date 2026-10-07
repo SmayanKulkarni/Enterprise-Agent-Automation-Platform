@@ -1,7 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { isIP } from 'node:net';
-import { logEvent } from '../../telemetry/src/events.js';
-import { count } from '../../telemetry/src/instruments.js';
+import { emitDemoTelemetry } from './demo-telemetry.js';
 import { reported } from '../../errors/src/swallow.js';
 import { DEMO_MAX_DIFF_BYTES, SAMPLE_DIFF, SAMPLE_PULL_REQUEST, parseVerdict, runDemo, type DemoPullRequest, type DemoRun, type DemoVerdict } from '../../workflow/src/pr-gate-demo.js';
 
@@ -99,8 +98,7 @@ export async function handleDemoRun(request: DemoRunRequest, deps: DemoRunDeps):
     if (!await deps.claim(key)) return used();
     const run = runDemo({ id: deps.id(), now: deps.now(), ...material, source, verdict: await modelVerdict(deps, material.diff) });
     if (deps.save !== undefined) await deps.save(key, run).catch(reported(undefined, 'demo.save'));
-    count('demo.runs', { source, outcome: run.branch });
-    logEvent('demo.run', { source, outcome: run.outcome, branch: run.branch });
+    try { emitDemoTelemetry(run); } catch (error) { reported(undefined, 'demo.telemetry')(error); }
     return { status: 200, body: { run } };
   } catch (error) {
     if (error instanceof GithubFailure) return error.reply;
