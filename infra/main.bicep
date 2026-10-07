@@ -2,7 +2,7 @@ targetScope = 'resourceGroup'
 
 @allowed(['staging', 'prod'])
 param environmentName string
-param location string = 'centralus'
+param location string = 'northcentralus'
 param appName string = 'ca-eaa-${environmentName}'
 param image string
 param recoverySchedule string = '0 0 */6 * * *'
