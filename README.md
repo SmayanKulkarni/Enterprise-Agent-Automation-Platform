@@ -21,14 +21,10 @@ Status: this is a resume-project implementation, not a production rollout. Code 
 10. [Operational memory](#10-operational-memory)
 11. [Security model](#11-security-model)
 12. [Data model and migrations](#12-data-model-and-migrations)
-13. [Frontend](#13-frontend)
-14. [Observability and error handling](#14-observability-and-error-handling)
-15. [Local development](#15-local-development)
-16. [Configuration reference](#16-configuration-reference)
-17. [Testing and verification](#17-testing-and-verification)
-18. [Deployment](#18-deployment)
-19. [Further reading](#19-further-reading)
-20. [Project history](#20-project-history)
+13. [Observability and error handling](#13-observability-and-error-handling)
+14. [Local development](#14-local-development)
+15. [Testing and verification](#15-testing-and-verification)
+16. [Further reading](#16-further-reading)
 
 ---
 
@@ -118,7 +114,7 @@ node tools/e2e/relay-prgate.mjs watch     # polls open PRs and main, sends signe
 node tools/e2e/status-prgate.mjs          # runs and the node each is waiting at
 ```
 
-Open Governance, then Approvals, to decide a pending run. Section 15.6 covers the full harness, including the commit-status server and the memory scenario.
+Open Governance, then Approvals, to decide a pending run. Section 14.6 covers the full harness, including the commit-status server and the memory scenario.
 
 ### Known limits of this demo
 
@@ -311,7 +307,7 @@ A third host mode exists for development. With `PLATFORM_LOCAL_RUNNER=true` the 
 └── CLAUDE.md                  Repository instructions
 ```
 
-`docs/`, `issues/`, `evidence/` and `outputs/` are local working folders and are gitignored, so the links to `docs/` in section 19 resolve only on a checkout that has them.
+`docs/`, `issues/`, `evidence/` and `outputs/` are local working folders and are gitignored, so the links to `docs/` in section 16 resolve only on a checkout that has them.
 
 ## 5. Domain glossary
 
@@ -340,7 +336,7 @@ A third host mode exists for development. With `PLATFORM_LOCAL_RUNNER=true` the 
 | Capability variant | A manifest entry that names an underlying `tool` and `fixed` arguments the model cannot change. |
 | Dedupe key | Argument names on an MCP step. A second run reaching the same key reuses the first run's recorded result instead of sending again. |
 | Tenant group | An entity that owns several workspaces, managed by group admins in Governance. A workspace is in at most one group. |
-| Evidence plane, telemetry plane | The two data sources Governance reads. SQL is exact. Prometheus, Loki and Tempo are approximate (14.4). |
+| Evidence plane, telemetry plane | The two data sources Governance reads. SQL is exact. Prometheus, Loki and Tempo are approximate (13.4). |
 
 ## 6. Workflow automation in detail
 
@@ -1107,63 +1103,22 @@ pnpm sql:seed:demo
 
 Run History pages use a keyset cursor. The cursor is navigation state, not authority.
 
-## 13. Frontend
+## 13. Observability and error handling
 
-The browser shell in `apps/browser` is a React 19 and Vite 7 app.
-
-| Area | Files |
-| --- | --- |
-| Public pages | `landing.tsx`, `sign-in.tsx` |
-| Shell and routing | `app.tsx`, `platform-app.tsx`, `platform-routes.ts`, `app-routes.ts` |
-| API client | `platform-api.ts`, `session-state.ts` |
-| Studio | `studio-editor.tsx`, `inspector.tsx`, `workflow-model.ts` |
-| Panels | `connector-panel.tsx`, `webhook-panel.tsx`, `run-history.tsx`, `workflow-memory-panel.tsx`, `memory-import-panel.tsx`, `openrouter-connection-panel.tsx`, `model-settings-panel.tsx`, `revision-history-panel.tsx` |
-| Environment drawer | `environment-drawer.tsx`: right-hand drawer with Provider, Models, Connectors, Webhook, Memory and Runs. Hash links `#provider-panel`, `#connector-panel`, `#webhook-panel`, `#memory-panel` and `#run-<id>` open it. |
-| Model choice | `model-picker.tsx`, `model-catalog.ts`: live OpenRouter catalog, curated Azure OpenAI deployments |
-| Governance | `governance/governance-page.tsx`, `governance-route.tsx`, `governance-api.ts`, `governance-source.ts`, `governance-model.ts`, `decoders.ts` |
-| Governance panels | `overview-panel.tsx`, `kpi-row.tsx`, `approvals-inbox.tsx`, `group-admin-panel.tsx`, `create-group.tsx`, `logs-panel.tsx`, `trace-panel.tsx`, `assistant-drawer.tsx`, and the SVG charts in `charts/` |
-
-Behaviors worth knowing:
-
-- Tool ports sit under Agents and over MCP nodes. Tool edges are dashed and vertical. The Versions tab loads an earlier revision onto the canvas without touching the saved revision; a save then appends the next one.
-- Run History shows the run label as the title, the decision record, and disclosed facts as plain text.
-- Clerk tokens stay in Clerk-managed memory and travel only as Bearer headers.
-- The Studio canvas supports pointer and keyboard placement, arrow-key movement, selectable edges, bounded zoom, and a phone layout driven by CSS.
-- Draft state is explicit (`loading`, `ready`, `failed`), so a failed load never looks like an empty draft.
-- One `pending` union prevents two commands from showing the same label. Destructive canvas changes go through one confirmation dialog.
-- Fixture-only surfaces show a "Local example, not saved or evaluated" notice.
-- Client routing rewrites all non-`/api/` paths to `index.html`.
-
-### 13.1 Governance page
-
-The Governance page at `/governance` serves a group admin. It has a group, scope (all workspaces or one) and range (`1h`, `24h`, `7d`, `30d`) selector, a health banner, KPI tiles with the previous period, and five tabs.
-
-| Tab | Content |
-| --- | --- |
-| Overview | Six charts drawn as SVG with theme tokens: runs over time, spend by workspace, API latency, API error rate, model latency, MCP outcomes. Run, spend and token numbers come from SQL. Latency, error and MCP charts come from Prometheus and show a plain sentence when telemetry is not configured or unavailable. |
-| Approvals | Pending approvals across the group. Approve or reject runs the existing `workflow.approve` command in the owning workspace. The list polls every 5 seconds and reloads after 30 seconds. A decided or expired approval shows a conflict notice. |
-| Workspaces & admins | Member workspaces, co-admins, billing workspace, create-group form. Removals ask for confirmation and state the consequence. |
-| Logs | Events from Loki with level, event and run filters and "Load older". |
-| Trace | Spans of one run from Tempo as a waterfall. |
-
-The **Ask** button opens the assistant drawer. The admin picks a provider, a model and the billing workspace, and types a question. The answer is plain text (`white-space: pre-wrap`), never HTML. The conversation lives in component state and is gone on reload. In fixture mode the page shows labelled example SQL-style data, has no group writes, shows no logs or traces, and hides Ask.
-
-## 14. Observability and error handling
-
-### 14.1 Tracing
+### 13.1 Tracing
 
 - `azure-functions/src/telemetry.ts` loads before any function module.
 - Traces export to Application Insights only when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set.
 - SQL (tedious) and outbound HTTP (undici) calls produce spans.
 - Each `workflowStep` activity produces one `workflow.step` span with tenant, run, and node IDs. Failed nodes record the exception on the server. Spans are created only in activities, never in replayed orchestration code.
 
-### 14.2 Errors
+### 13.2 Errors
 
 - `packages/errors` provides `AppError`, classification, a boundary wrapper for functions, and reporting.
 - Handlers wrap in `withErrorBoundary`. Activities wrap in a `logged` helper that reports with site, tenant, and correlation ID.
 - Clients receive a category and code, never internals.
 
-### 14.3 Profiling
+### 13.3 Profiling
 
 ```sh
 pnpm profile:workflow
@@ -1171,7 +1126,7 @@ pnpm profile:workflow
 
 Writes V8 CPU profiles of the end-to-end workflow scenario to `outputs/profiles/`. The scenario uses in-memory ports, so it measures orchestration CPU only. Waits on SQL, models, MCP servers, and Upstash appear in traces.
 
-### 14.4 Two data planes
+### 13.4 Two data planes
 
 Governance reads from two planes. They answer different questions.
 
@@ -1182,7 +1137,7 @@ Governance reads from two planes. They answer different questions.
 
 The page never mixes the two in one number. A SQL figure is exact; a chart from telemetry is labelled when telemetry is missing.
 
-### 14.5 Local telemetry stack
+### 13.5 Local telemetry stack
 
 ```sh
 docker compose -f infra/observability/docker-compose.yml up -d
@@ -1201,92 +1156,34 @@ GOVERNANCE_TEMPO_URL=http://127.0.0.1:3200
 
 On Docker Desktop the repository path must be under a shared folder, or the compose mount fails with "is not shared from the host". Deployed, the same variables point at Grafana Cloud with `GOVERNANCE_QUERY_USER` and `GOVERNANCE_QUERY_TOKEN` (read-only) and `OTEL_EXPORTER_OTLP_*` for export.
 
-### 14.6 Metric catalog
-
-`packages/telemetry/src/instruments.ts` is the catalog. Prometheus renames instruments: dots become underscores, counters gain `_total`, histograms with a unit gain it as a suffix (`_seconds`) and expose `_bucket`, `_count` and `_sum`. The token histogram has no unit suffix and the cost counter keeps the uppercase unit (`gen_ai_client_cost_USD_total`). Label dots also become underscores (`http_route`, `gen_ai_provider_name`, `error_type`).
-
-| Instrument | Type | Unit | Labels |
-| --- | --- | --- | --- |
-| `http.server.request.duration` | histogram | s | `http.route`, `http.request.method`, `http.response.status_code`, `tenant_id` |
-| `app.errors` | counter | none | `code`, `category`, `site`, `tenant_id` |
-| `auth.denied` | counter | none | `reason` |
-| `workflow.runs.started` | counter | none | `tenant_id`, `trigger` |
-| `workflow.runs.finished` | counter | none | `tenant_id`, `status`, `reason` |
-| `workflow.step.duration` | histogram | s | `tenant_id`, `node_kind`, `outcome` |
-| `workflow.approvals.requested` | counter | none | `tenant_id`, `kind` |
-| `workflow.approvals.decided` | counter | none | `tenant_id`, `decision` |
-| `workflow.approvals.expired` | counter | none | `tenant_id` |
-| `workflow.approval.wait.duration` | histogram | s | `tenant_id`, `decision` |
-| `gen_ai.client.operation.duration` | histogram | s | `gen_ai.provider.name`, `gen_ai.request.model`, `tenant_id`, `feature`, `error.type` |
-| `gen_ai.client.token.usage` | histogram | {token} | `gen_ai.provider.name`, `gen_ai.request.model`, `tenant_id`, `feature`, `error.type`, `gen_ai.token.type` |
-| `gen_ai.client.cost` | counter | USD | `gen_ai.provider.name`, `gen_ai.request.model`, `tenant_id`, `feature` |
-| `mcp.tool.call.duration` | histogram | s | `tenant_id`, `capability`, `outcome`, `route` |
-| `workflow.effects` | counter | none | `tenant_id`, `state` |
-| `workflow.circuit.transitions` | counter | none | `tenant_id`, `kind`, `state` |
-| `workflow.webhook.deliveries` | counter | none | `tenant_id`, `outcome` |
-| `connector.agent.requests` | counter | none | `tenant_id`, `operation`, `outcome` |
-| `memory.retrievals` | counter | none | `tenant_id`, `status` |
-| `memory.proposals` | counter | none | `tenant_id`, `state` |
-| `memory.summaries` | counter | none | `tenant_id`, `outcome` |
-| `memory.consolidation` | counter | none | `tenant_id`, `decision`, `path` |
-| `workflow.dispatch.recovered` | counter | none | none |
-
-### 14.7 Event catalog
-
-`logEvent(name, attributes)` writes one JSON line to stdout and one OTLP log record. Only the attributes listed here are kept; each string value is scrubbed and cut to 200 characters. Events carry `event` and `level` as well.
-
-| Event | Allowed attributes |
-| --- | --- |
-| `api.request.failed` | `tenant_id`, `route`, `method`, `status`, `code`, `category`, `correlation_id` |
-| `auth.denied` | `route`, `reason` |
-| `command.executed` | `tenant_id`, `owner`, `name`, `outcome`, `actor_user_id`, `object_id` |
-| `run.started` | `tenant_id`, `run_id`, `definition_id`, `trigger`, `owner_id` |
-| `run.finished` | `tenant_id`, `run_id`, `definition_id`, `status`, `reason`, `duration_s`, `tokens`, `cost` |
-| `node.failed` | `tenant_id`, `run_id`, `node_id`, `node_kind`, `code` |
-| `approval.requested` | `tenant_id`, `run_id`, `node_id`, `kind`, `capability`, `expires_at` |
-| `approval.decided` | `tenant_id`, `run_id`, `decision`, `actor_user_id`, `wait_s` |
-| `approval.expired` | `tenant_id`, `run_id`, `node_id` |
-| `model.call` | `tenant_id`, `run_id`, `node_id`, `provider`, `model`, `attempt`, `outcome`, `tokens`, `cost`, `duration_s` |
-| `mcp.call` | `tenant_id`, `run_id`, `node_id`, `capability`, `route`, `outcome`, `duration_s`, `effect_id` |
-| `circuit.transition` | `tenant_id`, `kind`, `state` |
-| `webhook.delivery` | `tenant_id`, `definition_id`, `outcome` |
-| `connector.request` | `tenant_id`, `installation_id`, `operation`, `outcome` |
-| `memory.retrieval` | `tenant_id`, `run_id`, `node_id`, `status`, `item_count` |
-| `memory.summary` | `tenant_id`, `run_id`, `outcome`, `findings`, `dropped` |
-| `memory.consolidation` | `tenant_id`, `run_id`, `decision`, `path`, `candidates` |
-| `group.changed` | `group_id`, `action`, `actor_user_id`, `subject_id` |
-| `assistant.asked` | `group_id`, `billing_tenant_id`, `provider`, `model`, `tokens`, `cost`, `outcome` |
-
-The assistant never logs message text: `assistant.asked` holds only group, billing workspace, provider, model, tokens, cost and outcome.
-
-### 14.8 Label rules
+### 13.6 Label rules
 
 - A label that is not in a metric's catalog entry is dropped, so a run id or a free-text field cannot become a series.
 - String label values are scrubbed and cut to 128 characters. Non-finite numbers are dropped.
 - `tenant_id` is set only from a verified source: an authenticated tenant route, a worker that read the tenant from its own record, or an `unknown` placeholder for webhooks that failed lookup. A request for a tenant the caller does not belong to gets no tenant label.
 - `workflow.dispatch.recovered` and `auth.denied` carry no tenant label, so dashboards show them for all workspaces.
 
-### 14.9 Flush per invocation
+### 13.7 Flush per invocation
 
 Serverless hosts can freeze a process as soon as the response is sent, and metrics export every 15 seconds. Each Azure Function handler runs through `withFlush`, which flushes traces, metrics and logs after every invocation and gives up after 2 seconds, so a slow collector cannot hold a response. The Vercel API entry calls `flushTelemetry()` inside `waitUntil` after the response is built.
 
-### 14.10 Known ceilings
+### 13.8 Known ceilings
 
 - **Assistant rate limit.** The limit of 20 requests per 5 minutes is kept in memory per server instance. Across several instances the effective limit is higher. The per-call cost ceiling (`GOVERNANCE_ASSISTANT_MAX_COST`) bounds spend regardless.
 - **Tenant count.** A group holds at most 50 workspaces. Every telemetry query filters with one regular expression of up to 50 tenant ids; a larger group would need a different filter.
 - **Loki tenant filter.** The tenant id is structured metadata, not a stream label. Filters on it scan every line of the Threadline stream in the window, so cost grows with log volume.
 - **Retention.** Deployed telemetry is kept 14 days. A `30d` range is reported as partial for telemetry panels. SQL evidence is not affected.
 
-## 15. Local development
+## 14. Local development
 
-### 15.1 Prerequisites
+### 14.1 Prerequisites
 
 - Node.js 22.14.0
 - pnpm 10.15.1 through Corepack
 - A Clerk application
 - Optional: Azure SQL database, Azure Functions Core Tools, Upstash Vector, OpenRouter key
 
-### 15.2 Setup
+### 14.2 Setup
 
 ```sh
 corepack enable
@@ -1297,7 +1194,7 @@ pnpm --dir apps/browser --ignore-workspace dev
 
 Set `VITE_CLERK_PUBLISHABLE_KEY` for the browser and `VITE_PLATFORM_API_ORIGIN` when the API runs elsewhere.
 
-### 15.3 Fixture mode and SQL mode
+### 14.3 Fixture mode and SQL mode
 
 | Mode | Trigger | Identity source |
 | --- | --- | --- |
@@ -1306,7 +1203,7 @@ Set `VITE_CLERK_PUBLISHABLE_KEY` for the browser and `VITE_PLATFORM_API_ORIGIN` 
 
 An unmapped Clerk user gets a 400 and Studio shows "Service unavailable". Run migrations and verification first.
 
-### 15.4 Private connector agent
+### 14.4 Private connector agent
 
 ```sh
 WORKFLOW_AGENT_BASE_URL=https://your-function-app.azurewebsites.net \
@@ -1319,7 +1216,7 @@ node tools/workflow/private-agent.mjs
 
 Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 
-### 15.5 Scripts
+### 14.5 Scripts
 
 | Script | Purpose |
 | --- | --- |
@@ -1336,7 +1233,7 @@ Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 | `pnpm profile:workflow` | CPU profile of the workflow scenario |
 | `pnpm sql:migrate`, `sql:verify`, `sql:status`, `sql:seed:demo` | Azure SQL tooling |
 
-### 15.6 Live E2E harness
+### 14.6 Live E2E harness
 
 `tools/e2e/` drives the real stack: Clerk sessions, Azure SQL, OpenRouter, Upstash Vector, MCP servers and the local LGTM stack. Nothing is mocked. `tools/e2e/README.md` has the full steps. Start the dev server with `. tools/e2e/env.sh` (it sets `PLATFORM_LOCAL_RUNNER=true`), then pick a scenario.
 
@@ -1350,55 +1247,7 @@ Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 
 `ticket.mjs <workflowAdmin|governanceAdmin>` mints a one-time Clerk sign-in ticket into a mode-0600 file and never prints it. The GitHub token is read from `gh auth token` at server start and never written to SQL, logs or disk. Never approve or reject a pending gate run on someone else's behalf; leave it for the administrator in Governance, then Approvals.
 
-## 16. Configuration reference
-
-| Variable | Used by | Purpose |
-| --- | --- | --- |
-| `CLERK_ISSUER` | API | Expected token issuer |
-| `CLERK_PUBLISHABLE_KEY` | API | Clerk publishable key |
-| `CLERK_SECRET_KEY` | API | Clerk secret key, server only |
-| `CLERK_AUDIENCE` | API | Must be `platform-browser-api`. Add `{ "aud": "platform-browser-api" }` to the Clerk session token claims. |
-| `CLERK_AUTHORIZED_PARTIES` | API | Exact comma-separated browser origins, also drives CORS |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Browser | Clerk publishable key |
-| `VITE_PLATFORM_API_ORIGIN` | Browser | API origin when separate |
-| `AZURE_SQL_CONNECTION_STRING` | API, Functions | Enables SQL mode |
-| `PLATFORM_LOCAL_CLERK_SUBJECT`, `PLATFORM_LOCAL_TENANTS` | Local API | Fixture mode access |
-| `ADMIN_TEST_CLERK_SUBJECT` | `sql:seed:demo` | Clerk subject seeded as admin in each `PLATFORM_LOCAL_TENANTS` tenant, using `CLERK_ISSUER`; the admin seed is skipped when unset |
-| `WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION` | API, Functions | Wrapping key version, for example `v1` |
-| `WORKFLOW_OPENROUTER_WRAPPING_KEY` | API, Functions | 32-byte base64url key |
-| `WORKFLOW_OPENROUTER_MAX_COST_PER_1K_TOKENS` | API, Functions | Cost rate used only when OpenRouter reports no per-request cost |
-| `WORKFLOW_MAX_COST_PER_1K_TOKENS` | Functions | Cost rate for Azure OpenAI calls |
-| `UPSTASH_VECTOR_REST_URL` | API, Functions | Upstash Vector REST endpoint |
-| `UPSTASH_VECTOR_REST_TOKEN` | API, Functions | Upstash Vector write token |
-| `UPSTASH_VECTOR_DIMENSION` | API, Functions | Index dimension, default `384`; external embeddings must match it |
-| `WORKFLOW_MEMORY_ENABLED_TENANTS` | API, Functions | Comma-separated tenant IDs allowed to use Operational Memory |
-| `WORKFLOW_WEBHOOK_SECRET_<DEFINITIONID>` | Functions | Fallback webhook secret before a managed credential exists |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Functions | Enables trace export |
-| `GOVERNANCE_PROMETHEUS_URL` | API | Prometheus query endpoint for governance charts. Unset: chart panels report not-configured |
-| `GOVERNANCE_LOKI_URL` | API | Loki query endpoint for the Logs tab and the assistant |
-| `GOVERNANCE_TEMPO_URL` | API | Tempo query endpoint for the Trace tab |
-| `GOVERNANCE_QUERY_USER`, `GOVERNANCE_QUERY_TOKEN` | API | Basic-auth pair sent to all three query endpoints; set both or neither |
-| `GOVERNANCE_PROMETHEUS_USER`, `GOVERNANCE_LOKI_USER`, `GOVERNANCE_TEMPO_USER` | API | Per-backend username that overrides `GOVERNANCE_QUERY_USER`. Grafana Cloud needs these: each backend has its own instance ID |
-| `GOVERNANCE_ASSISTANT_MAX_COST` | API | Per-call cost ceiling in USD. Unset or not a positive number: the assistant answers 501. A call that reports more fails the turn |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | API, Functions | Enables OTLP export of traces, metrics and logs |
-| `OTEL_EXPORTER_OTLP_HEADERS` | API, Functions | Standard OTLP header list, for example the Grafana Cloud authorization header |
-| `PLATFORM_LOCAL_RUNNER` | Dev server | `true` runs the orchestration loop in process instead of Durable Functions |
-| `PLATFORM_LOCAL_RECOVER_TENANTS` | Dev server | Tenants whose in-flight runs the local runner resumes after a restart |
-| `WORKFLOW_MCP_ALLOWED_HOSTS` | API, Functions | Hosts a public MCP installation may call |
-| `WORKFLOW_MCP_CREDENTIAL_<INSTALLATIONID>` | API, Functions | Bearer credential for one MCP installation (ID without dashes, uppercase). Read at start, never stored |
-| `DEPLOYMENT_ENVIRONMENT` | API, Functions | Value of the `deployment.environment.name` resource attribute. Unset gives `unknown` |
-
-**Governance database role.** Migration 012 creates the role `platform_governance_browser` and later migrations grant it execute on the governance procedures. No migration adds a login to it, because the runtime user differs per environment. After migrating, an operator adds the user named in `AZURE_SQL_CONNECTION_STRING`:
-
-```sql
-ALTER ROLE platform_governance_browser ADD MEMBER [<runtime user>];
-```
-
-Until this runs, group routes backed by SQL answer an error and the Governance page cannot load.
-
-Never commit `.env.local`, `.env.server.local`, or any file holding real keys. Rotate a key that has appeared in a committed or shared file.
-
-## 17. Testing and verification
+## 15. Testing and verification
 
 `pnpm verify` runs, in order: workspace check, contracts, lint, typecheck, tests. It also builds workspace evidence. At the time of writing `pnpm test` runs 112 test files with 1,099 passing tests and 10 skipped (the skipped ones need live services).
 
@@ -1413,7 +1262,7 @@ Test layers:
 - Browser app tests cover routes, API client, session state, the workflow model, Run History and the approvals inbox.
 - `tools/e2e/` is the live layer (15.6). It is manual and opt-in.
 
-### 17.1 Reviewer evaluation harness
+### 15.1 Reviewer evaluation harness
 
 `packages/workflow/src/eval-harness.ts` runs a reviewer-style Agent over `eval-cases.ts` through the real worker with a scripted capability, then reports false accepts, false rejects, runs that failed closed, and cases whose verdict changed between repeats.
 
@@ -1424,52 +1273,13 @@ Test layers:
 | `oversize` | A 600-line benign change (accept) and the same change with a hidden secret (return) |
 | `edge` | An empty diff and a binary-only change (both return) |
 
-### 17.2 Lint ratchet and secret scan
+### 15.2 Lint ratchet and secret scan
 
 `pnpm lint` fails when any file gains lint errors against `tools/workspace/lint-baseline.json`, so the existing backlog does not block work while new errors cannot enter. `tools/workspace/secret-scan.mjs` then scans for keys and tokens. `pnpm lint:raw` is plain ESLint.
 
 Fixture evidence does not prove live cloud or provider operation. Live checks need configured credentials for every agent provider.
 
-## 18. Deployment
-
-| Target | Contents | Configuration |
-| --- | --- | --- |
-| Vercel | Static Vite build from `apps/browser/dist`. No server code | `vercel.json` sets the build and install commands, the SPA rewrite and the security headers. `VITE_PLATFORM_API_ORIGIN` points the SPA at the Azure API |
-| Azure Container Apps | Browser API, webhook ingress, agent ingress, durable orchestrations | `Microsoft.App/containerApps` (`kind: functionapp`), 0.5 vCPU / 1 GiB, 0 to 2 replicas, scale to zero. Image from `Dockerfile`, published to GHCR by `ci.yml`. Entry: `dist/azure-functions/src/index.js` |
-| Azure SQL | Identity, projections, workflow store | `pnpm sql:migrate` runs forward-only migrations with digest tracking |
-| Grafana Cloud | Metrics, logs and traces (OTLP), governance reads, four dashboards | One free stack for both environments. `OTEL_EXPORTER_OTLP_*` and `GOVERNANCE_*` come from GitHub environment variables and secrets. `deploy-environment.yml` pushes `infra/observability/dashboards/*.json` |
-| Infrastructure | Bicep | `infra/shared.bicep` (subscription), `infra/main.bicep` with `staging.bicepparam` and `prod.bicepparam`, `infra/bootstrap.sh` (one time) |
-
-Two environments, `staging` and `prod`, both deployed to northcentralus (centralus had no Container Apps capacity), close to the SQL server in centralus. `automationtestingdb` is staging and `auomation-db` is prod, on the existing server `auomaionbackenddb`. Azure spend is capped by free tiers, two replicas at most and a $1 monthly budget with email alerts.
-
-### Pipeline
-
-- `ci.yml` runs on pull requests and on `main`: `pnpm verify`, `compose.ci.yml` (all migrations on SQL Server 2022, applied twice, verified, seeded, contained user created), Bicep lint, the API image (built on every run, pushed to GHCR on `main`), and on pull requests a Vercel preview.
-- `deploy.yml` runs after `ci.yml` succeeds on `main`, or by hand with an optional `artifact_run_id` (the CI run whose image to deploy). It calls `deploy-environment.yml` for `staging`, then for `prod` once the `prod` environment reviewer approves. Each environment opens a runner-only SQL firewall rule, migrates, applies Bicep (which rolls out the image), applies the Durable queue scale rules, pushes the Grafana dashboards, warms the API, deploys the SPA with the API origin read from the Bicep outputs, and runs `tools/smoke/smoke.mjs`.
-- `wake.yml` runs every 6 hours and requests `/api/v1/tenants` on each environment so the scaled-to-zero host starts and runs the recovery timer. An unset origin variable skips that environment; a non-401 answer fails the run.
-- Run the migration check locally with `docker compose -f compose.ci.yml up --exit-code-from sql-init`. Docker Desktop cannot mount from `/media`, so run it from a copy under `$HOME`.
-- Every migration must work with the code that is currently deployed (expand, then contract), because migrations run before the new code ships.
-
-### GitHub configuration
-
-Per environment (`staging`, `prod`), variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `WEB_ORIGIN`, `CLERK_ISSUER`, `SMOKE_TENANT_ID`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `GOVERNANCE_PROMETHEUS_URL` (ends `/api/prom`), `GOVERNANCE_LOKI_URL`, `GOVERNANCE_TEMPO_URL` (ends `/tempo`), `GOVERNANCE_PROMETHEUS_USER`, `GOVERNANCE_LOKI_USER`, `GOVERNANCE_TEMPO_USER` (the instance IDs shown on each Grafana Cloud backend page), `GRAFANA_URL`. Secrets: `AZURE_SQL_MIGRATION_CONNECTION_STRING` (admin login, `Connect Timeout=120`), `AZURE_SQL_RUNTIME_CONNECTION_STRING` (user `platform_identity_app`), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `SMOKE_CLERK_USER_ID`, `WORKFLOW_OPENROUTER_WRAPPING_KEY`, `WORKFLOW_MCP_WRAPPING_KEY`, `OTEL_EXPORTER_OTLP_HEADERS` (`Authorization=Basic%20<base64 of instance id:token>`), `GOVERNANCE_QUERY_TOKEN`. Repository secrets: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `GRAFANA_API_TOKEN`. Repository variables, set after the first deploy: `STAGING_API_ORIGIN`, `PROD_API_ORIGIN` (`https://<apiHostname>` from the Bicep output). `prod` needs a required reviewer. `WEB_ORIGIN` for staging must be `https://eaa-staging.vercel.app`; Clerk authorized parties are an exact list, so PR preview URLs render the SPA but cannot sign in.
-
-### First-time setup (owner)
-
-1. Run `CONTACT_EMAIL=you@example.com infra/bootstrap.sh` as subscription Owner.
-2. Create the GitHub environments, variables and secrets above.
-3. Set the Vercel Preview and Production variables `VITE_PLATFORM_API_ORIGIN` and `VITE_CLERK_PUBLISHABLE_KEY`; keep Vercel Git integration off.
-4. Create the Grafana Cloud stack and three tokens (OTLP write, read-only query, dashboard service account) and set the Grafana variables and secrets above.
-5. Run `database/bootstrap/create-platform-identity-user.sql` against both databases (after the first migration) and store the runtime connection strings as `AZURE_SQL_RUNTIME_CONNECTION_STRING`.
-6. Push to `main`. After `ci.yml` pushes the first image, make the GHCR package public (package settings, change visibility), then rerun the failed deploy. Container Apps cannot pull a private package without credentials.
-7. After the first successful deploy, set `STAGING_API_ORIGIN` and `PROD_API_ORIGIN`, and set `VITE_PLATFORM_API_ORIGIN` in Vercel to the same origins.
-8. Create the Clerk smoke user and add it to the tenant named by `SMOKE_TENANT_ID`.
-
-### Rollback
-
-No down migrations. Roll code back with `vercel rollback` and a `deploy.yml` dispatch carrying a previous `artifact_run_id`. If data changed, use Azure SQL point-in-time restore (7 days).
-
-## 19. Further reading
+## 16. Further reading
 
 - [Architecture](docs/architecture.md)
 - [Architecture decision records](docs/adr/)
@@ -1481,20 +1291,3 @@ No down migrations. Roll code back with `vercel rollback` and a `deploy.yml` dis
 - [Private agent, profiling and memory report](tools/workflow/README.md)
 - [Domain glossary](CONTEXT.md)
 - [Studio coverage](docs/portfolio/solution-studio-coverage.md)
-
-## 20. Project history
-
-The history below comes from `git log` on `feature/001-workspace` plus the uncommitted working tree.
-
-| Date | Area | What landed |
-| --- | --- | --- |
-| 2026-09-18 to 09-19 | Foundation | Identity ERD, Solution Studio authoring contract, durable Studio store, guarded commands with fixture evidence |
-| 2026-09-25 | Memory and capabilities | Operational memory in Studio, capability and webhook setup, webhook admission and Run History fixes |
-| 2026-09-26 | Governed delivery | Governed workflow delivery, canvas navigation, tenant OpenRouter connections, OpenRouter agents |
-| 2026-09-27 | Performance | Bounded Run History reads (migration 009), shared SQL pools |
-| 2026-09-28 | UI | Threadline UI refresh, truthful public pages, platform shell split into modules |
-| 2026-09-29 | Tooling and errors | Application Insights traces, CPU profile script, error classification and reporting, Agent tool edges, model catalog, memory tool, revision history, admin test account |
-| 2026-09-30 to 10-01 | Governance and observability | Tenant groups, co-admins, billing workspace, OTLP traces, metrics and logs, run facts, overview and charts, approvals inbox, logs and trace tabs, governance assistant, four Grafana dashboards, migrations 012 to 017 |
-| 2026-10-04 (working tree, not committed) | PR gate hardening | Approval disclosure, decision records, non-failure outcomes, subject supersede, finalizers, capability variants, dedupe key, GitHub-native ingress, 14-day approval timers, migrations 018 and 019 |
-| 2026-10-04 (working tree, not committed) | Memory V2 | Grounded summaries, `memory_save` and `memory_search`, consolidation, ranked recall, memory metrics and report, migration 020 |
-| 2026-10-04 (working tree, not committed) | Verification | Live E2E harness, local scheduler, reviewer evaluation harness, lint ratchet and secret scan |
