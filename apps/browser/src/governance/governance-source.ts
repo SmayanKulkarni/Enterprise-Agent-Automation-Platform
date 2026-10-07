@@ -8,6 +8,7 @@ import { scopeQuery } from './governance-model.js';
 
 export interface GovernanceSource {
   readonly fixture: boolean;
+  readonly demo?: boolean;
   overview(range: RangeKey, scope: string | undefined, signal: AbortSignal): Promise<Overview>;
   workflows(range: RangeKey, scope: string | undefined, signal: AbortSignal): Promise<Workflows>;
   health(signal: AbortSignal): Promise<Health>;

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       artifact_run_id:
-        description: ci run id whose functions-zip artifact to deploy; defaults to the latest successful ci run on main
+        description: ci run id whose image to deploy; defaults to the latest successful ci run on main
         required: false
 
 permissions:
@@ -21,7 +21,6 @@ jobs:
     if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     outputs:
-      run_id: ${{ steps.pick.outputs.run_id }}
       sha: ${{ steps.pick.outputs.sha }}
     steps:
       - id: pick
@@ -35,7 +34,6 @@ jobs:
           run_id="${INPUT_RUN:-$TRIGGER_RUN}"
           [ -n "$run_id" ] || run_id="$(gh run list --workflow ci.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
           [ -n "$run_id" ] || { echo "no successful ci run found"; exit 1; }
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "sha=$(gh run view "$run_id" --json headSha --jq .headSha)" >> "$GITHUB_OUTPUT"
 
   staging:
@@ -43,7 +41,6 @@ jobs:
     uses: ./.github/workflows/deploy-environment.yml
     with:
       environment: staging
-      run_id: ${{ needs.resolve.outputs.run_id }}
       sha: ${{ needs.resolve.outputs.sha }}
     secrets: inherit
 
@@ -52,6 +49,5 @@ jobs:
     uses: ./.github/workflows/deploy-environment.yml
     with:
       environment: prod
-      run_id: ${{ needs.resolve.outputs.run_id }}
       sha: ${{ needs.resolve.outputs.sha }}
     secrets: inherit

@@ -1,5 +1,7 @@
 # Azure + Vercel deployment, CI/CD, and post-deploy testing
 
+> Backend hosting, secrets and the Functions deploy path are superseded by `2026-10-06-container-apps-hosting-design.md` (Flex Consumption is unavailable on this subscription). The rest of this spec stands.
+
 Date: 2026-10-06
 Status: design approved in brainstorming; awaiting spec review
 

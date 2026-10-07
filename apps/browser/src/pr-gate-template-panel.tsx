@@ -15,7 +15,7 @@ export function PrGateTemplatePanel({ api, tenantId, admin, installations, onCre
   const [issues, setIssues] = useState<readonly { path: string; message: string }[]>([]);
   const [message, setMessage] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const pendingDraft = useRef<string>();
+  const pendingDraft = useRef<string | undefined>(undefined);
   const choices = certified(installations);
   const githubId = github ?? suggestedInstallation(installations, 'pull_request_read');
   const statusId = status ?? suggestedInstallation(installations, 'create_commit_status');

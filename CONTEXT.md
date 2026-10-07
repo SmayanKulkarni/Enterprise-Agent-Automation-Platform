@@ -171,3 +171,17 @@ _Avoid_: Metrics store
 **Telemetry plane**:
 Traces, metrics and logs pushed over OTLP; approximate; used for latency, error rates, logs and traces.
 _Avoid_: Audit trail
+
+## Public demo
+
+**Demo workspace**:
+A mode entered from the landing page or the sign-in prompt that shows the PR gate workflow read-only with no credentials and a Governance view of the demo tenant, including the visitor's own demo run.
+_Avoid_: Sandbox, trial, fixture workspace
+
+**Demo run**:
+The single PR gate run a visitor may start per IP address. One model call (or a deterministic reviewer when it is unavailable) reviews the diff, the connector steps are simulated, and the run stops at the human approval.
+_Avoid_: Test run, free run
+
+**Demo tenant**:
+The fixed tenant id that labels all demo telemetry. It has no identity, membership or group rows; demo runs live in their own schema and no real group contains it.
+_Avoid_: Demo account, demo workspace (that is the visitor-facing view)

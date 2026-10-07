@@ -20,7 +20,7 @@ export interface ModelTool { name: string; description: string; parameters: Json
 export interface ModelToolCall { id: string; name: string; arguments: Record<string, unknown>; }
 export type TranscriptEntry = { role: 'assistant'; call: ModelToolCall } | { role: 'tool'; callId: string; name: string; content: string };
 export interface AgentProgress { transcript: TranscriptEntry[]; rounds: number; effects: number; tokens: number; cost: number; pausedAt?: string; truncated?: boolean; }
-export interface ModelTelemetry { feature: 'workflow' | 'summary' | 'assistant' | 'judgment'; runId?: string; nodeId?: string; attempt?: number; }
+export interface ModelTelemetry { feature: 'workflow' | 'summary' | 'assistant' | 'judgment' | 'demo'; runId?: string; nodeId?: string; attempt?: number; }
 export interface ModelRequest { tenantId: string; provider: 'azure-openai' | 'openrouter'; model: string; promptVersion: string; instructions: string; input: Record<string, unknown>; context: Record<string, unknown>; responseSchema: JsonSchema; policy: NodePolicy; tools?: readonly ModelTool[]; toolChoice?: 'auto' | 'none'; transcript?: readonly TranscriptEntry[]; telemetry?: ModelTelemetry; }
 export interface ModelResult { output: Record<string, unknown>; model: string; tokens: number; cost: number; promptTokens?: number; completionTokens?: number; toolCall?: ModelToolCall; }
 export type { JudgmentQuestion } from './judgment.js';

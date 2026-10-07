@@ -4,6 +4,7 @@ import { defineConfig } from 'vite';
 import { localBrowserTransport, localWebhookIngress } from '../../packages/browser/src/local-browser-host.js';
 import { handleStatusMcp } from '../../packages/workflow/src/commit-status-connector.js';
 import { ingressResponse } from '../../packages/workflow/src/ingress-outcome.js';
+import { clientIp, handleDemoRun } from '../../packages/browser/src/demo-run.js';
 
 const proxyTarget = process.env['PLATFORM_API_PROXY_TARGET'] || undefined;
 const allowedOrigins = (environment: Readonly<Record<string, string | undefined>>) => (environment['CLERK_AUTHORIZED_PARTIES'] ?? '').split(',').map((origin) => origin.trim()).filter(Boolean);
@@ -22,6 +23,9 @@ const readBody = async (request: AsyncIterable<Uint8Array>): Promise<Uint8Array>
   for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.length; }
   return body;
 };
+
+const demoClaims = new Set<string>();
+const demoDeps = { claimed: (key: string) => Promise.resolve(demoClaims.has(key)), claim: (key: string) => Promise.resolve(!demoClaims.has(key) && Boolean(demoClaims.add(key))), fetch: (url: string, init?: RequestInit) => fetch(url, init), now: Date.now, id: () => crypto.randomUUID(), pepper: 'local-demo' };
 
 export default defineConfig(() => ({
   resolve: { dedupe: ['react', 'react-dom'] },
@@ -52,6 +56,13 @@ export default defineConfig(() => ({
         response.writeHead(reply.status, { 'content-type': reply.contentType });
         response.end(JSON.stringify(reply.body));
       })().catch((error: unknown) => { console.error('Local webhook ingress failed:', error instanceof Error ? `${'code' in error ? String(error.code) : 'UNKNOWN'} ${error.message}` : 'UNKNOWN'); const reply = ingressResponse(undefined); response.writeHead(reply.status, { 'content-type': reply.contentType }); response.end(JSON.stringify(reply.body)); }); });
+      server.middlewares.use('/api/v1/demo/run', (request, response) => { void (async () => {
+        if (request.method !== 'POST') { response.writeHead(405); response.end(); return; }
+        const forwarded = request.headers['x-forwarded-for'];
+        const reply = await handleDemoRun({ ip: clientIp(Array.isArray(forwarded) ? forwarded[0] : forwarded) ?? clientIp(request.socket.remoteAddress), body: new TextDecoder().decode(await readBody(request)) }, demoDeps);
+        response.writeHead(reply.status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        response.end(JSON.stringify(reply.body));
+      })().catch((error: unknown) => { console.error('Local demo run failed:', error instanceof Error ? error.message : 'UNKNOWN'); response.writeHead(503); response.end(); }); });
       server.middlewares.use('/api/v1', (request, response) => { void (async () => {
         if (transport === undefined) { response.writeHead(503); response.end(); return; }
         const origin = request.headers.origin ?? `http://${request.headers.host ?? ''}`;

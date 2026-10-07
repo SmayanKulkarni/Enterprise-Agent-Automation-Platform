@@ -1378,6 +1378,7 @@ Set `WORKFLOW_AGENT_MCP_TOKEN` when the MCP endpoint needs a bearer token.
 | `GOVERNANCE_LOKI_URL` | API | Loki query endpoint for the Logs tab and the assistant |
 | `GOVERNANCE_TEMPO_URL` | API | Tempo query endpoint for the Trace tab |
 | `GOVERNANCE_QUERY_USER`, `GOVERNANCE_QUERY_TOKEN` | API | Basic-auth pair sent to all three query endpoints; set both or neither |
+| `GOVERNANCE_PROMETHEUS_USER`, `GOVERNANCE_LOKI_USER`, `GOVERNANCE_TEMPO_USER` | API | Per-backend username that overrides `GOVERNANCE_QUERY_USER`. Grafana Cloud needs these: each backend has its own instance ID |
 | `GOVERNANCE_ASSISTANT_MAX_COST` | API | Per-call cost ceiling in USD. Unset or not a positive number: the assistant answers 501. A call that reports more fails the turn |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | API, Functions | Enables OTLP export of traces, metrics and logs |
 | `OTEL_EXPORTER_OTLP_HEADERS` | API, Functions | Standard OTLP header list, for example the Grafana Cloud authorization header |
@@ -1434,31 +1435,35 @@ Fixture evidence does not prove live cloud or provider operation. Live checks ne
 | Target | Contents | Configuration |
 | --- | --- | --- |
 | Vercel | Static Vite build from `apps/browser/dist`. No server code | `vercel.json` sets the build and install commands, the SPA rewrite and the security headers. `VITE_PLATFORM_API_ORIGIN` points the SPA at the Azure API |
-| Azure Functions | Browser API, webhook ingress, agent ingress, durable orchestrations | Flex Consumption, Node 22, zip deploy. Build with `pnpm build:azure`. Entry: `dist/azure-functions/src/index.js` |
+| Azure Container Apps | Browser API, webhook ingress, agent ingress, durable orchestrations | `Microsoft.App/containerApps` (`kind: functionapp`), 0.5 vCPU / 1 GiB, 0 to 2 replicas, scale to zero. Image from `Dockerfile`, published to GHCR by `ci.yml`. Entry: `dist/azure-functions/src/index.js` |
 | Azure SQL | Identity, projections, workflow store | `pnpm sql:migrate` runs forward-only migrations with digest tracking |
+| Grafana Cloud | Metrics, logs and traces (OTLP), governance reads, four dashboards | One free stack for both environments. `OTEL_EXPORTER_OTLP_*` and `GOVERNANCE_*` come from GitHub environment variables and secrets. `deploy-environment.yml` pushes `infra/observability/dashboards/*.json` |
 | Infrastructure | Bicep | `infra/shared.bicep` (subscription), `infra/main.bicep` with `staging.bicepparam` and `prod.bicepparam`, `infra/bootstrap.sh` (one time) |
 
-Two environments, `staging` and `prod`, both in centralus. `automationtestingdb` is staging and `auomation-db` is prod, on the existing server `auomaionbackenddb`. Azure spend is capped by free tiers, two Flex instances at most and a $1 monthly budget with email alerts.
+Two environments, `staging` and `prod`, both in centralus. `automationtestingdb` is staging and `auomation-db` is prod, on the existing server `auomaionbackenddb`. Azure spend is capped by free tiers, two replicas at most and a $1 monthly budget with email alerts.
 
 ### Pipeline
 
-- `ci.yml` runs on pull requests and on `main`: `pnpm verify`, `compose.ci.yml` (all migrations on SQL Server 2022, applied twice, verified, seeded, contained user created), Bicep lint, the Functions zip, and on pull requests a Vercel preview.
-- `deploy.yml` runs after `ci.yml` succeeds on `main`, or by hand with an optional `artifact_run_id`. It calls `deploy-environment.yml` for `staging`, then for `prod` once the `prod` environment reviewer approves. Each environment applies Bicep, opens a runner-only SQL firewall rule, migrates, deploys the zip, deploys the SPA with the environment's `VITE_PLATFORM_API_ORIGIN`, and runs `tools/smoke/smoke.mjs`.
+- `ci.yml` runs on pull requests and on `main`: `pnpm verify`, `compose.ci.yml` (all migrations on SQL Server 2022, applied twice, verified, seeded, contained user created), Bicep lint, the API image (built on every run, pushed to GHCR on `main`), and on pull requests a Vercel preview.
+- `deploy.yml` runs after `ci.yml` succeeds on `main`, or by hand with an optional `artifact_run_id` (the CI run whose image to deploy). It calls `deploy-environment.yml` for `staging`, then for `prod` once the `prod` environment reviewer approves. Each environment opens a runner-only SQL firewall rule, migrates, applies Bicep (which rolls out the image), applies the Durable queue scale rules, pushes the Grafana dashboards, warms the API, deploys the SPA with the API origin read from the Bicep outputs, and runs `tools/smoke/smoke.mjs`.
+- `wake.yml` runs every 6 hours and requests `/api/v1/tenants` on each environment so the scaled-to-zero host starts and runs the recovery timer. An unset origin variable skips that environment; a non-401 answer fails the run.
 - Run the migration check locally with `docker compose -f compose.ci.yml up --exit-code-from sql-init`. Docker Desktop cannot mount from `/media`, so run it from a copy under `$HOME`.
 - Every migration must work with the code that is currently deployed (expand, then contract), because migrations run before the new code ships.
 
 ### GitHub configuration
 
-Per environment (`staging`, `prod`), variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `FUNCTION_APP_NAME`, `API_ORIGIN`, `WEB_ORIGIN`, `CLERK_ISSUER`, `SMOKE_TENANT_ID`. Secrets: `AZURE_SQL_MIGRATION_CONNECTION_STRING` (admin login, `Connect Timeout=120`), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `SMOKE_CLERK_USER_ID`. Repository secrets: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`. `prod` needs a required reviewer. `WEB_ORIGIN` for staging must be `https://eaa-staging.vercel.app`; Clerk authorized parties are an exact list, so PR preview URLs render the SPA but cannot sign in.
+Per environment (`staging`, `prod`), variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `WEB_ORIGIN`, `CLERK_ISSUER`, `SMOKE_TENANT_ID`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `GOVERNANCE_PROMETHEUS_URL` (ends `/api/prom`), `GOVERNANCE_LOKI_URL`, `GOVERNANCE_TEMPO_URL` (ends `/tempo`), `GOVERNANCE_PROMETHEUS_USER`, `GOVERNANCE_LOKI_USER`, `GOVERNANCE_TEMPO_USER` (the instance IDs shown on each Grafana Cloud backend page), `GRAFANA_URL`. Secrets: `AZURE_SQL_MIGRATION_CONNECTION_STRING` (admin login, `Connect Timeout=120`), `AZURE_SQL_RUNTIME_CONNECTION_STRING` (user `platform_identity_app`), `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `SMOKE_CLERK_USER_ID`, `WORKFLOW_OPENROUTER_WRAPPING_KEY`, `WORKFLOW_MCP_WRAPPING_KEY`, `OTEL_EXPORTER_OTLP_HEADERS` (`Authorization=Basic%20<base64 of instance id:token>`), `GOVERNANCE_QUERY_TOKEN`. Repository secrets: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `GRAFANA_API_TOKEN`. Repository variables, set after the first deploy: `STAGING_API_ORIGIN`, `PROD_API_ORIGIN` (`https://<apiHostname>` from the Bicep output). `prod` needs a required reviewer. `WEB_ORIGIN` for staging must be `https://eaa-staging.vercel.app`; Clerk authorized parties are an exact list, so PR preview URLs render the SPA but cannot sign in.
 
 ### First-time setup (owner)
 
 1. Run `CONTACT_EMAIL=you@example.com infra/bootstrap.sh` as subscription Owner.
 2. Create the GitHub environments, variables and secrets above.
 3. Set the Vercel Preview and Production variables `VITE_PLATFORM_API_ORIGIN` and `VITE_CLERK_PUBLISHABLE_KEY`; keep Vercel Git integration off.
-4. Run `deploy.yml` once so Bicep creates the Key Vaults, then seed `azure-sql-connection-string`, `clerk-secret-key`, `workflow-openrouter-wrapping-key` and `workflow-mcp-wrapping-key` with `az keyvault secret set`. Re-run the deploy after seeding.
-5. Run `database/bootstrap/create-platform-identity-user.sql` against both databases and store the runtime connection strings in Key Vault.
-6. Create the Clerk smoke user and add it to the tenant named by `SMOKE_TENANT_ID`.
+4. Create the Grafana Cloud stack and three tokens (OTLP write, read-only query, dashboard service account) and set the Grafana variables and secrets above.
+5. Run `database/bootstrap/create-platform-identity-user.sql` against both databases (after the first migration) and store the runtime connection strings as `AZURE_SQL_RUNTIME_CONNECTION_STRING`.
+6. Push to `main`. After `ci.yml` pushes the first image, make the GHCR package public (package settings, change visibility), then rerun the failed deploy. Container Apps cannot pull a private package without credentials.
+7. After the first successful deploy, set `STAGING_API_ORIGIN` and `PROD_API_ORIGIN`, and set `VITE_PLATFORM_API_ORIGIN` in Vercel to the same origins.
+8. Create the Clerk smoke user and add it to the tenant named by `SMOKE_TENANT_ID`.
 
 ### Rollback
 

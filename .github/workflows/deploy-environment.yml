@@ -6,9 +6,6 @@ on:
       environment:
         type: string
         required: true
-      run_id:
-        type: string
-        required: true
       sha:
         type: string
         required: true
@@ -16,7 +13,6 @@ on:
 permissions:
   id-token: write
   contents: read
-  actions: read
 
 jobs:
   deploy:
@@ -45,16 +41,6 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Deploy infrastructure
-        env:
-          CLERK_ISSUER: ${{ vars.CLERK_ISSUER }}
-          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
-          WEB_ORIGIN: ${{ vars.WEB_ORIGIN }}
-        run: >
-          az deployment group create
-          --name "eaa-${{ inputs.environment }}-${{ github.run_id }}"
-          --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
-          --parameters infra/${{ inputs.environment }}.bicepparam
       - name: Open SQL firewall for this runner
         run: |
           set -e
@@ -74,20 +60,64 @@ jobs:
       - name: Close SQL firewall
         if: always()
         run: az sql server firewall-rule delete --resource-group "$SQL_RESOURCE_GROUP" --server "$SQL_SERVER" --name "$RULE" || true
-      - uses: actions/download-artifact@v4
-        with:
-          name: functions-zip
-          run-id: ${{ inputs.run_id }}
-          github-token: ${{ github.token }}
-      - uses: Azure/functions-action@v1
-        with:
-          app-name: ${{ vars.FUNCTION_APP_NAME }}
-          package: functions.zip
-          sku: flexconsumption
+      - name: Deploy infrastructure and roll out the image
+        env:
+          CLERK_ISSUER: ${{ vars.CLERK_ISSUER }}
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          WEB_ORIGIN: ${{ vars.WEB_ORIGIN }}
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+          GOVERNANCE_PROMETHEUS_URL: ${{ vars.GOVERNANCE_PROMETHEUS_URL }}
+          GOVERNANCE_LOKI_URL: ${{ vars.GOVERNANCE_LOKI_URL }}
+          GOVERNANCE_TEMPO_URL: ${{ vars.GOVERNANCE_TEMPO_URL }}
+          AZURE_SQL_CONNECTION_STRING: ${{ secrets.AZURE_SQL_RUNTIME_CONNECTION_STRING }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          WORKFLOW_OPENROUTER_WRAPPING_KEY: ${{ secrets.WORKFLOW_OPENROUTER_WRAPPING_KEY }}
+          WORKFLOW_MCP_WRAPPING_KEY: ${{ secrets.WORKFLOW_MCP_WRAPPING_KEY }}
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+          GOVERNANCE_PROMETHEUS_USER: ${{ vars.GOVERNANCE_PROMETHEUS_USER }}
+          GOVERNANCE_LOKI_USER: ${{ vars.GOVERNANCE_LOKI_USER }}
+          GOVERNANCE_TEMPO_USER: ${{ vars.GOVERNANCE_TEMPO_USER }}
+          GOVERNANCE_QUERY_TOKEN: ${{ secrets.GOVERNANCE_QUERY_TOKEN }}
+          DEMO_OPENROUTER_API_KEY: ${{ secrets.DEMO_OPENROUTER_API_KEY }}
+          DEMO_IP_PEPPER: ${{ secrets.DEMO_IP_PEPPER }}
+        run: |
+          set -e
+          export IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}-api:${{ inputs.sha }}"
+          outputs="$(az deployment group create \
+            --name "eaa-${{ inputs.environment }}-${{ github.run_id }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --parameters infra/${{ inputs.environment }}.bicepparam \
+            --query properties.outputs -o json)"
+          {
+            echo "APP_NAME=$(jq -r .appName.value <<<"$outputs")"
+            echo "API_HOST=$(jq -r .apiHostname.value <<<"$outputs")"
+            echo "STORAGE_ACCOUNT=$(jq -r .storageAccountName.value <<<"$outputs")"
+          } >> "$GITHUB_ENV"
+      - name: Apply Durable queue scale rules
+        run: |
+          set -e
+          body="$(jq -n --arg account "$STORAGE_ACCOUNT" -f infra/scale-rules.jq)"
+          az rest --method PATCH \
+            --uri "https://management.azure.com/subscriptions/${{ vars.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ vars.AZURE_RESOURCE_GROUP }}/providers/Microsoft.App/containerApps/${APP_NAME}?api-version=2026-03-02-preview" \
+            --headers "Content-Type=application/json" \
+            --body "$body"
+      - name: Push Grafana dashboards
+        env:
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          GRAFANA_API_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
+        run: |
+          set -e
+          for file in infra/observability/dashboards/*.json; do
+            jq '{dashboard: (.id = null), overwrite: true}' "$file" \
+              | curl -fsS -X POST "${GRAFANA_URL%/}/api/dashboards/db" \
+                  -H "Authorization: Bearer $GRAFANA_API_TOKEN" -H "Content-Type: application/json" --data @- > /dev/null
+          done
+      - name: Warm up the API
+        run: curl -s -o /dev/null --retry 10 --retry-delay 10 --retry-all-errors --max-time 60 "https://${API_HOST}/api/v1/tenants" || true
       - run: npm install --global vercel@62
       - name: Deploy frontend
         env:
-          VITE_PLATFORM_API_ORIGIN: ${{ vars.API_ORIGIN }}
+          VITE_PLATFORM_API_ORIGIN: https://${{ env.API_HOST }}
           WEB_ORIGIN: ${{ vars.WEB_ORIGIN }}
           VERCEL_TARGET: ${{ inputs.environment == 'prod' && 'production' || 'preview' }}
         run: |
@@ -107,4 +137,11 @@ jobs:
           SMOKE_CLERK_USER_ID: ${{ secrets.SMOKE_CLERK_USER_ID }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
-        run: node tools/smoke/smoke.mjs --web "${{ vars.WEB_ORIGIN }}" --api "${{ vars.API_ORIGIN }}" --origin "${{ vars.WEB_ORIGIN }}"
+          GOVERNANCE_PROMETHEUS_URL: ${{ vars.GOVERNANCE_PROMETHEUS_URL }}
+          GOVERNANCE_LOKI_URL: ${{ vars.GOVERNANCE_LOKI_URL }}
+          GOVERNANCE_TEMPO_URL: ${{ vars.GOVERNANCE_TEMPO_URL }}
+          GOVERNANCE_PROMETHEUS_USER: ${{ vars.GOVERNANCE_PROMETHEUS_USER }}
+          GOVERNANCE_LOKI_USER: ${{ vars.GOVERNANCE_LOKI_USER }}
+          GOVERNANCE_TEMPO_USER: ${{ vars.GOVERNANCE_TEMPO_USER }}
+          GOVERNANCE_QUERY_TOKEN: ${{ secrets.GOVERNANCE_QUERY_TOKEN }}
+        run: node tools/smoke/smoke.mjs --web "${{ vars.WEB_ORIGIN }}" --api "https://${API_HOST}" --origin "${{ vars.WEB_ORIGIN }}"

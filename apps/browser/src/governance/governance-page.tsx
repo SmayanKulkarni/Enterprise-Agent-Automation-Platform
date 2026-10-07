@@ -125,7 +125,7 @@ export function GovernancePage({ source, groups, groupId, setGroupId, pending, p
         <div>
           <p>Governance</p>
           <SplitText tag="h1" text="Governance" animate={motionAllowed()} />
-          {source.fixture && <span className="notice notice-info">Fixture data</span>}
+          {source.fixture && <span className="notice notice-info">{source.demo ? 'Demo data' : 'Fixture data'}</span>}
         </div>
         <div className="governance-controls">
           {groups.length > 1 && <label className="gov-control">Group<select value={groupId} onChange={(event) => changeGroup(event.target.value)}>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>}

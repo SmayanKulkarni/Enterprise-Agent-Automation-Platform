@@ -3,7 +3,8 @@ targetScope = 'resourceGroup'
 @allowed(['staging', 'prod'])
 param environmentName string
 param location string = 'centralus'
-param functionAppName string = 'func-eaa-${environmentName}'
+param appName string = 'ca-eaa-${environmentName}'
+param image string
 param recoverySchedule string = '0 0 */6 * * *'
 param clerkIssuer string
 param clerkPublishableKey string
@@ -11,21 +12,43 @@ param clerkAuthorizedParties string
 param openRouterWrappingKeyVersion string = 'v1'
 param mcpWrappingKeyVersion string = 'v1'
 param mcpAllowedHosts string = ''
+param otlpEndpoint string
+param governancePrometheusUrl string
+param governanceLokiUrl string
+param governanceTempoUrl string
+param governancePrometheusUser string
+param governanceLokiUser string
+param governanceTempoUser string
+param governanceAssistantMaxCost string = ''
 param sqlServerName string = 'auomaionbackenddb'
 param sqlServerResourceGroup string = 'rg-smayan.kulkarni142-9549'
 param sharedResourceGroup string = 'rg-eaa-shared'
 param sharedAppInsightsName string = 'appi-eaa-shared'
 
+@secure()
+param azureSqlConnectionString string
+@secure()
+param clerkSecretKey string
+@secure()
+param openRouterWrappingKey string
+@secure()
+param mcpWrappingKey string
+@secure()
+param otlpHeaders string
+@secure()
+param governanceQueryToken string
+@secure()
+param demoOpenRouterApiKey string
+@secure()
+param demoIpPepper string
+
 var suffix = take(uniqueString(resourceGroup().id), 8)
 var storageName = 'steaa${environmentName}${suffix}'
-var vaultName = 'kv-eaa-${environmentName}-${take(suffix, 6)}'
-var packageContainer = 'app-package'
 
 var roles = {
   blobOwner: 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
   queueContributor: '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
   tableContributor: '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
-  secretsUser: '4633458b-17de-408a-b874-0445c86b69e6'
 }
 
 resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' existing = {
@@ -51,40 +74,17 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
-  parent: storage
-  name: 'default'
-}
-
-resource packages 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: packageContainer
-}
-
-resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: vaultName
+resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
+  name: 'cae-eaa-${environmentName}'
   location: location
   properties: {
-    tenantId: tenant().tenantId
-    sku: { family: 'A', name: 'standard' }
-    enableRbacAuthorization: true
-    enableSoftDelete: true
-    softDeleteRetentionInDays: 7
+    workloadProfiles: [{ name: 'Consumption', workloadProfileType: 'Consumption' }]
   }
 }
 
-resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
-  name: 'plan-eaa-${environmentName}'
-  location: location
-  kind: 'functionapp'
-  sku: { name: 'FC1', tier: 'FlexConsumption' }
-  properties: { reserved: true }
-}
-
-func secretRef(vaultName string, secretName string) string => '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=${secretName})'
-
-var appSettings = {
+var plainSettings = {
   AzureWebJobsStorage__accountName: storage.name
+  FUNCTIONS_WORKER_RUNTIME: 'node'
   APPLICATIONINSIGHTS_CONNECTION_STRING: insights.properties.ConnectionString
   DEPLOYMENT_ENVIRONMENT: environmentName
   WORKFLOW_DISPATCH_RECOVERY_SCHEDULE: recoverySchedule
@@ -95,66 +95,75 @@ var appSettings = {
   WORKFLOW_OPENROUTER_WRAPPING_KEY_VERSION: openRouterWrappingKeyVersion
   WORKFLOW_MCP_WRAPPING_KEY_VERSION: mcpWrappingKeyVersion
   WORKFLOW_MCP_ALLOWED_HOSTS: mcpAllowedHosts
-  AZURE_SQL_CONNECTION_STRING: secretRef(vault.name, 'azure-sql-connection-string')
-  CLERK_SECRET_KEY: secretRef(vault.name, 'clerk-secret-key')
-  WORKFLOW_OPENROUTER_WRAPPING_KEY: secretRef(vault.name, 'workflow-openrouter-wrapping-key')
-  WORKFLOW_MCP_WRAPPING_KEY: secretRef(vault.name, 'workflow-mcp-wrapping-key')
+  OTEL_EXPORTER_OTLP_ENDPOINT: otlpEndpoint
+  GOVERNANCE_PROMETHEUS_URL: governancePrometheusUrl
+  GOVERNANCE_LOKI_URL: governanceLokiUrl
+  GOVERNANCE_TEMPO_URL: governanceTempoUrl
+  GOVERNANCE_PROMETHEUS_USER: governancePrometheusUser
+  GOVERNANCE_LOKI_USER: governanceLokiUser
+  GOVERNANCE_TEMPO_USER: governanceTempoUser
+  GOVERNANCE_ASSISTANT_MAX_COST: governanceAssistantMaxCost
 }
 
-resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
-  name: functionAppName
+var plainEnv = map(filter(items(plainSettings), setting => !empty(setting.value)), setting => { name: setting.key, value: setting.value })
+
+var secretEnv = [
+  { name: 'AZURE_SQL_CONNECTION_STRING', secretRef: 'azure-sql-connection-string' }
+  { name: 'CLERK_SECRET_KEY', secretRef: 'clerk-secret-key' }
+  { name: 'WORKFLOW_OPENROUTER_WRAPPING_KEY', secretRef: 'workflow-openrouter-wrapping-key' }
+  { name: 'WORKFLOW_MCP_WRAPPING_KEY', secretRef: 'workflow-mcp-wrapping-key' }
+  { name: 'OTEL_EXPORTER_OTLP_HEADERS', secretRef: 'otel-exporter-otlp-headers' }
+  { name: 'GOVERNANCE_QUERY_TOKEN', secretRef: 'governance-query-token' }
+  { name: 'DEMO_OPENROUTER_API_KEY', secretRef: 'demo-openrouter-api-key' }
+  { name: 'DEMO_IP_PEPPER', secretRef: 'demo-ip-pepper' }
+]
+
+resource app 'Microsoft.App/containerApps@2026-03-02-preview' = {
+  name: appName
   location: location
-  kind: 'functionapp,linux'
+  kind: 'functionapp'
   identity: { type: 'SystemAssigned' }
   properties: {
-    serverFarmId: plan.id
-    httpsOnly: true
-    functionAppConfig: {
-      deployment: {
-        storage: {
-          type: 'blobContainer'
-          value: '${storage.properties.primaryEndpoints.blob}${packageContainer}'
-          authentication: { type: 'SystemAssignedIdentity' }
+    managedEnvironmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      ingress: { external: true, targetPort: 80, transport: 'auto' }
+      secrets: [
+        { name: 'azure-sql-connection-string', value: azureSqlConnectionString }
+        { name: 'clerk-secret-key', value: clerkSecretKey }
+        { name: 'workflow-openrouter-wrapping-key', value: openRouterWrappingKey }
+        { name: 'workflow-mcp-wrapping-key', value: mcpWrappingKey }
+        { name: 'otel-exporter-otlp-headers', value: otlpHeaders }
+        { name: 'governance-query-token', value: governanceQueryToken }
+        { name: 'demo-openrouter-api-key', value: demoOpenRouterApiKey }
+        { name: 'demo-ip-pepper', value: demoIpPepper }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'api'
+          image: image
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+          env: concat(plainEnv, secretEnv)
         }
-      }
-      scaleAndConcurrency: {
-        maximumInstanceCount: 2
-        instanceMemoryMB: 512
-      }
-      runtime: { name: 'node', version: '22' }
+      ]
+      scale: { minReplicas: 0, maxReplicas: 2 }
     }
   }
-  dependsOn: [packages]
-}
-
-resource settings 'Microsoft.Web/sites/config@2024-04-01' = {
-  parent: functionApp
-  name: 'appsettings'
-  properties: appSettings
-  dependsOn: [storageRoles, vaultRole]
 }
 
 resource storageRoles 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for role in [roles.blobOwner, roles.queueContributor, roles.tableContributor]: {
-  name: guid(storage.id, functionApp.id, role)
+  name: guid(storage.id, app.id, role)
   scope: storage
   properties: {
-    principalId: functionApp.identity.principalId
+    principalId: app.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', role)
   }
 }]
 
-resource vaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(vault.id, functionApp.id, roles.secretsUser)
-  scope: vault
-  properties: {
-    principalId: functionApp.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.secretsUser)
-  }
-}
-
-output functionAppName string = functionApp.name
-output functionHostname string = functionApp.properties.defaultHostName
-output vaultName string = vault.name
+output apiHostname string = app.properties.configuration.ingress.fqdn
+output appName string = app.name
+output storageAccountName string = storage.name
 output sqlServerFqdn string = sqlServer.properties.fullyQualifiedDomainName
