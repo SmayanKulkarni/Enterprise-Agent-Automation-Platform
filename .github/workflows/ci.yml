@@ -50,6 +50,8 @@ jobs:
       GOVERNANCE_LOKI_USER: lint
       GOVERNANCE_TEMPO_USER: lint
       GOVERNANCE_QUERY_TOKEN: lint
+      DEMO_OPENROUTER_API_KEY: lint
+      DEMO_IP_PEPPER: lint
     steps:
       - uses: actions/checkout@v4
       - run: |

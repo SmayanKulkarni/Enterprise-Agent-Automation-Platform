@@ -20,3 +20,5 @@ param openRouterWrappingKey = readEnvironmentVariable('WORKFLOW_OPENROUTER_WRAPP
 param mcpWrappingKey = readEnvironmentVariable('WORKFLOW_MCP_WRAPPING_KEY')
 param otlpHeaders = readEnvironmentVariable('OTEL_EXPORTER_OTLP_HEADERS')
 param governanceQueryToken = readEnvironmentVariable('GOVERNANCE_QUERY_TOKEN')
+param demoOpenRouterApiKey = readEnvironmentVariable('DEMO_OPENROUTER_API_KEY')
+param demoIpPepper = readEnvironmentVariable('DEMO_IP_PEPPER')

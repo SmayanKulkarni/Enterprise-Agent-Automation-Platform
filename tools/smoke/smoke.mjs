@@ -39,6 +39,31 @@ const tierOne = ({ web, api, origin }) => [
   check('api rejects an unauthenticated request', async () => expectStatus(await fetch(`${api}/api/v1/tenants`, { headers: { origin } }), 401)),
 ];
 
+const demoGet = async ({ api, origin }, path) => {
+  const response = await fetch(`${api}/api/v1/demo/${path}`, { headers: { accept: 'application/json', origin } });
+  if (response.headers.get('access-control-allow-origin') !== origin) throw new Error('origin not echoed');
+  return { response, body: await response.json().catch(() => ({})) };
+};
+
+const tierDemo = (options) => [
+  check('api demo run lookup answers anonymously for the caller address', async () => {
+    await withRetry(async () => {
+      const { response, body } = await demoGet(options, 'run');
+      if (response.status !== 200 && !(response.status === 404 && body?.error?.code === 'NOT_FOUND')) throw new Error(`expected 200 or 404 NOT_FOUND, got ${response.status} ${body?.error?.code ?? ''}`.trim());
+    }, options.demoRetryWindowMs ?? RETRY_WINDOW_MS);
+  }),
+  check('api demo governance overview reads the stored run counts', async () => {
+    const { response, body } = await demoGet(options, 'governance/overview?range=24h');
+    expectStatus(response, 200);
+    if (typeof body?.total?.runs !== 'number') throw new Error('no run total');
+  }),
+  check('api demo governance telemetry reads are served for the demo tenant', async () => {
+    const { response, body } = await demoGet(options, 'governance/series?panel=model-latency&range=24h');
+    expectStatus(response, 200);
+    if (body?.status !== 'ready') throw new Error(`telemetry status ${body?.status}`);
+  }),
+];
+
 const sessionToken = async (userId, origin) => {
   if (process.env.CLERK_PUBLISHABLE_KEY?.startsWith('pk_test_')) {
     process.env.E2E_BASE = origin;
@@ -87,7 +112,7 @@ export const grafanaFromEnv = (env) => {
 };
 
 export async function runSmoke(options) {
-  const checks = [...tierOne(options), ...(options.tenantId && options.userId ? tierTwo(options) : []), ...(options.grafana ? tierThree(options) : [])];
+  const checks = [...tierOne(options), ...tierDemo(options), ...(options.tenantId && options.userId ? tierTwo(options) : []), ...(options.grafana ? tierThree(options) : [])];
   const results = [];
   for (const run of checks) results.push(await run());
   return results;

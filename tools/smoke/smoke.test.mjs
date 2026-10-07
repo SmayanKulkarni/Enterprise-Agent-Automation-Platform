@@ -6,6 +6,7 @@ const ORIGIN = 'https://app.example';
 const html = '<html><div id="root"></div></html>';
 let servers;
 let broken = false;
+let demoDown = false;
 
 const listen = (handler) => new Promise((resolve) => {
   const server = createServer(handler).listen(0, '127.0.0.1', () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` }));
@@ -17,6 +18,13 @@ beforeAll(async () => {
   });
   const api = await listen((request, response) => {
     if (request.method === 'OPTIONS') return request.headers.origin === ORIGIN ? response.writeHead(204, { 'access-control-allow-origin': ORIGIN }).end() : response.writeHead(403).end();
+    if (request.url.startsWith('/api/v1/demo/')) {
+      const headers = { 'content-type': 'application/json', 'access-control-allow-origin': ORIGIN };
+      if (demoDown) return response.writeHead(503, headers).end(JSON.stringify({ error: { code: 'DEMO_UNAVAILABLE' } }));
+      if (request.url === '/api/v1/demo/run') return response.writeHead(404, headers).end(JSON.stringify({ error: { code: 'NOT_FOUND' } }));
+      if (request.url.startsWith('/api/v1/demo/governance/overview')) return response.writeHead(200, headers).end(JSON.stringify({ total: { runs: 4 } }));
+      return response.writeHead(200, headers).end(JSON.stringify({ status: 'ready', series: [] }));
+    }
     return response.writeHead(401).end();
   });
   const grafana = await listen((request, response) => {
@@ -31,7 +39,7 @@ afterAll(() => Promise.all(Object.values(servers).map(({ server }) => new Promis
 test('passes every tier-one check against a healthy deployment', async () => {
   const results = await runSmoke({ web: servers.web.url, api: servers.api.url, origin: ORIGIN });
   expect(results.filter((result) => !result.ok)).toEqual([]);
-  expect(results).toHaveLength(5);
+  expect(results).toHaveLength(8);
 });
 
 test('reports the failing check when the web app root is missing', async () => {
@@ -39,6 +47,13 @@ test('reports the failing check when the web app root is missing', async () => {
   const results = await runSmoke({ web: servers.web.url, api: servers.api.url, origin: ORIGIN });
   broken = false;
   expect(results.filter((result) => !result.ok).map((result) => result.name)).toEqual(['web / serves the app root with security headers', 'web /governance serves the SPA rewrite']);
+});
+
+test('reports the demo checks that fail when the demo reads are unavailable', async () => {
+  demoDown = true;
+  const results = await runSmoke({ web: servers.web.url, api: servers.api.url, origin: ORIGIN, demoRetryWindowMs: 0 });
+  demoDown = false;
+  expect(results.filter((result) => !result.ok).map((result) => result.name)).toEqual(['api demo run lookup answers anonymously for the caller address', 'api demo governance overview reads the stored run counts', 'api demo governance telemetry reads are served for the demo tenant']);
 });
 
 test('retries a failing step with backoff until it succeeds', async () => {

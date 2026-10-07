@@ -37,6 +37,10 @@ param mcpWrappingKey string
 param otlpHeaders string
 @secure()
 param governanceQueryToken string
+@secure()
+param demoOpenRouterApiKey string
+@secure()
+param demoIpPepper string
 
 var suffix = take(uniqueString(resourceGroup().id), 8)
 var storageName = 'steaa${environmentName}${suffix}'
@@ -110,6 +114,8 @@ var secretEnv = [
   { name: 'WORKFLOW_MCP_WRAPPING_KEY', secretRef: 'workflow-mcp-wrapping-key' }
   { name: 'OTEL_EXPORTER_OTLP_HEADERS', secretRef: 'otel-exporter-otlp-headers' }
   { name: 'GOVERNANCE_QUERY_TOKEN', secretRef: 'governance-query-token' }
+  { name: 'DEMO_OPENROUTER_API_KEY', secretRef: 'demo-openrouter-api-key' }
+  { name: 'DEMO_IP_PEPPER', secretRef: 'demo-ip-pepper' }
 ]
 
 resource app 'Microsoft.App/containerApps@2026-03-02-preview' = {
@@ -129,6 +135,8 @@ resource app 'Microsoft.App/containerApps@2026-03-02-preview' = {
         { name: 'workflow-mcp-wrapping-key', value: mcpWrappingKey }
         { name: 'otel-exporter-otlp-headers', value: otlpHeaders }
         { name: 'governance-query-token', value: governanceQueryToken }
+        { name: 'demo-openrouter-api-key', value: demoOpenRouterApiKey }
+        { name: 'demo-ip-pepper', value: demoIpPepper }
       ]
     }
     template: {

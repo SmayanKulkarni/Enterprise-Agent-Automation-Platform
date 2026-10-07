@@ -78,6 +78,8 @@ jobs:
           GOVERNANCE_LOKI_USER: ${{ vars.GOVERNANCE_LOKI_USER }}
           GOVERNANCE_TEMPO_USER: ${{ vars.GOVERNANCE_TEMPO_USER }}
           GOVERNANCE_QUERY_TOKEN: ${{ secrets.GOVERNANCE_QUERY_TOKEN }}
+          DEMO_OPENROUTER_API_KEY: ${{ secrets.DEMO_OPENROUTER_API_KEY }}
+          DEMO_IP_PEPPER: ${{ secrets.DEMO_IP_PEPPER }}
         run: |
           set -e
           export IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}-api:${{ inputs.sha }}"
