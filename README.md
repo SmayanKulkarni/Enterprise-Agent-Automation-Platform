@@ -1440,7 +1440,7 @@ Fixture evidence does not prove live cloud or provider operation. Live checks ne
 | Grafana Cloud | Metrics, logs and traces (OTLP), governance reads, four dashboards | One free stack for both environments. `OTEL_EXPORTER_OTLP_*` and `GOVERNANCE_*` come from GitHub environment variables and secrets. `deploy-environment.yml` pushes `infra/observability/dashboards/*.json` |
 | Infrastructure | Bicep | `infra/shared.bicep` (subscription), `infra/main.bicep` with `staging.bicepparam` and `prod.bicepparam`, `infra/bootstrap.sh` (one time) |
 
-Two environments, `staging` and `prod`, both in centralus. `automationtestingdb` is staging and `auomation-db` is prod, on the existing server `auomaionbackenddb`. Azure spend is capped by free tiers, two replicas at most and a $1 monthly budget with email alerts.
+Two environments, `staging` and `prod`, both deployed to northcentralus (centralus had no Container Apps capacity), close to the SQL server in centralus. `automationtestingdb` is staging and `auomation-db` is prod, on the existing server `auomaionbackenddb`. Azure spend is capped by free tiers, two replicas at most and a $1 monthly budget with email alerts.
 
 ### Pipeline
 
