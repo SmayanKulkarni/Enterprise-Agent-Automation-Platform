@@ -129,7 +129,10 @@ jobs:
           else
             vercel build --token="$VERCEL_TOKEN"
             url="$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")"
-            vercel alias set "$url" "${WEB_ORIGIN#https://}" --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+            id="$(curl -fsS "https://api.vercel.com/v13/deployments/${url#https://}?teamId=${VERCEL_ORG_ID}" -H "Authorization: Bearer ${VERCEL_TOKEN}" | jq -r .id)"
+            curl -fsS -X POST "https://api.vercel.com/v2/deployments/${id}/aliases?teamId=${VERCEL_ORG_ID}" \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg alias "${WEB_ORIGIN#https://}" '{alias: $alias}')" > /dev/null
           fi
       - name: Smoke test
         env:
