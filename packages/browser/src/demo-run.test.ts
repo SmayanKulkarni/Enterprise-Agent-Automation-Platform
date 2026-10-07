@@ -157,3 +157,17 @@ test('the model is not called for a refused request', async () => {
   await handleDemoRun(post('203.0.113.10', { githubToken: TOKEN }), deps);
   expect(calls).toBe(1);
 });
+
+test('the run is saved once under the hashed address after the claim', async () => {
+  const saved: { key: string; run: { id: string } }[] = [];
+  const { deps } = harness({ save: (key, run) => { saved.push({ key, run }); return Promise.resolve(); } });
+  await handleDemoRun(post('203.0.113.9'), deps);
+  await handleDemoRun(post('203.0.113.9'), deps);
+  expect(saved).toEqual([{ key: claimKey('203.0.113.9', 'test-pepper'), run: expect.objectContaining({ id: 'e0000000-0000-4000-8000-000000000001' }) as { id: string } }]);
+});
+
+test('a storage failure does not fail or repeat the run', async () => {
+  const { deps, claims } = harness({ save: () => Promise.reject(new Error('SQL down')) });
+  expect((await handleDemoRun(post('203.0.113.9'), deps)).status).toBe(200);
+  expect(claims.size).toBe(1);
+});

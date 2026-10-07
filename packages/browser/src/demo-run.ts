@@ -17,6 +17,7 @@ export interface DemoRunDeps {
   claim(key: string): Promise<boolean>;
   fetch(url: string, init?: RequestInit): Promise<Response>;
   review?: ((diff: string) => Promise<unknown>) | undefined;
+  save?: ((key: string, run: DemoRun) => Promise<void>) | undefined;
   now(): number;
   id(): string;
   pepper: string;
@@ -97,6 +98,7 @@ export async function handleDemoRun(request: DemoRunRequest, deps: DemoRunDeps):
     }
     if (!await deps.claim(key)) return used();
     const run = runDemo({ id: deps.id(), now: deps.now(), ...material, source, verdict: await modelVerdict(deps, material.diff) });
+    if (deps.save !== undefined) await deps.save(key, run).catch(reported(undefined, 'demo.save'));
     count('demo.runs', { source, outcome: run.branch });
     logEvent('demo.run', { source, outcome: run.outcome, branch: run.branch });
     return { status: 200, body: { run } };

@@ -4,6 +4,7 @@ import { browserResponse } from '../../../packages/browser/src/browser-response.
 import { withErrorBoundary } from '../../../packages/errors/src/boundary.js';
 import { withFlush } from '../../../packages/telemetry/src/index.js';
 import { clientIp, handleDemoRun } from '../../../packages/browser/src/demo-run.js';
+import { AzureSqlDemoStore } from '../../../packages/browser/src/demo-store.js';
 import { demoReviewer } from '../../../packages/workflow/src/pr-gate-demo-review.js';
 import { durableDemoClaims } from './demo-claim.js';
 import { durableScheduler } from './workflow-run.js';
@@ -25,8 +26,10 @@ const cors = (origin: string | null): Record<string, string> | undefined => orig
 async function demoRun(request: HttpRequest, context: InvocationContext | undefined, crossOrigin: Record<string, string> | undefined): Promise<HttpResponseInit> {
   const headers = { 'content-type': 'application/json', 'cache-control': 'no-store', ...(crossOrigin ?? {}) };
   if (Number(request.headers.get('content-length') ?? 0) > DEMO_MAX_BODY_BYTES) return { status: 413, headers, body: JSON.stringify({ error: { code: 'INVALID_INPUT', message: 'The request is too large.' } }) };
+  const connectionString = process.env['AZURE_SQL_CONNECTION_STRING']?.trim();
+  const store = connectionString ? new AzureSqlDemoStore(connectionString) : undefined;
   const claims = context ? durableDemoClaims(context) : { claimed: noClaims, claim: noClaims };
-  const reply = await handleDemoRun({ ip: clientIp(request.headers.get('x-forwarded-for')), body: await request.text() }, { ...claims, fetch: (url, init) => fetch(url, init), review: demoReviewer(process.env, (url, init) => fetch(url, init)), now: Date.now, id: () => crypto.randomUUID(), pepper: process.env['DEMO_IP_PEPPER'] || DEFAULT_DEMO_PEPPER });
+  const reply = await handleDemoRun({ ip: clientIp(request.headers.get('x-forwarded-for')), body: await request.text() }, { ...claims, fetch: (url, init) => fetch(url, init), review: demoReviewer(process.env, (url, init) => fetch(url, init)), save: store && ((key, run) => store.write(key, run)), now: Date.now, id: () => crypto.randomUUID(), pepper: process.env['DEMO_IP_PEPPER'] || DEFAULT_DEMO_PEPPER });
   return { status: reply.status, headers, body: JSON.stringify(reply.body) };
 }
 
