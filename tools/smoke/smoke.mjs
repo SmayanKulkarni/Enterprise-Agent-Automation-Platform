@@ -22,14 +22,16 @@ const expectHtml = async (response, needle) => {
   if (needle !== undefined && !(await response.text()).includes(needle)) throw new Error(`missing ${needle}`);
 };
 
-const tierOne = ({ web, api, origin }) => [
+const webInit = (secret) => (secret ? { headers: { 'x-vercel-protection-bypass': secret } } : {});
+
+const tierOne = ({ web, api, origin, webBypassSecret }) => [
   check('web / serves the app root with security headers', async () => {
-    const response = await fetch(`${web}/`);
+    const response = await fetch(`${web}/`, webInit(webBypassSecret));
     await expectHtml(response, 'id="root"');
     if (response.headers.get('x-content-type-options') !== 'nosniff') throw new Error('missing X-Content-Type-Options');
     if (!response.headers.get('referrer-policy')) throw new Error('missing Referrer-Policy');
   }),
-  check('web /governance serves the SPA rewrite', async () => expectHtml(await fetch(`${web}/governance`), 'id="root"')),
+  check('web /governance serves the SPA rewrite', async () => expectHtml(await fetch(`${web}/governance`, webInit(webBypassSecret)), 'id="root"')),
   check('api preflight echoes the allowed origin', async () => {
     const response = await fetch(`${api}/api/v1/tenants`, { method: 'OPTIONS', headers: { origin } });
     expectStatus(response, 204);
@@ -121,7 +123,7 @@ export async function runSmoke(options) {
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { values } = parseArgs({ options: { web: { type: 'string' }, api: { type: 'string' }, origin: { type: 'string' } } });
   for (const name of ['web', 'api', 'origin']) if (!values[name]) throw new Error(`Missing --${name}.`);
-  const results = await runSmoke({ web: trim(values.web), api: trim(values.api), origin: trim(values.origin), tenantId: process.env.SMOKE_TENANT_ID, userId: process.env.SMOKE_CLERK_USER_ID, grafana: grafanaFromEnv(process.env) });
+  const results = await runSmoke({ web: trim(values.web), api: trim(values.api), origin: trim(values.origin), tenantId: process.env.SMOKE_TENANT_ID, userId: process.env.SMOKE_CLERK_USER_ID, grafana: grafanaFromEnv(process.env), webBypassSecret: process.env.VERCEL_AUTOMATION_BYPASS_SECRET });
   for (const { name, ok, detail } of results) console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${ok ? '' : `: ${detail}`}`);
   process.exit(results.every((result) => result.ok) ? 0 : 1);
 }

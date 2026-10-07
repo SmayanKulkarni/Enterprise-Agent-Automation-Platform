@@ -7,13 +7,15 @@ const html = '<html><div id="root"></div></html>';
 let servers;
 let broken = false;
 let demoDown = false;
+let webProtected = false;
 
 const listen = (handler) => new Promise((resolve) => {
   const server = createServer(handler).listen(0, '127.0.0.1', () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` }));
 });
 
 beforeAll(async () => {
-  const web = await listen((_request, response) => {
+  const web = await listen((request, response) => {
+    if (webProtected && request.headers['x-vercel-protection-bypass'] !== 'bypass') return response.writeHead(302, { location: 'https://vercel.com/login' }).end();
     response.writeHead(200, { 'content-type': 'text/html', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' }).end(broken ? '<html></html>' : html);
   });
   const api = await listen((request, response) => {
@@ -47,6 +49,15 @@ test('reports the failing check when the web app root is missing', async () => {
   const results = await runSmoke({ web: servers.web.url, api: servers.api.url, origin: ORIGIN });
   broken = false;
   expect(results.filter((result) => !result.ok).map((result) => result.name)).toEqual(['web / serves the app root with security headers', 'web /governance serves the SPA rewrite']);
+});
+
+test('sends the protection bypass header to the web app only when configured', async () => {
+  webProtected = true;
+  const blocked = await runSmoke({ web: servers.web.url, api: servers.api.url, origin: ORIGIN });
+  const allowed = await runSmoke({ web: servers.web.url, api: servers.api.url, origin: ORIGIN, webBypassSecret: 'bypass' });
+  webProtected = false;
+  expect(blocked.filter((result) => !result.ok).map((result) => result.name)).toEqual(['web / serves the app root with security headers', 'web /governance serves the SPA rewrite']);
+  expect(allowed.filter((result) => !result.ok)).toEqual([]);
 });
 
 test('reports the demo checks that fail when the demo reads are unavailable', async () => {
