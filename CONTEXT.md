@@ -171,3 +171,13 @@ _Avoid_: Metrics store
 **Telemetry plane**:
 Traces, metrics and logs pushed over OTLP; approximate; used for latency, error rates, logs and traces.
 _Avoid_: Audit trail
+
+## Public demo
+
+**Demo workspace**:
+A browser-only mode, entered from the landing page or the sign-in prompt, that shows the PR gate workflow read-only with no credentials and a Governance view of the visitor's own demo run.
+_Avoid_: Sandbox, trial, fixture workspace
+
+**Demo run**:
+The single simulated PR gate run a visitor may start per IP address. A deterministic reviewer replaces the model and the run stops at the human approval.
+_Avoid_: Test run, free run

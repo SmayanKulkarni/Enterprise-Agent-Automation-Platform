@@ -32,6 +32,7 @@ export const METRICS = {
   'memory.summaries': { type: 'counter', labels: ['tenant_id', 'outcome'] },
   'memory.consolidation': { type: 'counter', labels: ['tenant_id', 'decision', 'path'] },
   'workflow.dispatch.recovered': { type: 'counter', labels: [] },
+  'demo.runs': { type: 'counter', labels: ['source', 'outcome'] },
 } as const;
 
 type Catalog = typeof METRICS;

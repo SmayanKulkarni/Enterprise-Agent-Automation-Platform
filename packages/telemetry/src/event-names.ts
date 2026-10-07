@@ -18,5 +18,6 @@ export const EVENTS = {
   'memory.summary': ['tenant_id', 'run_id', 'outcome', 'findings', 'dropped'],
   'memory.consolidation': ['tenant_id', 'run_id', 'decision', 'path', 'candidates'],
   'group.changed': ['group_id', 'action', 'actor_user_id', 'subject_id'],
+  'demo.run': ['source', 'outcome', 'branch'],
   'assistant.asked': ['group_id', 'billing_tenant_id', 'provider', 'model', 'tokens', 'cost', 'outcome'],
 } as const;

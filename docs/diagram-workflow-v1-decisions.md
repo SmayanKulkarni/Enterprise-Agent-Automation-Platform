@@ -325,3 +325,24 @@ Spec: `docs/superpowers/specs/2026-10-06-azure-vercel-deployment-design.md`.
 - `CLERK_ISSUER` is a per-environment variable because the backend requires it.
 - Smoke tier 2 on a production Clerk instance (`pk_live_`) uses the backend session API. That path is unverified; only the development-instance path has been exercised.
 
+
+## Public demo (2026-10-07)
+
+- Reviewers who are not signed in get a prompt on Studio and Governance and a "Try the demo" button on the landing page. Demo mode is a browser flag in `localStorage` (`threadline.demo.v1`); it never touches Clerk, tenants, SQL or the authenticated API.
+- The demo workflow is the real PR gate graph from `buildPrGateGraph`, built over two placeholder certified installations (`packages/workflow/src/pr-gate-demo.ts`). The canvas is read-only and shows every setting; no credential exists in it.
+- Starting the workflow calls `POST /api/v1/demo/run`, anonymous, handled in `azure-functions/src/functions/browser-api.ts` before the authenticated transport. The run walks the graph with a deterministic reviewer (`reviewDiff`: hardcoded secrets, injection, removed tests). No model, OpenRouter, Upstash or MCP call is made, so the run costs nothing and cannot spend the owner's credentials. It stops at the human approval node, as the real gate does.
+- Optional own-GitHub mode: a visitor token and a `https://github.com/{owner}/{repo}/pull/{n}` address make the server read that pull request and diff from `api.github.com` (fixed host, redirects refused, 8 s timeout, diff capped at 200 000 characters). The token is used in memory for those two calls and is never stored, logged or returned.
+- One run per IP address. The key is an HMAC of the address (pepper `DEMO_IP_PEPPER`, optional, with a built-in default) used as a Durable Functions instance id (`demo-<key>`) of the new `demoClaim` orchestration. This needs no SQL migration, no new infrastructure and no new required setting. A rejected token or a malformed request does not consume the run; only a completed run does. A missing or unparseable address, or an unreadable claim store, fails closed with 503.
+- The client address is the last `x-forwarded-for` entry, because the Container Apps ingress appends the real peer. Unverified until deployed: if the ingress is ever fronted by another proxy, every visitor shares one address. After a deploy, call the endpoint twice from one machine and expect 200 then 429.
+- The visitor's run is kept in `localStorage`, so a reload keeps the result. The server is the only enforcement; clearing storage returns "already used".
+- Governance in demo mode is `demoSource` (`apps/browser/src/governance/demo-source.ts`): one workspace, one group, and the visitor's run shown in the overview, workflow table, pending approval, logs and trace. Decisions are disabled and the assistant (a model call) is hidden because the source is marked `fixture`.
+- Server telemetry stays on: the demo emits `demo.runs` (source, outcome) and the `demo.run` event. Neither carries a tenant, an address or a token, and no existing metric or dashboard query changes.
+- Not done: a race between two simultaneous first requests from one address can start two orchestrations; the second is rejected only if the first is already visible. The cost of that is one extra free simulated run.
+
+### Demo reviewer model call (2026-10-07)
+
+- The reviewer step makes exactly one call to `PR_GATE_DEFAULT_MODEL` (DeepSeek V4 Flash on OpenRouter) when the server has `DEMO_OPENROUTER_API_KEY`. Without the key, or when the call fails, times out or returns an answer `parseVerdict` rejects, the run uses the deterministic `reviewDiff` verdict, whose summary says no model was called. The call happens after the once-per-IP claim, so a visitor cannot repeat it; a rejected token or malformed request still makes no call.
+- The key is a server environment secret read only by `demoReviewer` (`packages/workflow/src/pr-gate-demo-review.ts`). It is not a tenant connection, so `HttpModelPort` and `OpenRouterConnectionCrypto` are not used. Owner step: create a dedicated OpenRouter key with a low credit limit, then set it as a Container Apps secret and plumb it in `infra/`; neither is done here.
+- Hard bounds: diff clipped to 40 000 characters, 700 completion tokens, 20 s timeout, one attempt, strict JSON schema (`REVIEW_SCHEMA`), redirects refused.
+- The diff is attacker-controlled. It travels only as JSON data in the user message, the system prompt tells the model to ignore instructions inside it, and the output is validated and clamped (lengths, finding count, risk enum) before use. The verdict is advisory: the run never acts on the pull request and still stops at human approval.
+- Telemetry reuses `observeModelCall`: a `model.call` event and `gen_ai.*` metrics labelled `tenant_id` = `DEMO_TENANT_ID` and `feature` = `demo`. Neither carries the diff, the key or the model's text.
