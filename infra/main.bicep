@@ -24,6 +24,8 @@ param sqlServerName string = 'auomaionbackenddb'
 param sqlServerResourceGroup string = 'rg-smayan.kulkarni142-9549'
 param sharedResourceGroup string = 'rg-eaa-shared'
 param sharedAppInsightsName string = 'appi-eaa-shared'
+param managedEnvironmentName string = 'cae-eaa-${environmentName}'
+param managedEnvironmentResourceGroup string = resourceGroup().name
 
 @secure()
 param azureSqlConnectionString string
@@ -74,8 +76,10 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
-  name: 'cae-eaa-${environmentName}'
+var ownsEnvironment = managedEnvironmentResourceGroup == resourceGroup().name
+
+resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = if (ownsEnvironment) {
+  name: managedEnvironmentName
   location: location
   properties: {
     workloadProfiles: [{ name: 'Consumption', workloadProfileType: 'Consumption' }]
@@ -123,8 +127,9 @@ resource app 'Microsoft.App/containerApps@2026-03-02-preview' = {
   location: location
   kind: 'functionapp'
   identity: { type: 'SystemAssigned' }
+  dependsOn: [environment]
   properties: {
-    managedEnvironmentId: environment.id
+    managedEnvironmentId: resourceId(managedEnvironmentResourceGroup, 'Microsoft.App/managedEnvironments', managedEnvironmentName)
     workloadProfileName: 'Consumption'
     configuration: {
       ingress: { external: true, targetPort: 80, transport: 'auto' }

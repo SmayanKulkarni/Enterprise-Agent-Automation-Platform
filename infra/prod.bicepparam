@@ -1,7 +1,8 @@
 using './main.bicep'
 
 param environmentName = 'prod'
-param location = 'southcentralus'
+param managedEnvironmentName = 'cae-eaa-staging'
+param managedEnvironmentResourceGroup = 'rg-eaa-staging'
 param image = readEnvironmentVariable('IMAGE')
 param recoverySchedule = '0 0 */6 * * *'
 param clerkIssuer = readEnvironmentVariable('CLERK_ISSUER')
