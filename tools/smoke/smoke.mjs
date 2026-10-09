@@ -88,11 +88,12 @@ export const withRetry = async (run, windowMs, sleepFn = sleep) => {
 
 const tierTwo = ({ api, origin, tenantId, userId, retryWindowMs = RETRY_WINDOW_MS }) => [
   check('api lists the smoke tenant for an authenticated user', async () => {
-    const token = await sessionToken(userId, origin);
     await withRetry(async () => {
+      const token = await sessionToken(userId, origin);
       const response = await fetch(`${api}/api/v1/tenants`, { headers: { accept: MEDIA_TYPE, origin, authorization: `Bearer ${token}` } });
-      expectStatus(response, 200);
-      if (!(await response.text()).includes(tenantId)) throw new Error(`tenant ${tenantId} not listed`);
+      const text = await response.text();
+      if (response.status !== 200) throw new Error(`expected 200, got ${response.status} ${text.match(/"code":"([A-Z_]+)"/u)?.[1] ?? ''}`.trim());
+      if (!text.includes(tenantId)) throw new Error(`tenant ${tenantId} not listed`);
     }, retryWindowMs);
   }),
 ];
