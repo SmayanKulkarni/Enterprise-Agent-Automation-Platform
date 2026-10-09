@@ -377,3 +377,10 @@ Spec: `docs/superpowers/specs/2026-10-06-azure-vercel-deployment-design.md`.
 - Owner step before the next deploy: set `DEMO_OPENROUTER_API_KEY` and `DEMO_IP_PEPPER` as environment secrets for `staging` and `prod`. Use an OpenRouter key with a low credit limit, since one anonymous visitor per address can trigger one capped call. Changing the pepper later forgets existing claims (every address gets one more run) but does not touch stored runs.
 - The smoke test (`tools/smoke/smoke.mjs`, `tierDemo`) now checks the demo through the real ingress: `GET /api/v1/demo/run` must answer 200 or 404 `NOT_FOUND` with the allowed origin echoed (a 503 means the forwarded address, or SQL, is unusable), `governance/overview` must return a run total (the new SQL procedure works), and `governance/series?panel=model-latency` must be `ready` (Grafana is reachable with the demo-pinned query). It deliberately does not `POST` a run, so the runner's address keeps its one run.
 - The Container Apps ingress is external with no IP restriction and appends the connecting peer to `x-forwarded-for`; the demo takes the last entry. The browser calls the API origin directly, so that peer is the visitor. This still needs the first deployed smoke run to confirm.
+
+### First green deploy fixes (2026-10-09)
+
+- The subscription allows one Container Apps environment per region. Staging holds `northcentralus`, so `infra/prod.bicepparam` sets `location = 'southcentralus'`. The SQL server stays in `centralus`.
+- The authenticated smoke check mints a fresh Clerk token on every retry. A 60 second token reused across the 180 second window turned any earlier failure into a 401.
+- Each environment's smoke tenant must exist, with a current membership for `SMOKE_CLERK_USER_ID`, in the database that environment's runtime connection string targets. Staging (`a08f24d3…`, `smoke-staging`) was seeded in both `auomation-db` and `automationtestingdb`.
+- The Grafana dashboard push retries on any error, since an idle stack answers 503 while it wakes.
