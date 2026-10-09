@@ -108,9 +108,9 @@ jobs:
         run: |
           set -e
           for file in infra/observability/dashboards/*.json; do
-            jq '{dashboard: (.id = null), overwrite: true}' "$file" \
-              | curl -fsS -X POST "${GRAFANA_URL%/}/api/dashboards/db" \
-                  -H "Authorization: Bearer $GRAFANA_API_TOKEN" -H "Content-Type: application/json" --data @- > /dev/null
+            body="$(jq '{dashboard: (.id = null), overwrite: true}' "$file")"
+            curl -fsS --retry 6 --retry-delay 10 --retry-all-errors -X POST "${GRAFANA_URL%/}/api/dashboards/db" \
+              -H "Authorization: Bearer $GRAFANA_API_TOKEN" -H "Content-Type: application/json" --data "$body" > /dev/null
           done
       - name: Warm up the API
         run: curl -s -o /dev/null --retry 10 --retry-delay 10 --retry-all-errors --max-time 60 "https://${API_HOST}/api/v1/tenants" || true
