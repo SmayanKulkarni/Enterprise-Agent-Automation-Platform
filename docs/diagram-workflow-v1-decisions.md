@@ -380,7 +380,7 @@ Spec: `docs/superpowers/specs/2026-10-06-azure-vercel-deployment-design.md`.
 
 ### First green deploy fixes (2026-10-09)
 
-- The subscription allows one Container Apps environment per region. Staging holds `northcentralus`, so `infra/prod.bicepparam` sets `location = 'southcentralus'`. The SQL server stays in `centralus`.
+- The subscription allows one Container Apps environment per region, and `centralus` and `southcentralus` both refused a new environment with `AKSCapacityHeavyUsage`. Prod's app therefore runs in staging's environment (`cae-eaa-staging`, `northcentralus`): `infra/main.bicep` takes `managedEnvironmentName` and `managedEnvironmentResourceGroup`, creates the environment only when it lives in its own resource group, and `infra/prod.bicepparam` points both at staging. The prod app, storage account and secrets stay in `rg-eaa-prod`. The SQL server stays in `centralus`.
 - The authenticated smoke check mints a fresh Clerk token on every retry. A 60 second token reused across the 180 second window turned any earlier failure into a 401.
 - Each environment's smoke tenant must exist, with a current membership for `SMOKE_CLERK_USER_ID`, in the database that environment's runtime connection string targets. Staging (`a08f24d3…`, `smoke-staging`) was seeded in both `auomation-db` and `automationtestingdb`.
 - The Grafana dashboard push retries on any error, since an idle stack answers 503 while it wakes.
