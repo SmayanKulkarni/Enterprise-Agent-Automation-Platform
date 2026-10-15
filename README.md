@@ -4,7 +4,7 @@ A multi-tenant platform for building, publishing, and operating governed agent w
 
 ![Threadline landing page](assets/readme/landing.png)
 
-Status: this is a resume-project implementation, not a production rollout. Code and tests are the source of truth. Fixture data is labelled as fixture and never counts as live-provider evidence. Every screenshot in this file was captured from the running app against live Azure SQL, Clerk, OpenRouter, Upstash and a private GitHub repository.
+Status: this is a project implementation, not a production rollout. Code and tests are the source of truth. Fixture data is labelled as fixture and never counts as live-provider evidence. Every screenshot in this file was captured from the running app against live Azure SQL, Clerk, OpenRouter, Upstash and a private GitHub repository.
 
 ## Index
 
